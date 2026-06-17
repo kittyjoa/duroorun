@@ -1,0 +1,59 @@
+services:
+  # PostgreSQL 16 (데이터베이스)
+  db:
+    image: postgres:16
+    container_name: duroorun-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: duroorun
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Redis (캐싱 / Refresh Token / 블랙리스트 / OAuth state)
+  redis:
+    image: redis:7
+    container_name: duroorun-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # FastAPI 백엔드
+  backend:
+    build: .
+    container_name: duroorun-backend
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # 컨테이너 안에서는 localhost가 아니라 서비스명(db, redis)으로 접속해야 함
+    # .env의 DATABASE_URL / REDIS_URL을 아래로 덮어씀
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-postgres}@db:5432/duroorun
+      REDIS_URL: redis://redis:6379/0
+    # 서버 시작 전 마이그레이션 자동 적용 후 uvicorn 실행
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000"
+
+volumes:
+  postgres_data:
+  redis_data:

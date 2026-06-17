@@ -1,0 +1,36 @@
+# ===== 웹 프레임워크 =====
+fastapi>=0.137.0
+uvicorn[standard]>=0.49.0
+
+# ===== 데이터베이스 (PostgreSQL 16 + async) =====
+sqlalchemy[asyncio]>=2.0.51
+asyncpg>=0.31.0
+alembic>=1.18.0
+
+# ===== 설정 / 검증 =====
+pydantic>=2.13.0
+pydantic-settings>=2.14.0
+
+# ===== Redis (캐싱 / Refresh Token / 블랙리스트 / OAuth state) =====
+redis>=8.0.0
+
+# ===== 인증 (JWT) =====
+pyjwt>=2.13.0
+
+# ===== 외부 API 호출 (두루누비 / 소셜 OAuth) =====
+httpx>=0.28.0
+
+# ===== 파일 업로드 (이미지) =====
+python-multipart>=0.0.32
+
+# ===== Cloudflare R2 (S3 호환) =====
+boto3>=1.43.0
+
+# ===== GPX 파싱 (시드 스크립트: 코스 시작/종료 좌표 추출) =====
+gpxpy>=1.6.0
+
+# ===== AI 리뷰 요약 (Gemini) =====
+google-genai>=2.8.0
+
+# ===== 린터 / 포매터 =====
+ruff>=0.15.0

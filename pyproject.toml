@@ -1,0 +1,26 @@
+[project]
+name = "duroorun"
+version = "0.1.0"
+description = "두루런 - 한국 해안 트레일 러닝 서비스"
+requires-python = ">=3.11"
+
+[tool.ruff]
+# 한 줄 최대 100자 (CONTRIBUTING.md 규칙)
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+# E/W: pycodestyle, F: pyflakes, I: isort(import 정렬), UP: pyupgrade, B: bugbear
+select = ["E", "W", "F", "I", "UP", "B"]
+ignore = [
+    "B008",  # FastAPI는 Depends()를 기본 인자로 쓰는 패턴이 정상이므로 무시
+]
+
+[tool.ruff.lint.isort]
+# import 순서: 표준 라이브러리 → 서드파티 → 로컬(app) (CONTRIBUTING.md 규칙)
+known-first-party = ["app"]
+
+[tool.ruff.format]
+# 문자열은 큰따옴표 기본 (Python 표준)
+quote-style = "double"
+indent-style = "space"

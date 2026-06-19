@@ -159,6 +159,7 @@ await session.execute(
 | `refactor` | 코드 리팩토링 | `[refactor] 기록 서비스 로직 정리` |
 | `chore` | 설정, 패키지 등 | `[chore] Redis 의존성 추가` |
 | `test` | 테스트 코드 | `[test] 유저 인증 테스트 추가` |
+| `style` | 꾸미기 | `[style] 랜딩 페이지 로고 추가` |
 
 ### 브랜치
 - 자기 브랜치에서만 작업
@@ -166,11 +167,9 @@ await session.execute(
 - PR을 통해서만 main에 머지
 
 ```
-feature/user
-feature/course
-feature/record
-feature/review
-feature/facility
+user_admin
+record_review
+course_facility
 ```
 
 ### PR

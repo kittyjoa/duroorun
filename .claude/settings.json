@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(mv \"c:/Users/rnrnz/OneDrive/Desktop/duroorun/app/services\" \"c:/Users/rnrnz/OneDrive/Desktop/duroorun/app/clients\")",
-      "Bash(alembic init *)"
+      "Bash(alembic init *)",
+      "PowerShell(docker --version)",
+      "Read(//c/Users/rnrnz/OneDrive/Desktop/Babdongmu/Babdongmu/alembic/**)"
     ],
     "additionalDirectories": [
       "c:\\Users\\rnrnz\\OneDrive\\Desktop\\duroorun\\app\\services"

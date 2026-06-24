@@ -1,21 +1,19 @@
 import asyncio
 from logging.config import fileConfig
 
-from sqlalchemy.ext.asyncio import async_engine_from_config
 from sqlalchemy import pool
+from sqlalchemy.engine import Connection
+from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from alembic import context
-
 from app.config import settings
 from app.database import Base
 
-# 각 도메인 모델을 여기에 import해야 autogenerate가 테이블을 감지함
-# 모델 작성 후 아래에 추가:
-# from app.domain.user import models as user_models  # noqa
-# from app.domain.course import models as course_models  # noqa
-# from app.domain.record import models as record_models  # noqa
-# from app.domain.review import models as review_models  # noqa
-# from app.domain.facility import models as facility_models  # noqa
+from app.domain.user import models as user_models  # noqa
+# from app.domain.course import models as course_models  # noqa  ← 지영: 모델 작성 후 주석 해제
+# from app.domain.record import models as record_models  # noqa  ← 유선: 모델 작성 후 주석 해제
+# from app.domain.review import models as review_models  # noqa  ← 유선: 모델 작성 후 주석 해제
+# from app.domain.facility import models as facility_models  # noqa  ← 지영: 모델 작성 후 주석 해제
 
 config = context.config
 
@@ -23,7 +21,6 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
-
 target_metadata = Base.metadata
 
 
@@ -39,7 +36,7 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
-def do_run_migrations(connection):
+def do_run_migrations(connection: Connection) -> None:
     context.configure(connection=connection, target_metadata=target_metadata)
     with context.begin_transaction():
         context.run_migrations()
@@ -57,6 +54,8 @@ async def run_async_migrations() -> None:
 
 
 def run_migrations_online() -> None:
+    if hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     asyncio.run(run_async_migrations())
 
 

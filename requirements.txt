@@ -4,7 +4,7 @@ uvicorn[standard]>=0.49.0
 
 # ===== 데이터베이스 (PostgreSQL 16 + async) =====
 sqlalchemy[asyncio]>=2.0.51
-asyncpg>=0.31.0
+psycopg[binary]>=3.1.0
 alembic>=1.18.0
 
 # ===== 설정 / 검증 =====

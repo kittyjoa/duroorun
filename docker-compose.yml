@@ -47,7 +47,7 @@ services:
     # 컨테이너 안에서는 localhost가 아니라 서비스명(db, redis)으로 접속해야 함
     # .env의 DATABASE_URL / REDIS_URL을 아래로 덮어씀
     environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-postgres}@db:5432/duroorun
+      DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD:-postgres}@db:5432/duroorun
       REDIS_URL: redis://redis:6379/0
     # 서버 시작 전 마이그레이션 자동 적용 후 uvicorn 실행
     command: >

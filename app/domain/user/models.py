@@ -26,7 +26,7 @@ class User(Base):
 
     user_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_role: Mapped[UserRole] = mapped_column(
-        SAEnum(UserRole), default=UserRole.USER, nullable=False
+        SAEnum(UserRole), default=UserRole.USER, server_default="USER", nullable=False
     )
 
     name: Mapped[str | None] = mapped_column(String(50), nullable=True)
@@ -44,7 +44,9 @@ class User(Base):
     # 탈퇴 시 현재 시각 기록 (row 삭제 없이 익명화 처리)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    social_accounts: Mapped[list["SocialAccount"]] = relationship(back_populates="user")
+    social_accounts: Mapped[list["SocialAccount"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
 
 
 class SocialAccount(Base):

@@ -109,7 +109,9 @@ async def get_current_user(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="액세스 토큰이 아닙니다")
 
     jti = payload.get("jti")
-    if jti and await is_blacklisted(jti, redis):
+    if not jti:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="유효하지 않은 토큰입니다")
+    if await is_blacklisted(jti, redis):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="로그아웃된 토큰입니다")
 
     user_id = int(payload["sub"])

@@ -12,7 +12,15 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.core.security import create_access_token, create_refresh_token, save_refresh_jti
+from app.core.security import (
+    _decode,
+    add_to_blacklist,
+    create_access_token,
+    create_refresh_token,
+    delete_refresh_token,
+    save_refresh_jti,
+    verify_and_rotate_refresh,
+)
 from app.domain.user.models import ProviderType, SocialAccount, User
 
 _KAKAO_AUTH_URL = "https://kauth.kakao.com/oauth/authorize"
@@ -118,3 +126,39 @@ async def kakao_login(
     await save_refresh_jti(user.user_id, refresh_jti, redis)
 
     return access_token, refresh_token, is_new_user
+
+
+async def refresh_tokens(refresh_token: str, redis: Redis) -> tuple[str, str]:
+    """Refresh Token을 검증하고 새 Access Token + Refresh Token을 발급합니다."""
+    payload = _decode(refresh_token)
+
+    if payload.get("type") != "refresh":
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="리프레시 토큰이 아닙니다")
+
+    user_id = int(payload["sub"])
+    incoming_jti = payload.get("jti")
+    if not incoming_jti:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="유효하지 않은 토큰입니다")
+
+    is_valid = await verify_and_rotate_refresh(user_id, incoming_jti, redis)
+    if not is_valid:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="토큰이 탈취되었거나 만료되었습니다. 다시 로그인해주세요",
+        )
+
+    new_access_token = create_access_token(user_id)
+    new_refresh_token, new_jti = create_refresh_token(user_id)
+    await save_refresh_jti(user_id, new_jti, redis)
+
+    return new_access_token, new_refresh_token
+
+
+async def logout(access_token: str, redis: Redis) -> None:
+    """Access Token을 블랙리스트에 등록하고 Refresh Token을 삭제합니다."""
+    payload = _decode(access_token)
+    jti = payload.get("jti")
+    user_id = int(payload["sub"])
+
+    await add_to_blacklist(jti, redis)
+    await delete_refresh_token(user_id, redis)

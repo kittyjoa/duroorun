@@ -24,7 +24,7 @@ async def get_kakao_auth_url(redis: Redis) -> str:
     """카카오 OAuth 인증 URL을 생성하고 state를 Redis에 저장합니다."""
     state = secrets.token_urlsafe(32)
     try:
-        await redis.setex(f"oauth:state:{state}", 300, "1")
+        await redis.setex(f"oauth:state:{state}", settings.OAUTH_STATE_EXPIRE_SECONDS, "1")
     except RedisError:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="서버 오류가 발생했습니다. 잠시 후 다시 시도해주세요")
     params = urlencode({
@@ -50,7 +50,7 @@ async def kakao_login(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="유효하지 않은 state입니다")
 
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with httpx.AsyncClient(timeout=settings.OAUTH_API_TIMEOUT) as client:
             token_res = await client.post(
                 _KAKAO_TOKEN_URL,
                 data={

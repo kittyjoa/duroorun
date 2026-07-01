@@ -31,11 +31,11 @@ class Course(Base):
 
     course_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     course_type: Mapped[CourseType] = mapped_column(SAEnum(CourseType), nullable=False)
-    dmb_id: Mapped[str | None] = mapped_column(String, nullable=True)  # 두루누비 코스 고유번호(crsIdx)
+    dmb_id: Mapped[str | None] = mapped_column(String, unique=True, nullable=True)  # 두루누비 코스 고유번호(crsIdx)
     course_name: Mapped[str] = mapped_column(String, nullable=False)
     # 탈퇴 유저의 커스텀 코스는 created_by=NULL 처리 후 서비스에 계속 노출
     created_by: Mapped[int | None] = mapped_column(
-        Integer, ForeignKey("users.user_id"), nullable=True, index=True
+        Integer, ForeignKey("users.user_id", ondelete="SET NULL"), nullable=True, index=True
     )
     distance: Mapped[float | None] = mapped_column(Float, nullable=True)
     difficulty: Mapped[Difficulty | None] = mapped_column(SAEnum(Difficulty), nullable=True)

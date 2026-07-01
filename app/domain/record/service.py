@@ -1,7 +1,10 @@
 """러닝 기록 - 비즈니스 로직."""
 
+from datetime import UTC, datetime
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domain.record.models import Record
 from app.domain.record.schemas import RecordEndRequest, RecordResponse, RecordStartRequest
 
 
@@ -11,8 +14,17 @@ async def start_record(
         body: RecordStartRequest,
 ) -> RecordResponse:
     """러닝시작 - 기록생성"""
-    pass
-
+    record = Record(
+        user_id=user_id,
+        course_id=body.course_id,
+        started_at=datetime.now(UTC),
+        user_start_lat=body.user_start_lat,
+        user_start_lng=body.user_start_lng,
+    )
+    session.add(record) # DB에 추가대기
+    await session.commit() # 실제 DB에 저장
+    await session.refresh(record) # DB 자동 생성값 갱신(러닝기록값 생성)
+    return RecordResponse.model_validate(record) # 응답형식으로 변환
 
 async def end_record(
         session: AsyncSession,

@@ -1,16 +1,22 @@
 """러닝 기록 - API 엔드포인트 (APIRouter)."""
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.database import get_db
+from app.domain.record import service as record_service
 from app.domain.record.schemas import RecordEndRequest, RecordResponse, RecordStartRequest
 
 router = APIRouter(prefix="/records", tags=["records"])
 
 
 @router.post("/start", response_model=RecordResponse)
-async def start_record(body: RecordStartRequest):
+async def start_record(body: RecordStartRequest, session: AsyncSession = Depends(get_db),
+):
     """러닝시작"""
-    pass
+    return await record_service.start_record(session=session, user_id=1, body=body)
+#임시로 유저아이디는 1로 설정하고 인증기능 생성 후 변경예정
+
 
 
 @router.patch("/{record_id}/end", response_model=RecordResponse)

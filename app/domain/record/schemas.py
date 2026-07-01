@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class RecordStartRequest(BaseModel):
@@ -22,6 +22,8 @@ class RecordEndRequest(BaseModel):
 
 class RecordResponse(BaseModel):
     """러닝기록 조회 시 응답부분"""
+
+    model_config = ConfigDict(from_attributes=True)
 
     record_id: int
     course_id: int

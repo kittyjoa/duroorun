@@ -3,7 +3,7 @@
 ## 기술 스택
 - **DB**: PostgreSQL 16
 - **ORM**: SQLAlchemy 2.x (asyncio / Mapped 스타일)
-- **드라이버**: asyncpg
+- **드라이버**: psycopg3 (`psycopg[binary]`) — Alembic async 마이그레이션 호환성으로 선택
 - **마이그레이션**: Alembic
 - **캐시**: Redis (두루누비 API 응답 캐싱)
 

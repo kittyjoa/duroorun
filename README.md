@@ -40,7 +40,7 @@
 
 ### 1. Alembic 초기화 (DB 마이그레이션)
 
-우리는 async SQLAlchemy(asyncpg)를 쓰므로, `alembic init` 후 생성된 `env.py`를 **async용으로 수정**해야 합니다.
+우리는 async SQLAlchemy(psycopg3)를 쓰므로, `alembic init` 후 생성된 `env.py`를 **async용으로 수정**해야 합니다.
 
 ```bash
 # 1) async 템플릿으로 초기화

@@ -51,6 +51,7 @@ alembic upgrade head  # 로컬 반영
 > - 캐시 미스(Redis에 없음) 시에만 두루누비 API 실제 호출 → 결과를 Redis에 저장 후 응답
 > - 캐시 키 형식: `durunubi:course:{dmb_id}`
 > - **캐시 스탬피드 방지**: 캐시 미스 시 Redis Lock을 걸어 최초 1개 요청만 외부 API 호출. 나머지 요청은 Lock 해제 후 캐시에서 읽도록 처리 (인기 코스 동시 접근 시 외부 API 과부하 방지)
+> - JWT 로그아웃 블랙리스트 용도로도 사용
 
 > **Redis 키 정책 (인증/캐싱 통합)**
 >

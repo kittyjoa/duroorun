@@ -10,10 +10,10 @@ from app.config import settings
 from app.database import Base
 
 from app.domain.user import models as user_models  # noqa
-# from app.domain.course import models as course_models  # noqa  ← 지영: 모델 작성 후 주석 해제
-from app.domain.record import models as record_models  # noqa  ← 유선: 모델 작성 후 주석 해제
+from app.domain.course import models as course_models  # noqa
+from app.domain.record import models as record_models  # noqa
 # from app.domain.review import models as review_models  # noqa  ← 유선: 모델 작성 후 주석 해제
-# from app.domain.facility import models as facility_models  # noqa  ← 지영: 모델 작성 후 주석 해제
+from app.domain.facility import models as facility_models  # noqa
 
 config = context.config
 

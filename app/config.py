@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     COOKIE_DOMAIN: str = ""
 
     # OAuth
+    OAUTH_STATE_EXPIRE_SECONDS: int = 300  # state TTL 5분 (CSRF 방지용 1회성 값)
+    OAUTH_API_TIMEOUT: float = 5.0         # 소셜 API 호출 타임아웃 (초)
+
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
     GOOGLE_REDIRECT_URI: str = ""

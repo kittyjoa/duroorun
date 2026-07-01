@@ -36,7 +36,8 @@ async def kakao_login(
 ) -> tuple[str, str, bool]:
     """카카오 OAuth 콜백을 처리하고 (access_token, refresh_token, is_new_user)를 반환합니다."""
     # exists → delete 분리 시 레이스 컨디션 가능성이 있으므로 delete 결과로 한 번에 검증
-    if await redis.delete(f"oauth:state:{state}") == 0:
+    state_key = f"oauth:state:{state}"
+    if await redis.delete(state_key) == 0:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="유효하지 않은 state입니다")
 
     try:
@@ -67,6 +68,8 @@ async def kakao_login(
             user_info = user_res.json()
     except httpx.TimeoutException:
         raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="카카오 서버 응답이 지연되고 있습니다. 잠시 후 다시 시도해주세요")
+    except httpx.RequestError:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="카카오 서버에 연결할 수 없습니다. 잠시 후 다시 시도해주세요")
 
     provider_uid = user_info.get("id")
     if not provider_uid:

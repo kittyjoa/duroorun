@@ -10,7 +10,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
 
-class FacilityType(str, enum.Enum):
+class FacilityType(enum.StrEnum):
     RESTROOM = "RESTROOM"
     PARKING = "PARKING"
     LOCKER = "LOCKER"
@@ -38,7 +38,6 @@ class Facility(Base):
 
     course_facilities: Mapped[list["CourseFacility"]] = relationship(
         back_populates="facility",
-        cascade="all, delete-orphan",
     )
 
 

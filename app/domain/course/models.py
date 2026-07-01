@@ -3,19 +3,22 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import (
+    Boolean, DateTime, Float, ForeignKey,
+    Integer, String, Text, UniqueConstraint, func,
+)
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
 
 
-class CourseType(str, enum.Enum):
+class CourseType(enum.StrEnum):
     DRNB = "DRNB"
     CUSTOM = "CUSTOM"
 
 
-class Difficulty(str, enum.Enum):
+class Difficulty(enum.StrEnum):
     EASY = "EASY"
     NORMAL = "NORMAL"
     HARD = "HARD"
@@ -28,7 +31,7 @@ class Course(Base):
 
     course_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     course_type: Mapped[CourseType] = mapped_column(SAEnum(CourseType), nullable=False)
-    dmb_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    dmb_id: Mapped[str | None] = mapped_column(String, nullable=True)  # 두루누비 코스 고유번호(crsIdx)
     course_name: Mapped[str] = mapped_column(String, nullable=False)
     # 탈퇴 유저의 커스텀 코스는 created_by=NULL 처리 후 서비스에 계속 노출
     created_by: Mapped[int | None] = mapped_column(

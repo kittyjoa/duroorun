@@ -100,3 +100,6 @@ def downgrade() -> None:
     op.drop_table('courses')
     op.drop_table('facilities')
     # ### end Alembic commands ###
+    sa.Enum(name='coursetype').drop(op.get_bind(), checkfirst=True)
+    sa.Enum(name='difficulty').drop(op.get_bind(), checkfirst=True)
+    sa.Enum(name='facilitytype').drop(op.get_bind(), checkfirst=True)

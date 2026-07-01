@@ -33,10 +33,11 @@ class Course(Base):
     course_type: Mapped[CourseType] = mapped_column(SAEnum(CourseType), nullable=False)
     dmb_id: Mapped[str | None] = mapped_column(String, unique=True, nullable=True)  # 두루누비 코스 고유번호(crsIdx)
     course_name: Mapped[str] = mapped_column(String, nullable=False)
-    # 탈퇴 유저의 커스텀 코스는 created_by=NULL 처리 후 서비스에 계속 노출
     created_by: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("users.user_id", ondelete="SET NULL"), nullable=True, index=True
-    )
+    ) # 탈퇴 유저의 커스텀 코스는 created_by=NULL 처리 후 서비스에 계속 노출
+    # 주의: User는 soft-delete(deleted_at)만 사용해 실제 행 삭제가 없으므로 이 ondelete=SET NULL은 
+    # DB 레벨에서 발동하지 않음 — 탈퇴 로직 구현 시 애플리케이션 코드에서 직접 created_by를 NULL로 갱신해야 함
     distance: Mapped[float | None] = mapped_column(Float, nullable=True)
     difficulty: Mapped[Difficulty | None] = mapped_column(SAEnum(Difficulty), nullable=True)
     estimated_time: Mapped[int | None] = mapped_column(Integer, nullable=True)

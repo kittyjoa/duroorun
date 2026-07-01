@@ -35,36 +35,43 @@ async def kakao_login(
     code: str, state: str, db: AsyncSession, redis: Redis
 ) -> tuple[str, str, bool]:
     """카카오 OAuth 콜백을 처리하고 (access_token, refresh_token, is_new_user)를 반환합니다."""
-    state_key = f"oauth:state:{state}"
-    if not await redis.exists(state_key):
+    # exists → delete 분리 시 레이스 컨디션 가능성이 있으므로 delete 결과로 한 번에 검증
+    if await redis.delete(f"oauth:state:{state}") == 0:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="유효하지 않은 state입니다")
-    await redis.delete(state_key)
 
-    async with httpx.AsyncClient() as client:
-        token_res = await client.post(
-            _KAKAO_TOKEN_URL,
-            data={
-                "grant_type": "authorization_code",
-                "client_id": settings.KAKAO_CLIENT_ID,
-                "client_secret": settings.KAKAO_CLIENT_SECRET,
-                "redirect_uri": settings.KAKAO_REDIRECT_URI,
-                "code": code,
-            },
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-        )
-        if token_res.status_code != 200:
-            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="카카오 토큰 발급에 실패했습니다")
-        kakao_access_token = token_res.json()["access_token"]
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            token_res = await client.post(
+                _KAKAO_TOKEN_URL,
+                data={
+                    "grant_type": "authorization_code",
+                    "client_id": settings.KAKAO_CLIENT_ID,
+                    "client_secret": settings.KAKAO_CLIENT_SECRET,
+                    "redirect_uri": settings.KAKAO_REDIRECT_URI,
+                    "code": code,
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            if token_res.status_code != 200:
+                raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="카카오 토큰 발급에 실패했습니다")
+            kakao_access_token = token_res.json().get("access_token")
+            if not kakao_access_token:
+                raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="카카오 토큰 발급에 실패했습니다")
 
-        user_res = await client.get(
-            _KAKAO_USER_URL,
-            headers={"Authorization": f"Bearer {kakao_access_token}"},
-        )
-        if user_res.status_code != 200:
-            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="카카오 유저 정보 조회에 실패했습니다")
-        user_info = user_res.json()
+            user_res = await client.get(
+                _KAKAO_USER_URL,
+                headers={"Authorization": f"Bearer {kakao_access_token}"},
+            )
+            if user_res.status_code != 200:
+                raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="카카오 유저 정보 조회에 실패했습니다")
+            user_info = user_res.json()
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="카카오 서버 응답이 지연되고 있습니다. 잠시 후 다시 시도해주세요")
 
-    provider_uid = str(user_info["id"])
+    provider_uid = user_info.get("id")
+    if not provider_uid:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="카카오 유저 정보 조회에 실패했습니다")
+    provider_uid = str(provider_uid)
     kakao_account = user_info.get("kakao_account", {})
     name = kakao_account.get("name")
     profile_image_url = kakao_account.get("profile", {}).get("profile_image_url")

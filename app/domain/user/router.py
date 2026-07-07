@@ -86,10 +86,11 @@ async def token_refresh(
 async def logout_endpoint(
     response: Response,
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    refresh_token: str | None = Cookie(default=None),
     redis: Redis = Depends(get_redis),
 ) -> MessageResponse:
     """Access Token을 무효화하고 Refresh Token을 삭제합니다."""
-    await logout(credentials.credentials, redis)
+    await logout(credentials.credentials, refresh_token, redis)
 
     response.delete_cookie(key="refresh_token", path="/api/v1/auth/refresh")
 

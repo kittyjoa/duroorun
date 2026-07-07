@@ -54,6 +54,30 @@ def _decode(token: str) -> dict:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="유효하지 않은 토큰입니다")
 
 
+def _decode_unverified_exp(token: str) -> dict:
+    """만료 여부와 무관하게 JWT payload를 반환합니다 (로그아웃 전용)."""
+    try:
+        return jwt.decode(
+            token,
+            settings.JWT_SECRET_KEY,
+            algorithms=[settings.JWT_ALGORITHM],
+            options={"verify_exp": False},
+        )
+    except jwt.InvalidTokenError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="유효하지 않은 토큰입니다",
+        )
+
+
+def _decode_safe(token: str) -> dict | None:
+    """JWT 디코딩 실패(만료 포함) 시 None을 반환합니다 (로그아웃 선택적 처리용)."""
+    try:
+        return jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
+    except jwt.PyJWTError:
+        return None
+
+
 # ──────────────────────────────────────────
 # Redis — Access 블랙리스트
 # ──────────────────────────────────────────

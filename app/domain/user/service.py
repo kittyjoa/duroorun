@@ -15,7 +15,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.core.security import (
     _decode,
-    _decode_safe,
     _decode_unverified_exp,
     add_to_blacklist,
     create_access_token,
@@ -195,20 +194,16 @@ async def refresh_tokens(refresh_token: str, redis: Redis) -> tuple[str, str]:
     return new_access_token, new_refresh_token
 
 
-async def logout(access_token: str, refresh_token: str | None, redis: Redis) -> None:
+async def logout(access_token: str, redis: Redis) -> None:
     """Access Token을 블랙리스트에 등록하고 Refresh Token을 삭제합니다."""
-    # 유효한 access token만 블랙리스트 등록 — 만료 토큰은 이미 무효라 불필요
-    access_payload = _decode_safe(access_token)
-    if access_payload:
-        jti = access_payload.get("jti")
-        if jti:
-            await add_to_blacklist(jti, redis)
+    # 만료 토큰도 서명 검증 후 user_id 추출 — 쿠키 경로와 무관하게 항상 세션 삭제 보장
+    payload = _decode_unverified_exp(access_token)
+    user_id = int(payload["sub"])
+    jti = payload.get("jti")
 
-    # user_id는 refresh token 기반으로 식별 — 만료 무시하고 서명만 검증
-    if refresh_token:
-        refresh_payload = _decode_unverified_exp(refresh_token)
-        user_id = int(refresh_payload["sub"])
-        await delete_refresh_token(user_id, redis)
+    if jti:
+        await add_to_blacklist(jti, redis)
+    await delete_refresh_token(user_id, redis)
 
 
 async def withdraw_user(user: User, access_token: str, db: AsyncSession, redis: Redis) -> None:

@@ -1,7 +1,7 @@
 """JWT 발급/검증, Refresh 로테이션, 블랙리스트."""
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import jwt
 from fastapi import Depends, HTTPException, status
@@ -20,7 +20,7 @@ bearer_scheme = HTTPBearer()
 
 def _now() -> datetime:
     """현재 UTC 시각을 반환합니다."""
-    return datetime.now(tz=timezone.utc)
+    return datetime.now(tz=UTC)
 
 
 # ──────────────────────────────────────────
@@ -49,9 +49,15 @@ def _decode(token: str) -> dict:
     try:
         return jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
     except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="토큰이 만료되었습니다")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="토큰이 만료되었습니다",
+        ) from None
     except jwt.InvalidTokenError:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="유효하지 않은 토큰입니다")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="유효하지 않은 토큰입니다",
+        ) from None
 
 
 def _decode_unverified_exp(token: str) -> dict:
@@ -67,15 +73,7 @@ def _decode_unverified_exp(token: str) -> dict:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="유효하지 않은 토큰입니다",
-        )
-
-
-def _decode_safe(token: str) -> dict | None:
-    """JWT 디코딩 실패(만료 포함) 시 None을 반환합니다 (로그아웃 선택적 처리용)."""
-    try:
-        return jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
-    except jwt.PyJWTError:
-        return None
+        ) from None
 
 
 # ──────────────────────────────────────────
@@ -130,13 +128,22 @@ async def get_current_user(
     payload = _decode(credentials.credentials)
 
     if payload.get("type") != "access":
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="액세스 토큰이 아닙니다")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="액세스 토큰이 아닙니다",
+        )
 
     jti = payload.get("jti")
     if not jti:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="유효하지 않은 토큰입니다")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="유효하지 않은 토큰입니다",
+        )
     if await is_blacklisted(jti, redis):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="로그아웃된 토큰입니다")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="로그아웃된 토큰입니다",
+        )
 
     user_id = int(payload["sub"])
     result = await db.execute(
@@ -145,7 +152,10 @@ async def get_current_user(
     user = result.scalar_one_or_none()
 
     if user is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="존재하지 않거나 탈퇴한 계정입니다")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="존재하지 않거나 탈퇴한 계정입니다",
+        )
 
     return user
 
@@ -153,5 +163,8 @@ async def get_current_user(
 async def get_current_admin(user: User = Depends(get_current_user)) -> User:
     """관리자 권한을 검증합니다."""
     if user.user_role != UserRole.ADMIN:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="관리자 권한이 필요합니다")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="관리자 권한이 필요합니다",
+        )
     return user

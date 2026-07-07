@@ -18,6 +18,7 @@ class FacilityCreateRequest(BaseModel):
     kakao_place_id: str | None = None
     # 연결할 코스 (선택사항, 복수 선택 가능)
     course_ids: list[int] = Field(default_factory=list)
+    # 코스 id 안보내면, list() 실행 → 매번 새로운 [] 생성
 
 
 class FacilityUpdateRequest(BaseModel):

@@ -26,7 +26,7 @@ class CourseWaypointResponse(BaseModel):
 
 
 class CourseImageResponse(BaseModel):
-    """커스텀 코스 이미지 조회 시 응답 - 업로드 자체는 별도 R2 업로드 엔드포인트에서 처리"""
+    """커스텀 코스 이미지 조회 시 응답 - 업로드 자체는 R2 업로드 엔드포인트에서 처리"""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -36,14 +36,14 @@ class CourseImageResponse(BaseModel):
 
 
 class CourseCreateRequest(BaseModel):
-    """커스텀 코스 등록 - 로그인 유저 전용. course_type은 서비스 레이어에서 CUSTOM 고정"""
+    """커스텀 코스 등록 - 로그인 유저 전용. course_type은 CUSTOM 고정"""
 
     course_name: str = Field(min_length=1)
     distance: float = Field(gt=0)
     difficulty: Difficulty
     estimated_time: int = Field(gt=0)
     course_description: str | None = None
-    # 시작/종료 좌표(start_lat/lng, end_lat/lng)는 서비스 레이어가 첫/마지막 경유지로 자동 저장
+    # 시작/종료 좌표(start_lat/lng, end_lat/lng)는 service.py에서 첫/마지막 경유지로 자동 저장
     waypoints: list[CourseWaypointCreate] = Field(min_length=2)
 
 
@@ -60,7 +60,7 @@ class CourseUpdateRequest(BaseModel):
 
 
 class DrnbCourseSummary(BaseModel):
-    """DRNB 코스 목록 아이템 - 시드 스크립트로 등록된 DB 식별 정보만 (상세정보는 API 실시간 조회)"""
+    """DRNB 코스 목록 요소 - 시드에 등록된 DB 정보만 (상세정보는 API 실시간 조회)"""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -83,9 +83,9 @@ class DrnbCourseListResponse(BaseModel):
 
 
 class DrnbCourseDetailResponse(BaseModel):
-    """DRNB 코스 상세 조회 시 응답 - DB 저장 정보 + 두루누비 API 실시간 조회 결과 병합"""
+    """DRNB 코스 상세 조회 시 응답 - DB 저장 정보 + 두루누비 API 실시간 조회 결과"""
 
-    # from_attributes 미사용: DB 조회 결과 + API 응답을 서비스 레이어에서 직접 합쳐 kwargs로 생성함
+    # from_attributes 미사용: DB 조회 결과 + API 응답을 service.py에서 직접 합쳐 kwargs로 생성
     course_id: int
     dmb_id: str
     course_name: str
@@ -96,7 +96,7 @@ class DrnbCourseDetailResponse(BaseModel):
     # 아래 두 필드는 두루누비 API 실시간 응답값 (durunubi.py 클라이언트가 채움)
     distance: float | None
     course_description: str | None
-    # 아래 네 필드는 API 실시간 조회가 아니라 시드 스크립트가 gpxpath를 파싱해 DB에 저장해둔 값
+    # 아래 네 필드는 시드 스크립트가 gpxpath를 파싱해 DB에 저장해둔 값
     # (완주 인증 검증 기준점이므로 API 장애와 무관하게 조회 가능해야 함)
     start_lat: float | None
     start_lng: float | None
@@ -105,7 +105,7 @@ class DrnbCourseDetailResponse(BaseModel):
 
 
 class CustomCourseSummary(BaseModel):
-    """커스텀 코스 목록 아이템"""
+    """커스텀 코스 목록 요소"""
 
     model_config = ConfigDict(from_attributes=True)
 

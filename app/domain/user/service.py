@@ -236,9 +236,12 @@ async def withdraw_user(user: User, access_token: str, db: AsyncSession, redis: 
 
     await db.commit()
 
-    # Redis 정리 (DB 커밋 후 처리)
-    payload = _decode(access_token)
-    jti = payload.get("jti")
-    if jti:
-        await add_to_blacklist(jti, redis)
-    await delete_refresh_token(user.user_id, redis)
+    # Redis 정리 실패해도 DB 탈퇴는 완료 — get_current_user가 deleted_at으로 차단하므로 정상 응답
+    try:
+        payload = _decode(access_token)
+        jti = payload.get("jti")
+        if jti:
+            await add_to_blacklist(jti, redis)
+        await delete_refresh_token(user.user_id, redis)
+    except RedisError:
+        pass

@@ -1,13 +1,14 @@
 """회원/인증 - 비즈니스 로직."""
 
 import secrets
+from datetime import UTC, datetime
 from urllib.parse import urlencode
 
 import httpx
 from fastapi import HTTPException, status
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
-from sqlalchemy import select
+from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,6 +22,8 @@ from app.core.security import (
     save_refresh_jti,
     verify_and_rotate_refresh,
 )
+from app.domain.course.models import Course
+from app.domain.record.models import Record
 from app.domain.user.models import ProviderType, SocialAccount, User
 
 _KAKAO_AUTH_URL = "https://kauth.kakao.com/oauth/authorize"
@@ -34,7 +37,10 @@ async def get_kakao_auth_url(redis: Redis) -> str:
     try:
         await redis.setex(f"oauth:state:{state}", settings.OAUTH_STATE_EXPIRE_SECONDS, "1")
     except RedisError:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="서버 오류가 발생했습니다. 잠시 후 다시 시도해주세요")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="서버 오류가 발생했습니다. 잠시 후 다시 시도해주세요",
+        ) from None
     params = urlencode({
         "client_id": settings.KAKAO_CLIENT_ID,
         "redirect_uri": settings.KAKAO_REDIRECT_URI,
@@ -53,9 +59,15 @@ async def kakao_login(
     try:
         deleted = await redis.delete(state_key)
     except RedisError:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="서버 오류가 발생했습니다. 잠시 후 다시 시도해주세요")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="서버 오류가 발생했습니다. 잠시 후 다시 시도해주세요",
+        ) from None
     if deleted == 0:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="유효하지 않은 state입니다")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="유효하지 않은 state입니다",
+        )
 
     try:
         async with httpx.AsyncClient(timeout=settings.OAUTH_API_TIMEOUT) as client:
@@ -71,26 +83,44 @@ async def kakao_login(
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
             )
             if token_res.status_code != 200:
-                raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="카카오 토큰 발급에 실패했습니다")
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="카카오 토큰 발급에 실패했습니다",
+                )
             kakao_access_token = token_res.json().get("access_token")
             if not kakao_access_token:
-                raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="카카오 토큰 발급에 실패했습니다")
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="카카오 토큰 발급에 실패했습니다",
+                )
 
             user_res = await client.get(
                 _KAKAO_USER_URL,
                 headers={"Authorization": f"Bearer {kakao_access_token}"},
             )
             if user_res.status_code != 200:
-                raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="카카오 유저 정보 조회에 실패했습니다")
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="카카오 유저 정보 조회에 실패했습니다",
+                )
             user_info = user_res.json()
     except httpx.TimeoutException:
-        raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="카카오 서버 응답이 지연되고 있습니다. 잠시 후 다시 시도해주세요")
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="카카오 서버 응답이 지연되고 있습니다. 잠시 후 다시 시도해주세요",
+        ) from None
     except httpx.RequestError:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="카카오 서버에 연결할 수 없습니다. 잠시 후 다시 시도해주세요")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="카카오 서버에 연결할 수 없습니다. 잠시 후 다시 시도해주세요",
+        ) from None
 
     provider_uid = user_info.get("id")
     if not provider_uid:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="카카오 유저 정보 조회에 실패했습니다")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="카카오 유저 정보 조회에 실패했습니다",
+        )
     provider_uid = str(provider_uid)
     name = user_info.get("kakao_account", {}).get("name")
 
@@ -116,7 +146,10 @@ async def kakao_login(
             await db.commit()
         except IntegrityError:
             await db.rollback()
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="이미 연동된 소셜 계정입니다")
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="이미 연동된 소셜 계정입니다",
+            ) from None
     else:
         result = await db.execute(select(User).where(User.user_id == social.user_id))
         user = result.scalar_one()
@@ -133,12 +166,18 @@ async def refresh_tokens(refresh_token: str, redis: Redis) -> tuple[str, str]:
     payload = _decode(refresh_token)
 
     if payload.get("type") != "refresh":
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="리프레시 토큰이 아닙니다")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="리프레시 토큰이 아닙니다",
+        )
 
     user_id = int(payload["sub"])
     incoming_jti = payload.get("jti")
     if not incoming_jti:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="유효하지 않은 토큰입니다")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="유효하지 않은 토큰입니다",
+        )
 
     is_valid = await verify_and_rotate_refresh(user_id, incoming_jti, redis)
     if not is_valid:
@@ -162,3 +201,35 @@ async def logout(access_token: str, redis: Redis) -> None:
 
     await add_to_blacklist(jti, redis)
     await delete_refresh_token(user_id, redis)
+
+
+async def withdraw_user(user: User, access_token: str, db: AsyncSession, redis: Redis) -> None:
+    """회원 탈퇴: 개인정보 익명화 + 소셜 계정 삭제 + 연관 데이터 익명화 (단일 트랜잭션)."""
+    now = datetime.now(tz=UTC)
+
+    # row 삭제 없이 익명화 — 탈퇴 후에도 통계 집계에 계속 활용
+    user.name = None
+    user.nickname = None
+    user.profile_image_url = None
+    user.location = None
+    user.deleted_at = now
+
+    # 개인 식별 정보 즉시 파기
+    await db.execute(delete(SocialAccount).where(SocialAccount.user_id == user.user_id))
+
+    # Soft Delete이므로 DB 트리거 미발동 — 서비스 레이어에서 직접 NULL 처리
+    await db.execute(update(Record).where(Record.user_id == user.user_id).values(user_id=None))
+
+    # TODO: review 모델 구현 후 reviews 테이블 user_id NULL 업데이트 추가
+
+    await db.execute(
+        update(Course).where(Course.created_by == user.user_id).values(created_by=None)
+    )
+
+    await db.commit()
+
+    # Redis 정리 (DB 커밋 후 처리)
+    payload = _decode(access_token)
+    jti = payload.get("jti")
+    await add_to_blacklist(jti, redis)
+    await delete_refresh_token(user.user_id, redis)

@@ -1,6 +1,6 @@
 """편의시설 - API 엔드포인트 (APIRouter)."""
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import get_current_admin
@@ -29,8 +29,8 @@ async def create_facility(
 
 @router.get("", response_model=FacilityListResponse)
 async def get_facilities(
-    page: int = 1,
-    size: int = 20,
+    page: int = Query(1, ge=1),
+    size: int = Query(20, ge=1, le=100),
     course_id: int | None = None,
     session: AsyncSession = Depends(get_db),
 ):

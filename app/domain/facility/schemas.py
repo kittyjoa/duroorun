@@ -32,6 +32,8 @@ class FacilityUpdateRequest(BaseModel):
     kakao_place_id: str | None = None
     # None이면 코스 연결 변경 없음, 빈 리스트면 전체 연결 해제
     course_ids: list[int] | None = None
+    # 삭제(is_active=false) 처리된 시설을 관리자가 되돌릴 때 사용. None이면 변경 없음
+    is_active: bool | None = None
 
 
 class FacilityResponse(BaseModel):

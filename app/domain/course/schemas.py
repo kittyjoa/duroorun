@@ -55,7 +55,8 @@ class CourseUpdateRequest(BaseModel):
     difficulty: Difficulty | None = None
     estimated_time: int | None = Field(default=None, gt=0)
     course_description: str | None = None
-    # 경유지를 다시 보내면 전체 교체 (부분 수정 대상 아님)
+    # 경유지를 다시 보내면 전체 교체 (부분 수정 대상 아님) - 프론트: 경유지 미변경 시 필드 자체를 생략할 것
+    # min_length=2라 waypoints를 보내는 순간 항상 최소 2개 필요 (이름만 바꾸는 요청엔 waypoints 생략)
     waypoints: list[CourseWaypointCreate] | None = Field(default=None, min_length=2)
 
 
@@ -86,6 +87,7 @@ class DrnbCourseDetailResponse(BaseModel):
     """DRNB 코스 상세 조회 시 응답 - DB 저장 정보 + 두루누비 API 실시간 조회 결과"""
 
     # from_attributes 미사용: DB 조회 결과 + API 응답을 service.py에서 직접 합쳐 kwargs로 생성
+    # TODO: service.py에서 이 kwargs 조립 완료되면, 필드 누락을 잡아낼 조립 테스트 추가
     course_id: int
     dmb_id: str
     course_name: str
@@ -98,6 +100,9 @@ class DrnbCourseDetailResponse(BaseModel):
     course_description: str | None
     # 아래 네 필드는 시드 스크립트가 gpxpath를 파싱해 DB에 저장해둔 값
     # (완주 인증 검증 기준점이므로 API 장애와 무관하게 조회 가능해야 함)
+    # TODO(record PR #7 연동): None 허용이 record의 두 좌표 사이 거리 검증과 맞물림.
+    # seed_courses.py가 항상 non-null로 채운다는 전제인데, 시드 실패/누락 시
+    # record 쪽에서 None을 어떻게 처리할지(검증 실패 vs 예외) 유선님과 confirm 필요.
     start_lat: float | None
     start_lng: float | None
     end_lat: float | None
@@ -140,6 +145,7 @@ class CustomCourseDetailResponse(BaseModel):
     estimated_time: int | None
     course_description: str | None
     created_by: int | None
+    # DRNB와 동일하게 record의 완주 인증 기준점으로 쓰임 — None 처리 정책은 위 TODO와 동일 이슈
     start_lat: float | None
     start_lng: float | None
     end_lat: float | None

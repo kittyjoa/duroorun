@@ -46,6 +46,8 @@ class FacilityResponse(BaseModel):
     latitude: float
     longitude: float
     kakao_place_id: str | None
+    # place_url은 요청 스키마에 없음 - service에서 kakao_place_id로 카카오 로컬 API 조회 후 조립
+    # (조립 로직 구현 전까지는 kakao_place_id 있어도 place_url=None으로 응답됨)
     place_url: str | None
     is_active: bool
     created_at: datetime

@@ -1,12 +1,12 @@
 """러닝 기록 - API 엔드포인트 (APIRouter)."""
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import get_current_user
 from app.database import get_db
 from app.domain.record import service as record_service
-from app.domain.record.schemas import RecordEndRequest, RecordResponse, RecordStartRequest
+from app.domain.record.schemas import RecordEndRequest, RecordListResponse, RecordResponse, RecordStartRequest
 from app.domain.user.models import User
 
 router = APIRouter(prefix="/records", tags=["records"])
@@ -49,10 +49,10 @@ async def get_record(
     )
 
 
-@router.get("/", response_model=list[RecordResponse])
+@router.get("/", response_model=RecordListResponse)
 async def get_records(
-    page: int = 1,
-    size: int = 20,
+    page: int = Query(default=1, ge=1),
+    size: int = Query(default=20, ge=1, le=100),
     session: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -86,7 +86,7 @@ async def resume_record(
     )
 
 
-@router.delete("/{record_id}", status_code=204)
+@router.delete("/{record_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_record(
     record_id: int,
     session: AsyncSession = Depends(get_db),

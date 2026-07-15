@@ -17,6 +17,9 @@ from app.domain.course.schemas import (
 
 # TODO DRNB 목록/조회 함수 작성 시: 쿼리에 WHERE course_type == CourseType.DRNB 필터 반드시 포함할 것.
 
+# Course 컬럼은 nullable=True지만 생성 시 필수값이라, 수정 시에도 명시적 null을 허용하면 안 되는 필드
+_REQUIRED_FIELDS = ("distance", "difficulty", "estimated_time")
+
 
 def _build_waypoints(waypoints: list[CourseWaypointCreate]) -> list[CourseWaypoint]:
     """요청 좌표 리스트를 sequence가 매겨진 CourseWaypoint 목록으로 변환합니다."""
@@ -26,13 +29,21 @@ def _build_waypoints(waypoints: list[CourseWaypointCreate]) -> list[CourseWaypoi
     ]
 
 
-async def _get_custom_course(session: AsyncSession, course_id: int) -> Course:
-    """CUSTOM 코스를 경유지/이미지까지 eager load해서 조회합니다. 없으면 404."""
-    result = await session.execute(
+async def _get_custom_course(
+    session: AsyncSession, course_id: int, *, for_update: bool = False
+) -> Course:
+    """CUSTOM 코스를 경유지/이미지까지 eager load해서 조회합니다. 없으면 404.
+
+    for_update=True면 courses 행에 락을 걸어, 동시 수정/삭제 요청 간 lost update를 방지합니다.
+    """
+    query = (
         select(Course)
         .where(Course.course_id == course_id, Course.course_type == CourseType.CUSTOM)
         .options(selectinload(Course.waypoints), selectinload(Course.images))
     )
+    if for_update:
+        query = query.with_for_update()
+    result = await session.execute(query)
     course = result.scalar_one_or_none()
     if course is None or not course.is_active:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="코스를 찾을 수 없습니다.")
@@ -107,7 +118,7 @@ async def update_course(
     body: CourseUpdateRequest,
 ) -> CustomCourseDetailResponse:
     """커스텀 코스를 수정합니다 (작성자 본인 전용, 부분 수정)."""
-    course = await _get_custom_course(session, course_id)
+    course = await _get_custom_course(session, course_id, for_update=True)
     if course.created_by != user_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="본인의 코스만 수정할 수 있습니다."
@@ -115,6 +126,12 @@ async def update_course(
 
     # 요청 JSON에 실제 포함된 필드만 딕셔너리로 뽑음. 생략 필드는 안 건드리고 명시적 null만 반영.
     update_data = body.model_dump(exclude_unset=True, exclude={"waypoints"})
+    for required_field in _REQUIRED_FIELDS:
+        if required_field in update_data and update_data[required_field] is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{required_field}는 null로 변경할 수 없습니다.",
+            )
     for field, value in update_data.items():
         setattr(course, field, value)
 
@@ -137,7 +154,7 @@ async def update_course(
 
 async def delete_course(session: AsyncSession, user_id: int, course_id: int) -> None:
     """커스텀 코스를 비활성화합니다 (Soft Delete, 작성자 본인 전용)."""
-    course = await _get_custom_course(session, course_id)
+    course = await _get_custom_course(session, course_id, for_update=True)
     if course.created_by != user_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="본인의 코스만 삭제할 수 있습니다."

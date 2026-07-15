@@ -44,7 +44,8 @@ class CourseCreateRequest(BaseModel):
     estimated_time: int = Field(gt=0)
     course_description: str | None = None
     # 시작/종료 좌표(start_lat/lng, end_lat/lng)는 service.py에서 첫/마지막 경유지로 자동 저장
-    waypoints: list[CourseWaypointCreate] = Field(min_length=2)
+    # max_length=500: 대량 좌표 전송으로 인한 벌크 INSERT/응답 payload 비대화 방지
+    waypoints: list[CourseWaypointCreate] = Field(min_length=2, max_length=500)
 
 
 class CourseUpdateRequest(BaseModel):
@@ -57,7 +58,7 @@ class CourseUpdateRequest(BaseModel):
     course_description: str | None = None
     # 경유지를 다시 보내면 전체 교체 (부분 수정 대상 아님) - 프론트: 경유지 미변경 시 필드 자체를 생략할 것
     # min_length=2라 waypoints를 보내는 순간 항상 최소 2개 필요 (이름만 바꾸는 요청엔 waypoints 생략)
-    waypoints: list[CourseWaypointCreate] | None = Field(default=None, min_length=2)
+    waypoints: list[CourseWaypointCreate] | None = Field(default=None, min_length=2, max_length=500)
 
 
 class DrnbCourseSummary(BaseModel):

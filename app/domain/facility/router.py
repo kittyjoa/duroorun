@@ -34,7 +34,7 @@ async def get_facilities(
     course_id: int | None = None,
     session: AsyncSession = Depends(get_db),
 ):
-    """편의시설 목록 조회 (course_id 전달 시 해당 코스 주변 시설만 조회)"""
+    """편의시설 목록 조회 (course_id 전달 → 해당 코스 주변 시설만 조회)"""
     return await facility_service.get_facilities(
         session=session, page=page, size=size, course_id=course_id
     )

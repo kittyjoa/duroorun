@@ -20,16 +20,16 @@ _REQUIRED_FIELDS = ("latitude", "longitude", "is_active")
 
 
 def _build_place_url(kakao_place_id: str | None) -> str | None:
-    """kakao_place_id로 카카오맵 장소 상세 URL을 조립합니다.
+    """kakao_place_id로 카카오맵 장소 상세 URL을 조립.
 
-    카카오 Local API에는 id 기반 상세조회 엔드포인트가 없고, 장소 페이지 URL은
-    고정 패턴이라 API 호출 없이 문자열로 바로 조립합니다.
+    ㅡ 카카오 Local API에는 id 기반 상세조회 엔드포인트가 없고,
+    장소 페이지 URL은 고정 패턴이라 API 호출 없이 문자열만 조립.
     """
     return _KAKAO_PLACE_URL_TEMPLATE.format(kakao_place_id) if kakao_place_id else None
 
 
 async def _validate_course_ids(session: AsyncSession, course_ids: list[int]) -> None:
-    """연결하려는 course_id가 모두 존재하는지 확인합니다."""
+    """연결하려는 course_id가 모두 존재하는지 확인."""
     if not course_ids:
         return
     result = await session.execute(
@@ -45,8 +45,8 @@ async def _validate_course_ids(session: AsyncSession, course_ids: list[int]) -> 
 
 
 async def create_facility(session: AsyncSession, body: FacilityCreateRequest) -> FacilityResponse:
-    """편의시설을 등록합니다."""
-    # 프론트에서 같은 코스를 중복 전달해도 복합 PK(course_id, facility_id) 충돌이 나지 않도록 dedupe
+    """편의시설을 등록."""
+    # course_ids 중복 제거 → 존재 검증 → 'Facility 생성 + CourseFacility 매핑' 저장
     course_ids = list(dict.fromkeys(body.course_ids))
     await _validate_course_ids(session, course_ids)
 
@@ -68,9 +68,9 @@ async def create_facility(session: AsyncSession, body: FacilityCreateRequest) ->
 
 
 async def get_facility(session: AsyncSession, facility_id: int) -> FacilityResponse:
-    """편의시설 상세 정보를 조회합니다."""
+    """편의시설 상세 정보를 조회(단건 조회)."""
     facility = await session.get(Facility, facility_id)
-    # 비활성화(soft delete)된 시설은 목록 조회와 동일하게 노출하지 않음
+    # 비활성화(soft delete)된 시설은 목록 조회와 동일하게 노출 X
     if facility is None or not facility.is_active:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="편의시설을 찾을 수 없습니다."
@@ -84,13 +84,12 @@ async def get_facilities(
     size: int,
     course_id: int | None = None,
 ) -> FacilityListResponse:
-    """편의시설 목록을 조회합니다.
+    """편의시설 목록을 조회.
 
-    course_id 전달 시 해당 코스에 연결된(course_facility 매핑) 시설만 조회 (코스 상세 지도용).
-    비활성화된 시설은 매핑이 남아있어도 노출하지 않음.
+    ㅡ course_id 전달 시 해당 코스에 연결된 시설만 조회 (코스 상세 지도용).
+    비활성화된 시설은 매핑이 남아있어도 노출 X
     """
-    # count/list가 같은 필터를 따로 들고 있으면 나중에 필터가 하나만 수정돼 total과
-    # items 개수가 어긋날 수 있어, base_query 하나로 필터를 통일하고 count는 서브쿼리로 계산
+    # base_query 하나로 필터를 통일하고 count는 서브쿼리로 계산
     base_query = select(Facility).where(Facility.is_active.is_(True))
     if course_id is not None:
         base_query = base_query.join(CourseFacility).where(CourseFacility.course_id == course_id)
@@ -115,13 +114,14 @@ async def update_facility(
     facility_id: int,
     body: FacilityUpdateRequest,
 ) -> FacilityResponse:
-    """편의시설을 수정합니다."""
+    """편의시설을 수정."""
     facility = await session.get(Facility, facility_id)
     if facility is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="편의시설을 찾을 수 없습니다."
         )
 
+    # exclude_unset=True: 프론트가 그 필드를 요청에 넣었는지 안 넣었는지만 체크
     update_data = body.model_dump(exclude_unset=True, exclude={"course_ids"})
     for required_field in _REQUIRED_FIELDS:
         if required_field in update_data and update_data[required_field] is None:
@@ -134,7 +134,10 @@ async def update_facility(
     if "kakao_place_id" in update_data:
         facility.place_url = _build_place_url(facility.kakao_place_id)
 
-    # course_ids는 exclude_unset이 아니라 None(변경 없음) vs []( 전체 해제)로 직접 분기
+    # course_ids는 exclude_unset로 처리하면 안되어서 직접 처리
+    # 프론트가 course_ids 필드 아예 안 넣으면: None ㅡ 코스연결 건들지마라
+    # 프론트가 "course_ids": [] 보내면 body도 [] ㅡ 이 시설 코스연결 전부 해제
+    # 프론트가 "course_ids": [1, 2] 보내면 ㅡ 코스 1,2로 연결 다시 세팅
     if body.course_ids is not None:
         course_ids = list(dict.fromkeys(body.course_ids))
         await _validate_course_ids(session, course_ids)
@@ -151,7 +154,7 @@ async def update_facility(
 
 
 async def delete_facility(session: AsyncSession, facility_id: int) -> None:
-    """편의시설을 비활성화합니다 (Soft Delete)."""
+    """편의시설을 비활성화 (Soft Delete: is_active=False)."""
     facility = await session.get(Facility, facility_id)
     if facility is None:
         raise HTTPException(

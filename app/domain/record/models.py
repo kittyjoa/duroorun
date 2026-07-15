@@ -34,6 +34,7 @@ class Record(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     paused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    total_paused_seconds: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
 
     # 필요 시 해제 확인필요해서 일단 주석 남겨뒀어욤— record.user.nickname 같은 직접 접근 가능
     # user: Mapped["User"] = relationship("User")

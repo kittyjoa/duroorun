@@ -30,8 +30,18 @@ class RecordResponse(BaseModel):
     duration_seconds: int | None
     started_at: datetime
     ended_at: datetime | None
+    paused_at: datetime | None
     created_at: datetime
     pace: float | None
     is_completed: bool
+
+
+class RecordListResponse(BaseModel):
+    """러닝기록 목록 조회 응답"""
+
+    items: list[RecordResponse]
+    total: int
+    page: int
+    size: int
 
 

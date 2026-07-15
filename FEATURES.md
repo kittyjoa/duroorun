@@ -117,12 +117,16 @@
 | 기록 종료 | 종료 버튼 누르면 `ended_at` + 유저 GPS 종료 좌표 기록. `duration_seconds`, `pace`, `is_completed` 자동 계산 |
 | 기록 조회 | 내 러닝 기록 목록 조회 (최신순, offset 페이지네이션 `?page=1&size=20`). 같은 코스 여러 번 달린 히스토리 모두 표시 |
 | 기록 삭제 | 본인만 삭제 가능 |
+| 기록 일시정지 | 러닝 중 일시정지. `paused_at` 기록 |
+| 기록 재시작 | 일시정지 해제, `paused_at` NULL로 초기화 |
 | 완주 인증 | GPS 검증 통과 시 `is_completed = true` 자동 처리. 완주 시 해당 코스 리뷰 작성 가능 |
 | 페이스 자동 계산 | 평균 페이스 = `duration_seconds / 코스거리(km)` (초/km). 종료 시 자동 계산하여 저장 |
 
 **비즈니스 로직**
 - 시작 버튼 → `started_at` + `user_start_lat/lng` 기록
 - 종료 버튼 → `ended_at` + `user_end_lat/lng` 기록 → `duration_seconds`, `pace`, `is_completed` 자동 계산
+- 일시정지 버튼 → `paused_at` 현재 시각 기록. 이미 일시정지 중이면 400에러
+- 재시작 버튼 → `paused_at` NULL로 초기화. 이미 일시정지 상태가 아니면 400에러 
 - **완주 인증 (GPS 검증)**: 유저 좌표와 코스 시작/종료점(`courses.start_lat/lng`, `end_lat/lng`)을 하버사인 공식으로 비교
   - 허용 반경: 기본 **300m** (`config` 상수, 코스 담당이 조정 가능)
   - **정방향**: 유저 시작 ≈ 코스 시작 AND 유저 종료 ≈ 코스 종료

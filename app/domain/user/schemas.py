@@ -9,3 +9,9 @@ class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     is_new_user: bool
+
+
+class MessageResponse(BaseModel):
+    """단순 메시지 응답."""
+
+    message: str

@@ -90,7 +90,8 @@ async def pause_record(
         record_id: int,
 ) -> RecordResponse:
     """러닝 일시정지"""
-    record = await session.get(Record, record_id)
+    result = await session.execute(select(Record).where(Record.record_id == record_id).with_for_update())
+    record = result.scalar_one_or_none()
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="기록을 찾을 수 없습니다.")
     if record.user_id != user_id:
@@ -111,7 +112,8 @@ async def resume_record(
         record_id: int,
 ) -> RecordResponse:
     """러닝 재시작"""
-    record = await session.get(Record, record_id)
+    result = await session.execute(select(Record).where(Record.record_id == record_id).with_for_update())
+    record = result.scalar_one_or_none()
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="기록을 찾을 수 없습니다.")
     if record.user_id != user_id:

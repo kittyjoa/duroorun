@@ -7,7 +7,12 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.record.models import Record
-from app.domain.record.schemas import RecordEndRequest, RecordListResponse, RecordResponse, RecordStartRequest
+from app.domain.record.schemas import (
+    RecordEndRequest,
+    RecordListResponse,
+    RecordResponse,
+    RecordStartRequest,
+)
 
 # from app.domain.course.models import Course # TODO: course 완성 후 주석해제 예정
 
@@ -39,7 +44,9 @@ async def end_record(
 ) -> RecordResponse:
     """러닝종료 - 기록 업데이트 및 완주인증"""
     # 기록조회
-    result = await session.execute(select(Record).where(Record.record_id == record_id).with_for_update())
+    result = await session.execute(
+        select(Record).where(Record.record_id == record_id).with_for_update()
+    )
     record = result.scalar_one_or_none()
     # 권한검증
     if record is None:
@@ -54,7 +61,9 @@ async def end_record(
     if record.paused_at is not None: # 일시정지 중 종료
         record.total_paused_seconds += int((record.ended_at - record.paused_at).total_seconds())
         record.paused_at = None
-    record.duration_seconds = int((record.ended_at - record.started_at).total_seconds()) - record.total_paused_seconds
+    record.duration_seconds = (
+        int((record.ended_at - record.started_at).total_seconds()) - record.total_paused_seconds
+    )
     # 시간검증
     if record.duration_seconds < 60:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="러닝시간이 너무 짧아 기록되지 않았습니다.")
@@ -90,7 +99,9 @@ async def pause_record(
         record_id: int,
 ) -> RecordResponse:
     """러닝 일시정지"""
-    result = await session.execute(select(Record).where(Record.record_id == record_id).with_for_update())
+    result = await session.execute(
+        select(Record).where(Record.record_id == record_id).with_for_update()
+    )
     record = result.scalar_one_or_none()
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="기록을 찾을 수 없습니다.")
@@ -112,7 +123,9 @@ async def resume_record(
         record_id: int,
 ) -> RecordResponse:
     """러닝 재시작"""
-    result = await session.execute(select(Record).where(Record.record_id == record_id).with_for_update())
+    result = await session.execute(
+        select(Record).where(Record.record_id == record_id).with_for_update()
+    )
     record = result.scalar_one_or_none()
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="기록을 찾을 수 없습니다.")
@@ -136,7 +149,9 @@ async def delete_record(
         record_id: int,
 ) -> None:
     """러닝기록 삭제"""
-    result = await session.execute(select(Record).where(Record.record_id == record_id).with_for_update())
+    result = await session.execute(
+        select(Record).where(Record.record_id == record_id).with_for_update()
+    )
     record = result.scalar_one_or_none()
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="기록을 찾을 수 없습니다.")
@@ -180,5 +195,10 @@ async def get_records(
         .limit(size)
     )
     records = result.scalars().all()
-    return RecordListResponse(items=[RecordResponse.model_validate(r) for r in records], total=total, page=page, size=size)
+    return RecordListResponse(
+        items=[RecordResponse.model_validate(r) for r in records],
+        total=total,
+        page=page,
+        size=size,
+    )
 

@@ -39,7 +39,9 @@ class RecordResponse(BaseModel):
 class RecordListResponse(BaseModel):
     """러닝기록 목록 조회 응답"""
 
-    total: int
     items: list[RecordResponse]
+    total: int
+    page: int
+    size: int
 
 

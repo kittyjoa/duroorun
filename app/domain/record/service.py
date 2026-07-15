@@ -180,5 +180,5 @@ async def get_records(
         .limit(size)
     )
     records = result.scalars().all()
-    return RecordListResponse(total=total, items=[RecordResponse.model_validate(r) for r in records])
+    return RecordListResponse(items=[RecordResponse.model_validate(r) for r in records], total=total, page=page, size=size)
 

@@ -1,6 +1,6 @@
 """회원/인증 - API 엔드포인트 (APIRouter)."""
 
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Cookie, Depends, File, HTTPException, Response, UploadFile, status
 from fastapi.responses import RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials
 from redis.asyncio import Redis
@@ -10,12 +10,13 @@ from app.config import settings
 from app.core.security import bearer_scheme, get_current_user
 from app.database import get_db
 from app.domain.user.models import User
-from app.domain.user.schemas import MessageResponse, TokenResponse
+from app.domain.user.schemas import MessageResponse, ProfileImageResponse, TokenResponse
 from app.domain.user.service import (
     get_kakao_auth_url,
     kakao_login,
     logout,
     refresh_tokens,
+    upload_profile_image,
     withdraw_user,
 )
 from app.redis import get_redis
@@ -96,6 +97,17 @@ async def logout_endpoint(
     response.delete_cookie(key="refresh_token", path=_REFRESH_COOKIE_PATH)
 
     return MessageResponse(message="로그아웃 되었습니다")
+
+
+@router.post("/users/me/image", response_model=ProfileImageResponse, summary="프로필 이미지 업로드")
+async def upload_my_image(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> ProfileImageResponse:
+    """프로필 이미지를 R2에 업로드하고 URL을 저장합니다."""
+    url = await upload_profile_image(user, file, db)
+    return ProfileImageResponse(profile_image_url=url)
 
 
 @router.delete("/users/me", response_model=MessageResponse, summary="회원 탈퇴")

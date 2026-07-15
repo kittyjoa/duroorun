@@ -63,6 +63,7 @@ class Settings(BaseSettings):
     COURSE_IMAGE_MAX_SIZE_MB: int = 5
     REVIEW_IMAGE_MAX_COUNT: int = 5
     REVIEW_IMAGE_MAX_SIZE_MB: int = 2
+    PROFILE_IMAGE_MAX_SIZE_MB: int = 2
 
     @property
     def is_production(self) -> bool:

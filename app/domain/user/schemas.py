@@ -15,3 +15,9 @@ class MessageResponse(BaseModel):
     """단순 메시지 응답."""
 
     message: str
+
+
+class ProfileImageResponse(BaseModel):
+    """프로필 이미지 업로드 응답."""
+
+    profile_image_url: str

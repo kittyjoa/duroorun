@@ -80,7 +80,7 @@
 |------|------|
 | 코스 목록 조회 | 필터/검색 적용하여 DRNB 코스 목록 조회 |
 | 코스 상세 조회 | 코스 상세정보 조회. 두루누비 API 실시간 호출 (Redis 캐싱) |
-| 코스 필터 | 루트/구간(`brdDiv`), 지역(`sigun`), 난이도(`crsLevel`), 소요시간(`crsTotlRqrmHour`) |
+| 코스 필터 | 루트/구간(`brd_div`), 지역(`sigun`), 난이도(`difficulty`), 소요시간(`estimated_time`) |
 | 편의시설 표시 | 코스 주변 편의시설 지도에 표시 (`course_facility`) |
 
 **두루누비 API 연동**

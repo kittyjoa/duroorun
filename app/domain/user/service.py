@@ -14,11 +14,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.core.security import (
-    _decode,
-    _decode_unverified_exp,
     add_to_blacklist,
     create_access_token,
     create_refresh_token,
+    decode_token,
+    decode_token_ignore_exp,
     delete_refresh_token,
     save_refresh_jti,
     verify_and_rotate_refresh,
@@ -164,7 +164,7 @@ async def kakao_login(
 
 async def refresh_tokens(refresh_token: str, redis: Redis) -> tuple[str, str]:
     """Refresh Token을 검증하고 새 Access Token + Refresh Token을 발급합니다."""
-    payload = _decode(refresh_token)
+    payload = decode_token(refresh_token)
 
     if payload.get("type") != "refresh":
         raise HTTPException(
@@ -197,7 +197,7 @@ async def refresh_tokens(refresh_token: str, redis: Redis) -> tuple[str, str]:
 async def logout(access_token: str, redis: Redis) -> None:
     """Access Token을 블랙리스트에 등록하고 Refresh Token을 삭제합니다."""
     # 만료 토큰도 서명 검증 후 user_id 추출 — 쿠키 경로와 무관하게 항상 세션 삭제 보장
-    payload = _decode_unverified_exp(access_token)
+    payload = decode_token_ignore_exp(access_token)
     user_id = int(payload["sub"])
     jti = payload.get("jti")
 
@@ -233,7 +233,7 @@ async def withdraw_user(user: User, access_token: str, db: AsyncSession, redis: 
 
     # Redis 정리 실패해도 DB 탈퇴는 완료 — get_current_user가 deleted_at으로 차단하므로 정상 응답
     try:
-        payload = _decode(access_token)
+        payload = decode_token(access_token)
         jti = payload.get("jti")
         if jti:
             await add_to_blacklist(jti, redis)

@@ -44,7 +44,7 @@ def create_refresh_token(user_id: int) -> tuple[str, str]:
     return token, jti
 
 
-def _decode(token: str) -> dict:
+def decode_token(token: str) -> dict:
     """JWT를 디코딩하고 payload를 반환합니다."""
     try:
         return jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
@@ -60,7 +60,7 @@ def _decode(token: str) -> dict:
         ) from None
 
 
-def _decode_unverified_exp(token: str) -> dict:
+def decode_token_ignore_exp(token: str) -> dict:
     """만료 여부와 무관하게 JWT payload를 반환합니다 (로그아웃 전용)."""
     try:
         return jwt.decode(
@@ -125,7 +125,7 @@ async def get_current_user(
     redis: Redis = Depends(get_redis),
 ) -> User:
     """Authorization 헤더의 Access Token을 검증하고 활성 유저를 반환합니다."""
-    payload = _decode(credentials.credentials)
+    payload = decode_token(credentials.credentials)
 
     if payload.get("type") != "access":
         raise HTTPException(

@@ -22,6 +22,8 @@ from app.redis import get_redis
 
 router = APIRouter(tags=["auth"])
 
+_REFRESH_COOKIE_PATH = "/api/v1/auth/refresh"
+
 
 @router.get("/auth/kakao", summary="카카오 로그인 페이지로 리다이렉트")
 async def kakao_auth(redis: Redis = Depends(get_redis)) -> RedirectResponse:
@@ -48,7 +50,7 @@ async def kakao_callback(
         secure=settings.is_production,
         samesite="none" if settings.is_production else "lax",
         max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400,
-        path="/api/v1/auth/refresh",
+        path=_REFRESH_COOKIE_PATH,
     )
 
     return TokenResponse(access_token=access_token, is_new_user=is_new_user)
@@ -76,7 +78,7 @@ async def token_refresh(
         secure=settings.is_production,
         samesite="none" if settings.is_production else "lax",
         max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400,
-        path="/api/v1/auth/refresh",
+        path=_REFRESH_COOKIE_PATH,
     )
 
     return TokenResponse(access_token=new_access_token, is_new_user=False)
@@ -91,7 +93,7 @@ async def logout_endpoint(
     """Access Token을 무효화하고 Refresh Token을 삭제합니다."""
     await logout(credentials.credentials, redis)
 
-    response.delete_cookie(key="refresh_token", path="/api/v1/auth/refresh")
+    response.delete_cookie(key="refresh_token", path=_REFRESH_COOKIE_PATH)
 
     return MessageResponse(message="로그아웃 되었습니다")
 
@@ -107,6 +109,6 @@ async def withdraw(
     """개인정보를 익명화하고 소셜 계정을 삭제합니다."""
     await withdraw_user(user, credentials.credentials, db, redis)
 
-    response.delete_cookie(key="refresh_token", path="/api/v1/auth/refresh")
+    response.delete_cookie(key="refresh_token", path=_REFRESH_COOKIE_PATH)
 
     return MessageResponse(message="회원 탈퇴가 완료되었습니다")

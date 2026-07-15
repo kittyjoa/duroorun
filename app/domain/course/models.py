@@ -45,6 +45,9 @@ class Course(Base):
     sigun: Mapped[str | None] = mapped_column(String, nullable=True)
     brd_div: Mapped[str | None] = mapped_column(String, nullable=True)
     # 완주 인증 검증 기준점 — 런타임에 두루누비 API 미호출하고 DB 값만 사용
+    # TODO: seed_courses.py가 항상 값을 채운다는 전제. record의 완주 인증(두 좌표 사이 거리)이
+    # 이 컬럼을 기준점으로 쓰므로, None 케이스 처리 정책을 record PR과 맞춘 뒤
+    # 여기 nullable=True를 유지할지 재검토
     start_lat: Mapped[float | None] = mapped_column(Float, nullable=True)
     start_lng: Mapped[float | None] = mapped_column(Float, nullable=True)
     end_lat: Mapped[float | None] = mapped_column(Float, nullable=True)

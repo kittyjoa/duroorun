@@ -44,7 +44,7 @@ class CourseCreateRequest(BaseModel):
     estimated_time: int = Field(gt=0)
     course_description: str | None = None
     # 시작/종료 좌표(start_lat/lng, end_lat/lng)는 service.py에서 첫/마지막 경유지로 자동 저장
-    # max_length=500: 대량 좌표 전송으로 인한 벌크 INSERT/응답 payload 비대화 방지
+    # max_length=500: 대량 좌표 전송 방지
     waypoints: list[CourseWaypointCreate] = Field(min_length=2, max_length=500)
 
 

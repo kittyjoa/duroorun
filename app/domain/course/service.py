@@ -17,12 +17,12 @@ from app.domain.course.schemas import (
 
 # TODO DRNB 목록/조회 함수 작성 시: 쿼리에 WHERE course_type == CourseType.DRNB 필터 반드시 포함할 것.
 
-# Course 컬럼은 nullable=True지만 생성 시 필수값이라, 수정 시에도 명시적 null을 허용하면 안 되는 필드
+# Course 컬럼은 nullable=True지만 생성시 필수값이라, 수정 시 null 허용하면 X
 _REQUIRED_FIELDS = ("distance", "difficulty", "estimated_time")
 
 
 def _build_waypoints(waypoints: list[CourseWaypointCreate]) -> list[CourseWaypoint]:
-    """요청 좌표 리스트를 sequence가 매겨진 CourseWaypoint 목록으로 변환합니다."""
+    """요청 좌표 리스트를 sequence(순서 번호)가 매겨진 CourseWaypoint 목록으로 변환."""
     return [
         CourseWaypoint(sequence=i, latitude=w.latitude, longitude=w.longitude)
         for i, w in enumerate(waypoints)
@@ -34,7 +34,7 @@ async def _get_custom_course(
 ) -> Course:
     """CUSTOM 코스를 경유지/이미지까지 eager load해서 조회합니다. 없으면 404.
 
-    for_update=True면 courses 행에 락을 걸어, 동시 수정/삭제 요청 간 lost update를 방지합니다.
+    ㅡ for_update=True면 courses 행에 락을 걸어, 동시 수정/삭제 요청 꼬이는거 방지
     """
     query = (
         select(Course)
@@ -42,7 +42,9 @@ async def _get_custom_course(
         .options(selectinload(Course.waypoints), selectinload(Course.images))
     )
     if for_update:
+    # for_update 스위치로 수정/삭제할때만 True (같은 코스 건드리는 다른 요청 끼어들지 못하게)
         query = query.with_for_update()
+        # with_for_update: 이 행을 읽으면서 동시에 잠그고, 내가 끝날때까지 기다리셈
     result = await session.execute(query)
     course = result.scalar_one_or_none()
     if course is None or not course.is_active:
@@ -135,12 +137,11 @@ async def update_course(
     for field, value in update_data.items():
         setattr(course, field, value)
 
+    # 경유지를 바꾼 경우(waypoints가 None이 아닌 경우)
     if body.waypoints is not None:
-        # 기존 행 삭제(cascade="all, delete-orphan")와 새 행 삽입이 한 flush에서 같이 나가면
-        # sequence 값이 겹칠 때 INSERT가 DELETE보다 먼저 실행되어 uq_waypoint_course_sequence
-        # 유니크 제약 위반이 남 (실제로 테스트하다 발견) — 빈 리스트로 먼저 flush해 삭제부터 확정시킴
         course.waypoints = []
         await session.flush()
+        # 다 지운걸 반영(flush)시키고 새로 채워넣기
         course.waypoints = _build_waypoints(body.waypoints)
         course.start_lat = body.waypoints[0].latitude
         course.start_lng = body.waypoints[0].longitude

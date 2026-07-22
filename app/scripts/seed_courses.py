@@ -1,6 +1,186 @@
 """두루누비 코스 시드 스크립트 (GPX 파싱하여 시작/종료 좌표 저장)."""
-# GPX 파싱해서 시작/종료 좌표 뽑는 로직 + DB 삽입 로직 (durunubi.py 참고할것)
-# TODO: start_lat/lng, end_lat/lng는 record 완주 인증(두 좌표 사이 거리)의 기준점 (courses/schemas.py 참고).
-# gpxpath 파싱 실패/누락 시에도 이 컬럼들이 None으로 남지 않도록 처리 — 실패 케이스를 로깅하고
-# 재처리 대상으로 남기거나, 최소한 어떤 코스가 좌표 없이 시드됐는지 알 수 있게 할 것.
-# 필드명은 Hour지만 실제 단위는 분 -> 이거 코스 소요시간 말하는건가
+# mvp 단계: 강원도 중심 해파랑길 코스만 필터 걸어서 가져옴
+# 추후 v2 고도화된다면: 두루누비 전체 코스 가져와서 활용하는 서비스
+# 강원도 지역만/ 해파랑길 코스 29~50만 넣어야함 - 수정필요
+
+import asyncio
+import logging
+import selectors
+import sys
+
+import gpxpy
+import httpx
+from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.clients.durunubi import DurunubiAPIError, fetch_course_list
+from app.database import AsyncSessionLocal
+from app.domain.course.models import Course, CourseType, Difficulty
+
+# Course의 관계/FK가 참조하는 다른 도메인 모델들 — 직접 안 써도 import해야
+# SQLAlchemy가 courses.created_by(→users), course_facility(→facilities) 매핑을 해석할 수 있음
+from app.domain.facility import models as _facility_models  # noqa: F401
+from app.domain.user import models as _user_models  # noqa: F401
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logger = logging.getLogger(__name__)
+
+_PAGE_SIZE = 100
+_MAX_PAGES = 500  # 페이지네이션 응답이 이상해도 무한루프에 빠지지 않도록 상한
+_GPX_TIMEOUT = 10.0
+_TRAIL_NAME = "해파랑길"  # 두루누비 전체 코스 중 우리 서비스가 다루는 노선만 서버단에서 필터링
+
+_LEVEL_TO_DIFFICULTY = {"1": Difficulty.EASY, "2": Difficulty.NORMAL, "3": Difficulty.HARD}
+
+
+def _map_item(item: dict) -> dict:
+    """두루누비 API 응답 원본 dict -매핑-> courses 테이블 컬럼 dict"""
+    return {
+        "course_type": CourseType.DRNB,
+        "dmb_id": item["crsIdx"],
+        "course_name": item["crsKorNm"],
+        "distance": float(item["crsDstnc"]) if item.get("crsDstnc") else None,
+        "difficulty": _LEVEL_TO_DIFFICULTY.get(item.get("crsLevel")),
+        "estimated_time": int(item["crsTotlRqrmHour"]) if item.get("crsTotlRqrmHour") else None,
+        "course_description": item.get("crsContents") or None,
+        "sigun": item.get("sigun") or None,
+        "brd_div": item.get("brdDiv") or None,
+    }
+
+
+async def _upsert_courses(session: AsyncSession, items: list[dict]) -> None:
+    """한 페이지 분량의 코스를 dmb_id 기준으로 upsert(update + insert)."""
+    rows = []
+    for item in items:
+        try:
+            rows.append(_map_item(item))
+        except (KeyError, ValueError, TypeError):
+            logger.warning("코스 필드 매핑 실패, 스킵: crsIdx=%s", item.get("crsIdx"))
+    if not rows:
+        return
+
+    # dmb_id 중복 있으면 나중값 덮어쓴거 1개만 남기고 INSERT문에 넘기기
+    rows = list({row["dmb_id"]: row for row in rows}.values())
+
+    stmt = pg_insert(Course).values(rows)
+    update_cols = {
+        col: stmt.excluded[col]
+        for col in (
+            "course_name", "distance", "difficulty", "estimated_time",
+            "course_description", "sigun", "brd_div",
+        )
+    }
+    stmt = stmt.on_conflict_do_update(index_elements=["dmb_id"], set_=update_cols)
+    await session.execute(stmt)
+    await session.commit()
+
+
+async def _fetch_all_courses() -> tuple[list[dict], dict[str, str]]:
+    """두루누비파일 fetch_course_list를 페이지 끝까지 반복 호출,
+       ㅡ 전체 코스와 dmb_id -> gpxpath 매핑을 반환."""
+    all_items: list[dict] = []
+    gpx_urls: dict[str, str] = {}
+    page_no = 1
+    while page_no <= _MAX_PAGES:
+        items, total_count = await fetch_course_list(
+            page_no, num_of_rows=_PAGE_SIZE, crs_kor_nm=_TRAIL_NAME
+        )
+        if not items:
+            break
+        all_items.extend(items)
+        gpx_urls.update(
+            {item["crsIdx"]: item["gpxpath"] for item in items if item.get("gpxpath")}
+        )
+        logger.info("코스 목록 수집 %d/%d건", len(all_items), total_count)
+        if len(all_items) >= total_count:
+            break
+        page_no += 1
+    else:
+        logger.warning("페이지 상한(%d)에 도달해 목록 수집을 중단했습니다.", _MAX_PAGES)
+    return all_items, gpx_urls
+
+
+def _extract_start_end(gpx_text: str) -> tuple[float, float, float, float] | None:
+    """GPX 텍스트에서 첫/마지막 좌표를 추출. gpx가 track인지 route인지 아직 모름
+       ㅡ 제3의구조거나 아예 없으면 좌표 추출 다시 생각해봐야함"""
+    gpx = gpxpy.parse(gpx_text)
+    points = [pt for track in gpx.tracks for seg in track.segments for pt in seg.points]
+    if not points:
+        points = [pt for route in gpx.routes for pt in route.points]
+    if not points:
+        return None
+    first, last = points[0], points[-1]
+    return first.latitude, first.longitude, last.latitude, last.longitude
+
+
+async def _try_fetch_coords(
+    client: httpx.AsyncClient, gpx_url: str
+) -> tuple[float, float, float, float] | None:
+    """gpxpath를 다운로드·파싱해 좌표를 반환. 다운로드/파싱 어느 쪽이 실패해도 None."""
+    try:
+        res = await client.get(gpx_url)
+        res.raise_for_status()
+        return _extract_start_end(res.text)
+    except httpx.HTTPError:
+        return None
+    except Exception:  # noqa: BLE001 — GPX 포맷이 코스마다 달라 파싱실패원인 특정 어려움
+        return None
+
+
+async def _fill_missing_coordinates(session: AsyncSession, gpx_urls: dict[str, str]) -> None:
+    """좌표가 비어있는 DRNB 코스만 골라 gpxpath를 다운로드·파싱해서 채운다.
+       ㅡ 좌표 비어있는 경우: 이번 실행에서 새로 추가된 코스, 예전 실행때 gpx 관련 실패한 코스"""
+    result = await session.execute(
+        select(Course).where(
+            Course.course_type == CourseType.DRNB,
+            Course.dmb_id.in_(gpx_urls.keys()),
+            Course.start_lat.is_(None),
+        )
+    )
+    courses = result.scalars().all()
+    if not courses:
+        return
+
+    failed: list[str] = []
+    async with httpx.AsyncClient(timeout=_GPX_TIMEOUT) as client:
+        for course in courses:
+            gpx_url = gpx_urls.get(course.dmb_id)
+            coords = await _try_fetch_coords(client, gpx_url) if gpx_url else None
+            if coords is None:
+                failed.append(course.dmb_id)
+                continue
+            course.start_lat, course.start_lng, course.end_lat, course.end_lng = coords
+            await session.commit()
+
+    if failed:
+        logger.warning(
+            "좌표 추출 실패 코스 %d건 (완주 인증 기준점 없이 시드됨): %s", len(failed), failed
+        )
+
+
+async def seed_courses() -> None:
+    async with AsyncSessionLocal() as session:
+        try:
+            all_items, gpx_urls = await _fetch_all_courses()
+        except DurunubiAPIError as e:
+            logger.error("두루누비 API 호출 실패, 시드를 중단합니다: %s", e)
+            return
+
+        for i in range(0, len(all_items), _PAGE_SIZE):
+            await _upsert_courses(session, all_items[i : i + _PAGE_SIZE])
+        logger.info("코스 upsert 완료: %d건", len(all_items))
+
+        await _fill_missing_coordinates(session, gpx_urls)
+        logger.info("시드 완료")
+
+
+if __name__ == "__main__":
+    if sys.platform == "win32":
+        # psycopg(async)가 Windows 기본 이벤트 루프(ProactorEventLoop)를 지원하지 않음
+        asyncio.run(
+            seed_courses(),
+            loop_factory=lambda: asyncio.SelectorEventLoop(selectors.SelectSelector()),
+        )
+    else:
+        asyncio.run(seed_courses())

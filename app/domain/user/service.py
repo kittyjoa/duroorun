@@ -1,5 +1,6 @@
 """회원/인증 - 비즈니스 로직."""
 
+import re
 import secrets
 from datetime import UTC, datetime
 from urllib.parse import urlencode
@@ -38,6 +39,8 @@ _ALLOWED_IMAGE_TYPES = {
     "image/png": "png",
     "image/webp": "webp",
 }
+
+_NICKNAME_PATTERN = re.compile(r"^[가-힣a-zA-Z0-9]+$")
 
 
 async def get_kakao_auth_url(redis: Redis) -> str:
@@ -212,6 +215,45 @@ async def logout(access_token: str, redis: Redis) -> None:
     if jti:
         await add_to_blacklist(jti, redis)
     await delete_refresh_token(user_id, redis)
+
+
+async def update_profile(
+    user: User, nickname: str | None, location: str | None, db: AsyncSession
+) -> User:
+    """닉네임/거주지를 수정합니다. 최초 가입 완료와 마이페이지 수정 모두 이 함수로 처리합니다."""
+    if nickname is not None:
+        nickname = nickname.strip()
+        valid_length = settings.NICKNAME_MIN_LENGTH <= len(nickname) <= settings.NICKNAME_MAX_LENGTH
+        if not valid_length or not _NICKNAME_PATTERN.match(nickname):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"닉네임은 한글/영문/숫자 {settings.NICKNAME_MIN_LENGTH}"
+                    f"~{settings.NICKNAME_MAX_LENGTH}자로 입력해주세요"
+                ),
+            )
+        user.nickname = nickname
+
+    if location is not None:
+        location = location.strip()
+        if not location or len(location) > settings.LOCATION_MAX_LENGTH:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"거주지는 1~{settings.LOCATION_MAX_LENGTH}자로 입력해주세요",
+            )
+        user.location = location
+
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="이미 사용 중인 닉네임입니다",
+        ) from None
+
+    await db.refresh(user)
+    return user
 
 
 async def upload_profile_image(user: User, file: UploadFile, db: AsyncSession) -> str:

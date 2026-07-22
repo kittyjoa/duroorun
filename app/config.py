@@ -1,4 +1,3 @@
-from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -64,6 +63,11 @@ class Settings(BaseSettings):
     REVIEW_IMAGE_MAX_COUNT: int = 5
     REVIEW_IMAGE_MAX_SIZE_MB: int = 2
     PROFILE_IMAGE_MAX_SIZE_MB: int = 2
+
+    # 프로필 입력 정책
+    NICKNAME_MIN_LENGTH: int = 2
+    NICKNAME_MAX_LENGTH: int = 10
+    LOCATION_MAX_LENGTH: int = 50
 
     @property
     def is_production(self) -> bool:

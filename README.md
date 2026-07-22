@@ -144,15 +144,17 @@ cp .env.example .env
 python -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
 pip install -r requirements.txt
-uvicorn app.main:app --reload
+uvicorn app.main:app --reload --loop none
 ```
 
 ### 2-B. uv로 실행
 
 ```bash
 uv sync
-uv run uvicorn app.main:app --reload
+uv run uvicorn app.main:app --reload --loop none
 ```
+
+> `--loop none`: uvicorn이 Windows에서 기본으로 강제하는 ProactorEventLoop가 psycopg async 드라이버와 호환되지 않아 추가. `app/main.py`에서 설정한 이벤트 루프 정책을 그대로 쓰게 함 (Mac/Linux는 영향 없음)
 
 ### 2-C. Docker로 실행
 

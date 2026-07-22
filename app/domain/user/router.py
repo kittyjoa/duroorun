@@ -10,12 +10,19 @@ from app.config import settings
 from app.core.security import bearer_scheme, get_current_user
 from app.database import get_db
 from app.domain.user.models import User
-from app.domain.user.schemas import MessageResponse, ProfileImageResponse, TokenResponse
+from app.domain.user.schemas import (
+    MessageResponse,
+    ProfileImageResponse,
+    TokenResponse,
+    UserProfileUpdate,
+    UserResponse,
+)
 from app.domain.user.service import (
     get_kakao_auth_url,
     kakao_login,
     logout,
     refresh_tokens,
+    update_profile,
     upload_profile_image,
     withdraw_user,
 )
@@ -97,6 +104,23 @@ async def logout_endpoint(
     response.delete_cookie(key="refresh_token", path=_REFRESH_COOKIE_PATH)
 
     return MessageResponse(message="로그아웃 되었습니다")
+
+
+@router.get("/users/me", response_model=UserResponse, summary="내 정보 조회")
+async def get_my_profile(user: User = Depends(get_current_user)) -> UserResponse:
+    """내 정보를 조회합니다."""
+    return UserResponse.model_validate(user)
+
+
+@router.patch("/users/me", response_model=UserResponse, summary="내 정보 수정")
+async def update_my_profile(
+    body: UserProfileUpdate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> UserResponse:
+    """닉네임/거주지를 수정합니다. 최초 가입 완료 시에도 이 엔드포인트를 사용합니다."""
+    updated = await update_profile(user, body.nickname, body.location, db)
+    return UserResponse.model_validate(updated)
 
 
 @router.post("/users/me/image", response_model=ProfileImageResponse, summary="프로필 이미지 업로드")

@@ -4,8 +4,10 @@ from datetime import UTC, datetime
 
 from fastapi import HTTPException, UploadFile, status
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domain.course.models import Course
 from app.domain.review.models import Review
 from app.domain.review.schemas import (
     ReviewCreateRequest,
@@ -23,6 +25,11 @@ async def create_review(
         body: ReviewCreateRequest,
 ) -> ReviewResponse:
     """리뷰 작성"""
+    # 코스 존재 확인
+    course = await session.get(Course, course_id)
+    if course is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="코스를 찾을 수 없습니다.")
+
     # 완주 인증 확인 - TODO: record 연동 후 활성화 예정
     # record = await session.execute(
     #     select(Record).where(
@@ -45,8 +52,12 @@ async def create_review(
         content=body.content,
         difficulty=body.difficulty,
     )
-    session.add(review)
-    await session.commit()
+    try:
+        session.add(review)
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="이미 해당 코스에 리뷰를 작성했습니다.")
     await session.refresh(review)
     return ReviewResponse.model_validate(review)
 
@@ -58,7 +69,10 @@ async def update_review(
         body: ReviewUpdateRequest,
 ) -> ReviewResponse:
     """리뷰 수정"""
-    review = await session.get(Review, review_id)
+    result = await session.execute(
+        select(Review).where(Review.review_id == review_id).with_for_update()
+    )
+    review = result.scalar_one_or_none()
     if review is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="리뷰를 찾을 수 없습니다.")
     if review.user_id != user_id:
@@ -82,7 +96,10 @@ async def delete_review(
         user_role: UserRole,
 ) -> None:
     """리뷰 삭제 (본인 또는 관리자)"""
-    review = await session.get(Review, review_id)
+    result = await session.execute(
+        select(Review).where(Review.review_id == review_id).with_for_update()
+    )
+    review = result.scalar_one_or_none()
     if review is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="리뷰를 찾을 수 없습니다.")
     if review.user_id != user_id and user_role != UserRole.ADMIN:
@@ -97,18 +114,15 @@ async def get_reviews(
         page: int,
         size: int,
 ) -> ReviewListResponse:
-    """코스 리뷰 목록 조회 (탈퇴 유저 제외, 최신순으로 조회)"""
+    """코스 리뷰 목록 조회 (탈퇴 유저 포함, 최신순으로 조회)"""
     offset = (page - 1) * size
     total_result = await session.execute(
-        select(func.count()).select_from(Review).where(
-            Review.course_id == course_id,
-            Review.user_id.is_not(None),
-        )
+        select(func.count()).select_from(Review).where(Review.course_id == course_id)
     )
     total = total_result.scalar_one()
     result = await session.execute(
         select(Review)
-        .where(Review.course_id == course_id, Review.user_id.is_not(None))
+        .where(Review.course_id == course_id)
         .order_by(Review.created_at.desc())
         .offset(offset)
         .limit(size)

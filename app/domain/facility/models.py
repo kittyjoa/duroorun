@@ -39,6 +39,11 @@ class Facility(Base):
     course_facilities: Mapped[list["CourseFacility"]] = relationship(
         back_populates="facility",
     )
+# 1. place_url은 kakao_place_id만 있으면 항상 계산 가능한 값
+# 지금 당장 버그를 일으키는 것은 아니지만, place_url 컬럼을 없애고
+# 응답 조립 시점(FacilityResponse 생성 시)이나 모델의 @property로 계산하는게 좋음
+# 2. (kakao_place_id, facility_type) 복합 unique 추가
+# 단순 유니크보다 이렇게 추가하면, 같은 장소 같은 편의시설 중복 방지 가능
 
 
 class CourseFacility(Base):

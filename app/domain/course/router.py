@@ -35,7 +35,7 @@ async def create_course(
 async def get_custom_courses(
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
-    created_by: int | None = None,
+    created_by: int | None = Query(default=None, ge=1),
     session: AsyncSession = Depends(get_db),
 ):
     """커스텀 코스 목록 조회 (전체 공개. created_by 전달 시 해당 작성자 코스만 조회)"""

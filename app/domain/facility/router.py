@@ -31,7 +31,7 @@ async def create_facility(
 async def get_facilities(
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
-    course_id: int | None = None,
+    course_id: int | None = Query(default=None, ge=1),
     session: AsyncSession = Depends(get_db),
 ):
     """편의시설 목록 조회 (course_id 전달 → 해당 코스 주변 시설만 조회)"""

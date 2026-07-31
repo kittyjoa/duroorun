@@ -18,7 +18,7 @@ from app.domain.course.schemas import (
 # TODO DRNB 목록/조회 함수 작성 시: 쿼리에 WHERE course_type == CourseType.DRNB 필터 반드시 포함할 것.
 
 # Course 컬럼은 nullable=True지만 생성시 필수값이라, 수정 시 null 허용하면 X
-_REQUIRED_FIELDS = ("distance", "difficulty", "estimated_time")
+_REQUIRED_FIELDS = ("course_name", "distance", "difficulty", "estimated_time")
 
 
 def _build_waypoints(waypoints: list[CourseWaypointCreate]) -> list[CourseWaypoint]:
@@ -101,7 +101,9 @@ async def get_custom_courses(
     ).scalar_one()
 
     list_query = (
-        base_query.order_by(Course.created_at.desc()).offset((page - 1) * size).limit(size)
+        base_query.order_by(Course.created_at.desc(), Course.course_id.desc())
+        .offset((page - 1) * size)
+        .limit(size)
     )
     courses = (await session.execute(list_query)).scalars().all()
 
@@ -137,8 +139,13 @@ async def update_course(
     for field, value in update_data.items():
         setattr(course, field, value)
 
-    # 경유지를 바꾼 경우(waypoints가 None이 아닌 경우)
-    if body.waypoints is not None:
+    # waypoints 필드가 요청에 아예 없으면 기존 경유지 유지, null이면 400
+    if "waypoints" in body.model_fields_set:
+        if body.waypoints is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="waypoints는 null일 수 없습니다.",
+            )
         course.waypoints = []
         await session.flush()
         # 다 지운걸 반영(flush)시키고 새로 채워넣기

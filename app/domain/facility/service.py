@@ -1,8 +1,9 @@
 """편의시설 - 비즈니스 로직."""
 
 from fastapi import HTTPException, status
-from sqlalchemy import delete, func, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.domain.course.models import Course
 from app.domain.facility.models import CourseFacility, Facility
@@ -15,8 +16,8 @@ from app.domain.facility.schemas import (
 
 _KAKAO_PLACE_URL_TEMPLATE = "https://place.map.kakao.com/{}"
 
-# Facility 컬럼이 nullable=False라 부분 수정 시에도 명시적 null을 허용하면 안 되는 필드
-_REQUIRED_FIELDS = ("latitude", "longitude", "is_active")
+# Facility 컬럼이 nullable=False라 부분 수정 시에도 null 허용 X
+_REQUIRED_FIELDS = ("facility_type", "facility_name", "latitude", "longitude", "is_active")
 
 
 def _build_place_url(kakao_place_id: str | None) -> str | None:
@@ -33,7 +34,9 @@ async def _validate_course_ids(session: AsyncSession, course_ids: list[int]) -> 
     if not course_ids:
         return
     result = await session.execute(
-        select(Course.course_id).where(Course.course_id.in_(course_ids))
+        select(Course.course_id).where(
+            Course.course_id.in_(course_ids), Course.is_active.is_(True)
+        )
     )
     found_ids = set(result.scalars().all())
     missing_ids = set(course_ids) - found_ids
@@ -42,6 +45,27 @@ async def _validate_course_ids(session: AsyncSession, course_ids: list[int]) -> 
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"존재하지 않는 코스입니다: {sorted(missing_ids)}",
         )
+
+
+async def _get_facility_for_update(session: AsyncSession, facility_id: int) -> Facility:
+    """편의시설을 course_facilities까지 로드하고 행 잠금을 건 상태로 조회. 없으면 404.
+
+    ㅡ selectinload: course_facilities 연결테이블 처음부터 같이 로드해두기
+    with_for_update: 동시 수정하는 상황에서, A가 끝내고 커밋할때까지 행 잠금.
+    """
+    query = (
+        select(Facility)
+        .where(Facility.facility_id == facility_id)
+        .options(selectinload(Facility.course_facilities))
+        .with_for_update()
+    )
+    result = await session.execute(query)
+    facility = result.scalar_one_or_none()
+    if facility is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="편의시설을 찾을 수 없습니다."
+        )
+    return facility
 
 
 async def create_facility(session: AsyncSession, body: FacilityCreateRequest) -> FacilityResponse:
@@ -115,11 +139,7 @@ async def update_facility(
     body: FacilityUpdateRequest,
 ) -> FacilityResponse:
     """편의시설을 수정."""
-    facility = await session.get(Facility, facility_id)
-    if facility is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="편의시설을 찾을 수 없습니다."
-        )
+    facility = await _get_facility_for_update(session, facility_id)
 
     # exclude_unset=True: 프론트가 그 필드를 요청에 넣었는지 안 넣었는지만 체크
     update_data = body.model_dump(exclude_unset=True, exclude={"course_ids"})
@@ -141,12 +161,11 @@ async def update_facility(
     if body.course_ids is not None:
         course_ids = list(dict.fromkeys(body.course_ids))
         await _validate_course_ids(session, course_ids)
-        await session.execute(
-            delete(CourseFacility).where(CourseFacility.facility_id == facility_id)
-        )
-        facility.course_facilities = [
+        facility.course_facilities.clear()
+        await session.flush()
+        facility.course_facilities.extend(
             CourseFacility(course_id=course_id) for course_id in course_ids
-        ]
+        )
 
     await session.commit()
     await session.refresh(facility)

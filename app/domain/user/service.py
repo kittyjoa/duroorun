@@ -43,6 +43,17 @@ _ALLOWED_IMAGE_TYPES = {
 _NICKNAME_PATTERN = re.compile(r"^[가-힣a-zA-Z0-9]+$")
 
 
+def _has_valid_image_signature(content_type: str, file_bytes: bytes) -> bool:
+    """Content-Type 헤더는 위조 가능하므로 실제 파일 시그니처(매직넘버)로 재검증합니다."""
+    if content_type == "image/jpeg":
+        return file_bytes.startswith(b"\xff\xd8\xff")
+    if content_type == "image/png":
+        return file_bytes.startswith(b"\x89PNG\r\n\x1a\n")
+    if content_type == "image/webp":
+        return file_bytes[:4] == b"RIFF" and file_bytes[8:12] == b"WEBP"
+    return False
+
+
 async def get_kakao_auth_url(redis: Redis) -> str:
     """카카오 OAuth 인증 URL을 생성하고 state를 Redis에 저장합니다."""
     state = secrets.token_urlsafe(32)
@@ -264,12 +275,19 @@ async def upload_profile_image(user: User, file: UploadFile, db: AsyncSession) -
             detail="지원하지 않는 이미지 형식입니다 (jpg, png, webp만 가능)",
         )
 
-    file_bytes = await file.read()
     max_mb = settings.PROFILE_IMAGE_MAX_SIZE_MB
-    if len(file_bytes) > max_mb * 1024 * 1024:
+    max_bytes = max_mb * 1024 * 1024
+    file_bytes = await file.read(max_bytes + 1)
+    if len(file_bytes) > max_bytes:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"이미지 크기는 최대 {max_mb}MB까지 업로드 가능합니다",
+        )
+
+    if not _has_valid_image_signature(file.content_type, file_bytes):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="파일 내용이 올바른 이미지 형식이 아닙니다",
         )
 
     extension = _ALLOWED_IMAGE_TYPES[file.content_type]
@@ -294,7 +312,10 @@ async def upload_profile_image(user: User, file: UploadFile, db: AsyncSession) -
             await delete_file(new_url)
         except ClientError:
             pass
-        raise
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="이미지 저장에 실패했습니다. 잠시 후 다시 시도해주세요",
+        ) from None
 
     # 새 이미지 저장 확정 후에만 기존 이미지 삭제 — 실패해도 응답엔 영향 없음(고아 파일로만 남음)
     if old_url:

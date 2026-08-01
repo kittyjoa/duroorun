@@ -1,7 +1,6 @@
 """두루누비 코스 시드 스크립트 (GPX 파싱하여 시작/종료 좌표 저장)."""
 # mvp 단계: 강원도 중심 해파랑길 코스만 필터 걸어서 가져옴
 # 추후 v2 고도화된다면: 두루누비 전체 코스 가져와서 활용하는 서비스
-# 강원도 지역만/ 해파랑길 코스 29~50만 넣어야함 - 수정필요
 
 import asyncio
 import logging
@@ -30,8 +29,15 @@ _PAGE_SIZE = 100
 _MAX_PAGES = 500  # 페이지네이션 응답이 이상해도 무한루프에 빠지지 않도록 상한
 _GPX_TIMEOUT = 10.0
 _TRAIL_NAME = "해파랑길"  # 두루누비 전체 코스 중 우리 서비스가 다루는 노선만 서버단에서 필터링
+# 두루누비 API에 지역 파라미터가 없어 sigun 필터 사용
+_TARGET_REGION = "강원"
 
 _LEVEL_TO_DIFFICULTY = {"1": Difficulty.EASY, "2": Difficulty.NORMAL, "3": Difficulty.HARD}
+
+
+def _is_target_region(item: dict) -> bool:
+    """API 응답 item이 강원도 코스인지 확인 (sigun 필드 접두어 기준)."""
+    return (item.get("sigun") or "").startswith(_TARGET_REGION)
 
 
 def _map_item(item: dict) -> dict:
@@ -78,22 +84,28 @@ async def _upsert_courses(session: AsyncSession, items: list[dict]) -> None:
 
 async def _fetch_all_courses() -> tuple[list[dict], dict[str, str]]:
     """두루누비파일 fetch_course_list를 페이지 끝까지 반복 호출,
-       ㅡ 전체 코스와 dmb_id -> gpxpath 매핑을 반환."""
+       ㅡ 강원도 코스만 걸러서 전체 코스와 dmb_id -> gpxpath 매핑을 반환.
+    total_count는 crs_kor_nm 필터 기준(전체 해파랑길) 전체 개수라, 강원 필터링 후 개수와는 별도로 추적."""
     all_items: list[dict] = []
     gpx_urls: dict[str, str] = {}
     page_no = 1
+    fetched_count = 0
     while page_no <= _MAX_PAGES:
         items, total_count = await fetch_course_list(
             page_no, num_of_rows=_PAGE_SIZE, crs_kor_nm=_TRAIL_NAME
         )
         if not items:
             break
+        fetched_count += len(items)
+        items = [item for item in items if _is_target_region(item)]
         all_items.extend(items)
         gpx_urls.update(
             {item["crsIdx"]: item["gpxpath"] for item in items if item.get("gpxpath")}
         )
-        logger.info("코스 목록 수집 %d/%d건", len(all_items), total_count)
-        if len(all_items) >= total_count:
+        logger.info(
+            "코스 목록 수집 %d/%d건 (강원 %d건)", fetched_count, total_count, len(all_items)
+        )
+        if fetched_count >= total_count:
             break
         page_no += 1
     else:

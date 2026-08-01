@@ -79,15 +79,14 @@
 | 기능 | 설명 |
 |------|------|
 | 코스 목록 조회 | 필터/검색 적용하여 DRNB 코스 목록 조회 |
-| 코스 상세 조회 | 코스 상세정보 조회. 두루누비 API 실시간 호출 (Redis 캐싱) |
+| 코스 상세 조회 | 코스 상세정보 조회. 시드 스크립트로 저장된 DB 정보만 사용 (배치 갱신) |
 | 코스 필터 | 루트/구간(`brd_div`), 지역(`sigun`), 난이도(`difficulty`), 소요시간(`estimated_time`) |
 | 편의시설 표시 | 코스 주변 편의시설 지도에 표시 (`course_facility`) |
 
 **두루누비 API 연동**
-- 코스 상세정보(GPX 좌표, 거리, 난이도, 설명 등)는 `dmb_id`로 두루누비 API 실시간 호출
-- Redis TTL 24시간 캐싱. 캐시 미스 시에만 실제 API 호출
-- 캐시 키: `durunubi:course:{dmb_id}`
-- 코스 목록의 식별 정보(`course_id`, `dmb_id`, `course_name`, `difficulty`, `estimated_time`, `sigun`, `brd_div`)는 우리 DB에 저장 (시드 스크립트로 최초 1회 등록). 모든 필터는 DB 값 기준으로 적용
+- 코스 목록/상세에 필요한 정보(`course_name`, `difficulty`, `estimated_time`, `sigun`, `brd_div`, GPX 좌표, 거리, 설명)를 시드 스크립트가 배치로 조회해 DB에 저장. 요청 시점에 두루누비 API를 실시간 호출하지 않음 (API 장애와 무관하게 조회 동작 보장)
+- 데이터 최신화 주기 = 시드 스크립트 재실행 주기
+- 모든 필터는 DB 값 기준으로 적용
 
 #### 3-2. 커스텀 코스
 

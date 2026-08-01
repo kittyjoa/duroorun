@@ -5,7 +5,7 @@
 - **ORM**: SQLAlchemy 2.x (asyncio / Mapped 스타일)
 - **드라이버**: psycopg3 (`psycopg[binary]`) — Alembic async 마이그레이션 호환성으로 선택
 - **마이그레이션**: Alembic
-- **캐시**: Redis (두루누비 API 응답 캐싱)
+- **캐시/세션**: Redis (Refresh Token, 로그아웃 블랙리스트, OAuth state)
 
 ---
 
@@ -34,30 +34,22 @@ alembic upgrade head  # 로컬 반영
 
 | 서비스 | 용도 | 비고 |
 |--------|------|------|
-| 두루누비 API (공공데이터포털) | DRNB 코스 상세정보 (GPX 좌표, 거리, 난이도 등) 실시간 조회 | `dmb_id`로 호출 |
+| 두루누비 API (공공데이터포털) | DRNB 코스 목록/상세정보 (GPX 좌표, 거리, 난이도 등) 배치 조회 | 시드 스크립트가 `crsKorNm`/`sigun` 필터로 호출, DB에 저장 |
 | 카카오맵 API | 편의시설 지도 표시, 장소 상세정보 연동 | `kakao_place_id`로 연동 |
 | 소셜 로그인 (Google / Kakao / Naver) | OAuth 2.0 인증 | `social_accounts` 테이블 |
 | Cloudflare R2 | 이미지 파일 저장 (리뷰 이미지 / 프로필 이미지 / 코스 이미지) | 확정 |
 | Gemini API (Google) | AI 리뷰 요약 생성 | 모델: Gemini 2.5 Flash-Lite (개발 시작 시 최신 모델명 재확인) |
 
-> **두루누비 코스 저장 전략**
-> - DRNB 코스는 `courses` 테이블에 `course_id`, `dmb_id`, `course_name`, `difficulty`, `estimated_time`, `sigun`, `brd_div` 저장 (최초 1회 시드 스크립트로 등록)
-> - GPX 좌표, 거리, 코스 설명 등 **상세정보는 `dmb_id`로 두루누비 API 실시간 호출**
+> **두루누비 코스 저장 전략 (배치 갱신)**
+> - DRNB 코스는 `courses` 테이블에 `course_id`, `dmb_id`, `course_name`, `difficulty`, `estimated_time`, `sigun`, `brd_div`, `distance`, `course_description`, `start_lat/lng`, `end_lat/lng`까지 시드 스크립트가 전부 저장
+> - 요청 시점에는 DB만 읽고 두루누비 API를 호출하지 않음 (외부 API 장애와 무관하게 조회 동작 보장 — 완주 인증 기준점과 동일한 원칙)
+> - 데이터 최신화는 시드 스크립트 재실행 주기를 따름
 > - 유저 커스텀 코스는 처음부터 우리 DB에 전체 저장
 
-> **Redis 캐싱 정책**
-> - 두루누비 API 응답은 Redis에 캐싱하여 불필요한 외부 API 호출 최소화
-> - TTL: 24시간 (코스 정보는 자주 바뀌지 않으므로 길게 설정. 추후 일주일로 조정 가능)
-> - 캐시 미스(Redis에 없음) 시에만 두루누비 API 실제 호출 → 결과를 Redis에 저장 후 응답
-> - 캐시 키 형식: `durunubi:course:{dmb_id}`
-> - **캐시 스탬피드 방지**: 캐시 미스 시 Redis Lock을 걸어 최초 1개 요청만 외부 API 호출. 나머지 요청은 Lock 해제 후 캐시에서 읽도록 처리 (인기 코스 동시 접근 시 외부 API 과부하 방지)
-> - JWT 로그아웃 블랙리스트 용도로도 사용
-
-> **Redis 키 정책 (인증/캐싱 통합)**
+> **Redis 키 정책 (인증 전용)**
 >
 > | 키 형식 | 용도 | TTL |
 > |---------|------|-----|
-> | `durunubi:course:{dmb_id}` | 두루누비 API 응답 캐싱 | 24시간 |
 > | `refresh:{user_id}` | Refresh Token 식별자(jti) 저장. 유저당 1개만 보관(방식 B). 재발급 시 덮어써서 토큰 로테이션 | 14일 |
 > | `blacklist:{access_jti}` | 로그아웃/탈퇴된 Access Token 무효화 | 해당 토큰 잔여 만료시간 |
 > | `oauth:state:{state}` | 소셜 로그인 OAuth state 검증값 (CSRF 방지) | 5분 |

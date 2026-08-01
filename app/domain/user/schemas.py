@@ -23,8 +23,15 @@ class ProfileImageResponse(BaseModel):
     profile_image_url: str
 
 
+class UserOnboardingRequest(BaseModel):
+    """최초 가입 완료 요청. 닉네임/거주지 둘 다 필수."""
+
+    nickname: str
+    location: str
+
+
 class UserProfileUpdate(BaseModel):
-    """내 정보 수정 요청. 최초 가입 완료 시에도 동일하게 사용."""
+    """내 정보 수정 요청 (마이페이지). 보낸 필드만 갱신, 나머지는 유지."""
 
     nickname: str | None = None
     location: str | None = None

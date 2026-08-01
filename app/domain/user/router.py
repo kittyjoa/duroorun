@@ -14,6 +14,7 @@ from app.domain.user.schemas import (
     MessageResponse,
     ProfileImageResponse,
     TokenResponse,
+    UserOnboardingRequest,
     UserProfileUpdate,
     UserResponse,
 )
@@ -112,13 +113,24 @@ async def get_my_profile(user: User = Depends(get_current_user)) -> UserResponse
     return UserResponse.model_validate(user)
 
 
+@router.put("/users/me", response_model=UserResponse, summary="최초 가입 완료")
+async def complete_onboarding(
+    body: UserOnboardingRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> UserResponse:
+    """카카오 로그인 최초 가입 시 닉네임/거주지를 필수로 입력받습니다."""
+    updated = await update_profile(user, body.nickname, body.location, db)
+    return UserResponse.model_validate(updated)
+
+
 @router.patch("/users/me", response_model=UserResponse, summary="내 정보 수정")
 async def update_my_profile(
     body: UserProfileUpdate,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> UserResponse:
-    """닉네임/거주지를 수정합니다. 최초 가입 완료 시에도 이 엔드포인트를 사용합니다."""
+    """마이페이지에서 닉네임/거주지를 수정합니다."""
     updated = await update_profile(user, body.nickname, body.location, db)
     return UserResponse.model_validate(updated)
 

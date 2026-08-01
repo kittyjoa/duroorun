@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from urllib.parse import urlencode
 
 import httpx
-from botocore.exceptions import ClientError
+from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import HTTPException, UploadFile, status
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
@@ -273,9 +273,15 @@ async def upload_profile_image(user: User, file: UploadFile, db: AsyncSession) -
         )
 
     extension = _ALLOWED_IMAGE_TYPES[file.content_type]
-    new_url = await upload_file(
-        f"profile/{user.user_id}", file_bytes, extension, file.content_type
-    )
+    try:
+        new_url = await upload_file(
+            f"profile/{user.user_id}", file_bytes, extension, file.content_type
+        )
+    except (ClientError, BotoCoreError):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="이미지 업로드에 실패했습니다. 잠시 후 다시 시도해주세요",
+        ) from None
 
     old_url = user.profile_image_url
     user.profile_image_url = new_url

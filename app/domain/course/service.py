@@ -68,7 +68,9 @@ async def get_drnb_course(session: AsyncSession, course_id: int) -> DrnbCourseDe
     )
     course = result.scalar_one_or_none()
     if course is None or not course.is_active:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="코스를 찾을 수 없습니다.")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="코스를 찾을 수 없습니다."
+        )
     return DrnbCourseDetailResponse.model_validate(course)
 
 
@@ -91,7 +93,9 @@ async def _get_custom_course(
     result = await session.execute(query)
     course = result.scalar_one_or_none()
     if course is None or not course.is_active:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="코스를 찾을 수 없습니다.")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="코스를 찾을 수 없습니다."
+        )
     return course
 
 

@@ -115,7 +115,8 @@ async def _deactivate_missing_courses(session: AsyncSession, seen_dmb_ids: set[s
 async def _fetch_all_courses() -> tuple[list[dict], dict[str, str]]:
     """두루누비파일 fetch_course_list를 페이지 끝까지 반복 호출,
        ㅡ 강원도 코스만 걸러서 전체 코스와 dmb_id -> gpxpath 매핑을 반환.
-    total_count는 crs_kor_nm 필터 기준(전체 해파랑길) 전체 개수라, 강원 필터링 후 개수와는 별도로 추적."""
+    total_count는 crs_kor_nm 필터 기준(전체 해파랑길) 전체 개수라,
+    강원 필터링 후 개수와는 별도로 추적."""
     all_items: list[dict] = []
     gpx_urls: dict[str, str] = {}
     page_no = 1

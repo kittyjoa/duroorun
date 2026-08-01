@@ -1,5 +1,6 @@
 """리뷰 + 이미지 - 비즈니스 로직."""
 
+import asyncio
 import contextlib
 import uuid
 from datetime import UTC, datetime
@@ -160,8 +161,19 @@ async def delete_review(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="본인의 리뷰만 삭제할 수 있습니다."
         )
+    keys = [
+        image.image_url.removeprefix(f"{settings.R2_PUBLIC_URL.rstrip('/')}/")
+        for image in review.images
+    ]
     await session.delete(review)
     await session.commit()
+
+    # R2 정리는 best-effort: DB 삭제는 이미 끝났으므로 실패해도 무시 (고아 파일 방지 목적)
+    for key in keys:
+        with contextlib.suppress(ClientError, BotoCoreError):
+            await asyncio.to_thread(
+                _get_r2_client().delete_object, Bucket=settings.R2_BUCKET_NAME, Key=key
+            )
 
 
 async def get_reviews(
@@ -249,7 +261,8 @@ async def upload_review_image(
     ext = _IMAGE_EXTENSIONS[detected_content_type]
     key = f"review-images/{uuid.uuid4()}.{ext}"
     try:
-        _get_r2_client().put_object(
+        await asyncio.to_thread(
+            _get_r2_client().put_object,
             Bucket=settings.R2_BUCKET_NAME,
             Key=key,
             Body=contents,
@@ -270,7 +283,9 @@ async def upload_review_image(
         await session.commit()
     except Exception:
         with contextlib.suppress(ClientError, BotoCoreError):
-            _get_r2_client().delete_object(Bucket=settings.R2_BUCKET_NAME, Key=key)
+            await asyncio.to_thread(
+                _get_r2_client().delete_object, Bucket=settings.R2_BUCKET_NAME, Key=key
+            )
         raise
 
     # 이미지 포함 응답 반환
@@ -314,7 +329,9 @@ async def delete_review_image(
     # R2에서 삭제
     key = image.image_url.removeprefix(f"{settings.R2_PUBLIC_URL.rstrip('/')}/")
     try:
-        _get_r2_client().delete_object(Bucket=settings.R2_BUCKET_NAME, Key=key)
+        await asyncio.to_thread(
+            _get_r2_client().delete_object, Bucket=settings.R2_BUCKET_NAME, Key=key
+        )
     except (ClientError, BotoCoreError) as err:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

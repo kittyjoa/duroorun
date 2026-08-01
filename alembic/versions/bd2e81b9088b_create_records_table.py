@@ -1,4 +1,4 @@
-"""add_total_paused_seconds_to_records
+"""create_records_table
 
 Revision ID: bd2e81b9088b
 Revises: 2be3528c4397

@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.course.models import Course
@@ -43,8 +44,14 @@ async def start_record(
         user_start_lat=body.user_start_lat,
         user_start_lng=body.user_start_lng,
     )
-    session.add(record)
-    await session.commit()
+    try:
+        session.add(record)
+        await session.commit()
+    except IntegrityError as err:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="이미 진행 중인 기록이 있습니다."
+        ) from err
     await session.refresh(record)
     return RecordResponse.model_validate(record)
 

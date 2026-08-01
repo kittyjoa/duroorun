@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -41,3 +41,13 @@ class Record(Base):
     # 필요 시 해제 확인필요해서 일단 주석 남겨뒀어욤— record.user.nickname 같은 직접 접근 가능
     # user: Mapped["User"] = relationship("User")
     # course: Mapped["Course"] = relationship("Course")
+
+    # 유저당 진행 중(ended_at IS NULL)인 기록은 최대 1개만 허용 (동시 시작 레이스 방지)
+    __table_args__ = (
+        Index(
+            "uq_records_active_user",
+            "user_id",
+            unique=True,
+            postgresql_where=text("ended_at IS NULL"),
+        ),
+    )

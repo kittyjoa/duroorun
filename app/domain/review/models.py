@@ -4,7 +4,7 @@ from datetime import datetime
 
 from sqlalchemy import DateTime, ForeignKey, Integer, Text, UniqueConstraint, func
 from sqlalchemy import Enum as SAEnum
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
 from app.domain.course.models import Difficulty
@@ -31,6 +31,13 @@ class Review(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    images: Mapped[list["ReviewImage"]] = relationship(
+        "ReviewImage",
+        cascade="all, delete-orphan",
+        order_by="ReviewImage.created_at",
+        lazy="selectin",
+    )
 
     # 같은 코스에 리뷰 1개만 작성가능
     __table_args__ = (UniqueConstraint("course_id", "user_id", name="uq_reviews_course_user"),)

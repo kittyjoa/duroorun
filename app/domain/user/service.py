@@ -41,6 +41,7 @@ _ALLOWED_IMAGE_TYPES = {
 }
 
 _NICKNAME_PATTERN = re.compile(r"^[가-힣a-zA-Z0-9]+$")
+_LOCATION_PATTERN = re.compile(r"^[가-힣a-zA-Z0-9\s]+$")
 
 
 def _has_valid_image_signature(content_type: str, file_bytes: bytes) -> bool:
@@ -247,10 +248,11 @@ async def update_profile(
 
     if location is not None:
         location = location.strip()
-        if not location or len(location) > settings.LOCATION_MAX_LENGTH:
+        valid_length = 1 <= len(location) <= settings.LOCATION_MAX_LENGTH
+        if not valid_length or not _LOCATION_PATTERN.match(location):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"거주지는 1~{settings.LOCATION_MAX_LENGTH}자로 입력해주세요",
+                detail=f"거주지는 한글/영문/숫자 1~{settings.LOCATION_MAX_LENGTH}자로 입력해주세요",
             )
         user.location = location
 
@@ -313,7 +315,7 @@ async def upload_profile_image(user: User, file: UploadFile, db: AsyncSession) -
         except ClientError:
             pass
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="이미지 저장에 실패했습니다. 잠시 후 다시 시도해주세요",
         ) from None
 

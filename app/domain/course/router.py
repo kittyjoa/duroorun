@@ -11,10 +11,28 @@ from app.domain.course.schemas import (
     CourseUpdateRequest,
     CustomCourseDetailResponse,
     CustomCourseListResponse,
+    DrnbCourseDetailResponse,
+    DrnbCourseListResponse,
 )
 from app.domain.user.models import User
 
 router = APIRouter(prefix="/courses", tags=["courses"])
+
+
+@router.get("/drnb", response_model=DrnbCourseListResponse)
+async def get_drnb_courses(
+    page: int = Query(1, ge=1),
+    size: int = Query(20, ge=1, le=100),
+    session: AsyncSession = Depends(get_db),
+):
+    """DRNB(두루누비) 코스 목록 조회"""
+    return await course_service.get_drnb_courses(session=session, page=page, size=size)
+
+
+@router.get("/drnb/{course_id}", response_model=DrnbCourseDetailResponse)
+async def get_drnb_course(course_id: int, session: AsyncSession = Depends(get_db)):
+    """DRNB(두루누비) 코스 상세 조회"""
+    return await course_service.get_drnb_course(session=session, course_id=course_id)
 
 
 @router.post(

@@ -13,9 +13,10 @@ from app.domain.course.schemas import (
     CustomCourseDetailResponse,
     CustomCourseListResponse,
     CustomCourseSummary,
+    DrnbCourseDetailResponse,
+    DrnbCourseListResponse,
+    DrnbCourseSummary,
 )
-
-# TODO DRNB 목록/조회 함수 작성 시: 쿼리에 WHERE course_type == CourseType.DRNB 필터 반드시 포함할 것.
 
 # Course 컬럼은 nullable=True지만 생성시 필수값이라, 수정 시 null 허용하면 X
 _REQUIRED_FIELDS = ("course_name", "distance", "difficulty", "estimated_time")
@@ -27,6 +28,41 @@ def _build_waypoints(waypoints: list[CourseWaypointCreate]) -> list[CourseWaypoi
         CourseWaypoint(sequence=i, latitude=w.latitude, longitude=w.longitude)
         for i, w in enumerate(waypoints)
     ]
+
+
+async def get_drnb_courses(session: AsyncSession, page: int, size: int) -> DrnbCourseListResponse:
+    """DRNB 코스 목록을 조회합니다. 시드 스크립트로 저장된 DB 정보만 사용 (배치 갱신)."""
+    base_query = select(Course).where(
+        Course.course_type == CourseType.DRNB, Course.is_active.is_(True)
+    )
+
+    total = (
+        await session.execute(select(func.count()).select_from(base_query.subquery()))
+    ).scalar_one()
+
+    list_query = base_query.order_by(Course.course_id).offset((page - 1) * size).limit(size)
+    courses = (await session.execute(list_query)).scalars().all()
+
+    return DrnbCourseListResponse(
+        items=[DrnbCourseSummary.model_validate(c) for c in courses],
+        total=total,
+        page=page,
+        size=size,
+    )
+
+
+async def get_drnb_course(session: AsyncSession, course_id: int) -> DrnbCourseDetailResponse:
+    """DRNB 코스 상세를 조회합니다. 시드 스크립트로 저장된 DB 정보만 사용 (배치 갱신)."""
+    result = await session.execute(
+        select(Course).where(
+            Course.course_id == course_id,
+            Course.course_type == CourseType.DRNB,
+        )
+    )
+    course = result.scalar_one_or_none()
+    if course is None or not course.is_active:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="코스를 찾을 수 없습니다.")
+    return DrnbCourseDetailResponse.model_validate(course)
 
 
 async def _get_custom_course(

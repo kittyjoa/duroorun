@@ -62,7 +62,7 @@ class CourseUpdateRequest(BaseModel):
 
 
 class DrnbCourseSummary(BaseModel):
-    """DRNB 코스 목록 요소 - 시드에 등록된 DB 정보만 (상세정보는 API 실시간 조회)"""
+    """DRNB 코스 목록 요소 - 시드 스크립트로 등록된 DB 정보만 사용"""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -85,10 +85,10 @@ class DrnbCourseListResponse(BaseModel):
 
 
 class DrnbCourseDetailResponse(BaseModel):
-    """DRNB 코스 상세 조회 시 응답 - DB 저장 정보 + 두루누비 API 실시간 조회 결과"""
+    """DRNB 코스 상세 조회 시 응답 - 시드 스크립트로 저장된 DB 정보만 사용 (배치 갱신)"""
 
-    # from_attributes 미사용: DB 조회 결과 + API 응답을 service.py에서 직접 합쳐 kwargs로 생성
-    # TODO: service.py에서 이 kwargs 조립 완료되면, 필드 누락을 잡아낼 조립 테스트 추가
+    model_config = ConfigDict(from_attributes=True)
+
     course_id: int
     dmb_id: str
     course_name: str
@@ -96,11 +96,9 @@ class DrnbCourseDetailResponse(BaseModel):
     estimated_time: int | None
     sigun: str | None
     brd_div: str | None
-    # 아래 두 필드는 두루누비 API 실시간 응답값 (durunubi.py 클라이언트가 채움)
     distance: float | None
     course_description: str | None
-    # 아래 네 필드는 시드 스크립트가 gpxpath를 파싱해 DB에 저장해둔 값
-    # (완주 인증 검증 기준점이므로 API 장애와 무관하게 조회 가능해야 함)
+    # 완주 인증 검증 기준점 — 시드 스크립트가 gpxpath를 파싱해 저장
     # TODO(record PR #7 연동): None 허용이 record의 두 좌표 사이 거리 검증과 맞물림.
     # seed_courses.py가 항상 non-null로 채운다는 전제인데, 시드 실패/누락 시
     # record 쪽에서 None을 어떻게 처리할지(검증 실패 vs 예외) 유선님과 confirm 필요.

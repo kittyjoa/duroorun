@@ -31,9 +31,15 @@ def _build_waypoints(waypoints: list[CourseWaypointCreate]) -> list[CourseWaypoi
 
 
 async def get_drnb_courses(session: AsyncSession, page: int, size: int) -> DrnbCourseListResponse:
-    """DRNB 코스 목록을 조회합니다. 시드 스크립트로 저장된 DB 정보만 사용 (배치 갱신)."""
+    """DRNB 코스 목록을 조회합니다. 시드 스크립트로 저장된 DB 정보만 사용 (배치 갱신).
+
+    ㅡ 현재 시드 스크립트가 강원 코스만 적재하므로 DB엔 강원 코스만 존재.
+    추후 다른 지역까지 시드 대상이 넓어지면 이 쿼리에 sigun 필터 추가 필요.
+    """
     base_query = select(Course).where(
-        Course.course_type == CourseType.DRNB, Course.is_active.is_(True)
+        Course.course_type == CourseType.DRNB,
+        Course.is_active.is_(True),
+        Course.dmb_id.is_not(None),  # 두루누비 응답엔 dmb_id 항상 존재한다는 약속 지킬수있음
     )
 
     total = (
@@ -57,6 +63,7 @@ async def get_drnb_course(session: AsyncSession, course_id: int) -> DrnbCourseDe
         select(Course).where(
             Course.course_id == course_id,
             Course.course_type == CourseType.DRNB,
+            Course.dmb_id.is_not(None),
         )
     )
     course = result.scalar_one_or_none()

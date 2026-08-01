@@ -77,9 +77,39 @@ async def _upsert_courses(session: AsyncSession, items: list[dict]) -> None:
             "course_description", "sigun", "brd_div",
         )
     }
+    # 이번에 API 응답에 다시 나타난 코스는 재활성화 (예전에 비활성화됐던 경우 대비)
+    update_cols["is_active"] = True
     stmt = stmt.on_conflict_do_update(index_elements=["dmb_id"], set_=update_cols)
     await session.execute(stmt)
     await session.commit()
+
+
+async def _deactivate_missing_courses(session: AsyncSession, seen_dmb_ids: set[str]) -> None:
+    """이번 실행에서 API 응답에 없었던 기존 DRNB 코스를 비활성화.
+
+    ㅡ 두루누비 목록에서 실제로 빠진 코스(폐쇄/통합 등)가 계속 활성 상태로 남는 것 방지.
+    seen_dmb_ids가 비어있으면(이번 실행에서 아무것도 못 받음) 스킵 —
+    일시적 API 이상으로 전체 코스가 비활성화되는 것 방지.
+    """
+    if not seen_dmb_ids:
+        return
+    result = await session.execute(
+        select(Course).where(
+            Course.course_type == CourseType.DRNB,
+            Course.is_active.is_(True),
+            Course.dmb_id.is_not(None),
+            Course.dmb_id.not_in(seen_dmb_ids),
+        )
+    )
+    missing = result.scalars().all()
+    if not missing:
+        return
+    for course in missing:
+        course.is_active = False
+    await session.commit()
+    logger.warning(
+        "API 응답에서 빠진 코스 %d건 비활성화: %s", len(missing), [c.dmb_id for c in missing]
+    )
 
 
 async def _fetch_all_courses() -> tuple[list[dict], dict[str, str]]:
@@ -182,6 +212,9 @@ async def seed_courses() -> None:
         for i in range(0, len(all_items), _PAGE_SIZE):
             await _upsert_courses(session, all_items[i : i + _PAGE_SIZE])
         logger.info("코스 upsert 완료: %d건", len(all_items))
+
+        seen_dmb_ids = {item["crsIdx"] for item in all_items}
+        await _deactivate_missing_courses(session, seen_dmb_ids)
 
         await _fill_missing_coordinates(session, gpx_urls)
         logger.info("시드 완료")

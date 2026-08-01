@@ -134,7 +134,7 @@
   - 검증 기준점은 DB에 저장된 좌표만 사용 (런타임에 두루누비 API 미호출 → API 장애와 무관하게 완주 검증 동작)
 - **GPS 권한 필수**: 위치 권한 거부 시 러닝 기록 시작 불가 (회원 전부 해당). 완주 검증이 GPS 기반이므로 좌표 없이는 시작 자체를 막음
 - **시간 가드**: `duration_seconds` 60초 미만은 완주 미처리(하한), 24시간 초과는 비정상 기록으로 400 Bad Request(상한, 종료 깜빡 방어)
-- 거리는 DRNB 코스는 두루누비 API, CUSTOM 코스는 `courses.distance`(km) 사용
+- 거리는 DRNB/CUSTOM 모두 `courses.distance`(km) 사용 (DRNB도 시드 스크립트가 저장)
 - `is_completed = true`인 기록이 있는 유저만 해당 코스 리뷰 작성 가능
 - DRNB 코스와 커스텀 코스 모두 기록 가능
 - 같은 코스 기록은 횟수 제한 없이 누적 가능 (리뷰 1개 제한과 별개). 마이페이지에서 히스토리로 조회
@@ -231,12 +231,12 @@
 
 | 서비스 | 용도 |
 |--------|------|
-| 두루누비 API (공공데이터포털) | DRNB 코스 상세정보 실시간 조회 (`dmb_id`로 호출) |
+| 두루누비 API (공공데이터포털) | DRNB 코스 목록/상세정보 배치 조회 (시드 스크립트가 적재, 요청 시점 실시간 호출 없음) |
 | 카카오맵 API | 편의시설 지도 표시, 코스 경로 표시, 장소 상세정보 연동 |
 | Google / Kakao / Naver OAuth | 소셜 로그인 |
 | Cloudflare R2 | 프로필 이미지, 리뷰 이미지, 커스텀 코스 이미지 저장 |
 | Gemini API (Google) | AI 리뷰 요약 생성 (리뷰 3개 이상 코스) |
-| Redis | 두루누비 API 응답 캐싱 (TTL 24시간), Access Token 블랙리스트, Refresh Token 저장, OAuth state 저장 |
+| Redis | Access Token 블랙리스트, Refresh Token 저장, OAuth state 저장 |
 
 ---
 

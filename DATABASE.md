@@ -121,10 +121,10 @@ alembic upgrade head  # 로컬 반영
 | dmb_id | VARCHAR nullable | 두루누비 코스 ID. DRNB 코스면 채움, CUSTOM이면 NULL |
 | course_name | VARCHAR | 코스 이름 |
 | created_by | FK → users nullable | 커스텀 코스 생성 유저. DRNB 코스면 NULL |
-| distance | FLOAT nullable | 거리 (**km 단위**). CUSTOM 코스만 저장. DRNB는 API 실시간 조회 |
+| distance | FLOAT nullable | 거리 (**km 단위**). DRNB/CUSTOM 모두 저장 (DRNB는 시드 스크립트가 배치 등록) |
 | difficulty | ENUM nullable | 난이도 (`EASY` / `NORMAL` / `HARD`). DRNB는 시드 스크립트 등록 시 저장. CUSTOM은 유저 입력값 저장 |
 | estimated_time | INT nullable | 예상 소요시간 (분). DRNB는 시드 스크립트 등록 시 저장. CUSTOM은 유저 입력값 저장 |
-| course_description | TEXT nullable | 코스 설명. CUSTOM 코스만 저장 |
+| course_description | TEXT nullable | 코스 설명. DRNB/CUSTOM 모두 저장 (DRNB는 시드 스크립트가 배치 등록) |
 | sigun | VARCHAR nullable | 지역 (시/군). DRNB 코스만 저장 |
 | brd_div | VARCHAR nullable | 루트/구간 (예: 해파랑길 1구간). DRNB 코스만 저장 |
 | start_lat | FLOAT nullable | 시작 지점 위도 |
@@ -135,7 +135,7 @@ alembic upgrade head  # 로컬 반영
 | created_at | TIMESTAMP | 등록일 |
 | updated_at | TIMESTAMP nullable | 수정일 |
 
-> DRNB 코스의 GPX 좌표, 거리, 상세 설명은 `dmb_id`로 두루누비 API 실시간 조회. 난이도/소요시간/지역/구간은 시드 스크립트 등록 시 DB에 저장  
+> DRNB 코스의 GPX 좌표(시작/종료점), 거리, 상세 설명, 난이도/소요시간/지역/구간 전부 시드 스크립트 등록 시 DB에 저장. 요청 시점에 두루누비 API 실시간 호출 없음  
 > CUSTOM 코스의 경유지 좌표는 `course_waypoints` 테이블에 저장  
 > `start_lat/lng`, `end_lat/lng`는 DRNB도 저장 (지도 표시 최적화 + **완주 인증 검증 기준점**). **두루누비 API 응답에는 시작/종료 좌표 필드가 없으므로, 시드 스크립트가 `gpxpath`(GPX xml URL)를 다운로드·파싱하여 첫 포인트=시작점, 마지막 포인트=종료점을 추출해 저장.** CUSTOM 코스는 `course_waypoints` 첫/마지막 sequence 기준 자동 저장  
 > 완주 인증 검증은 런타임에 두루누비 API를 호출하지 않고 **DB에 저장된 `start_lat/lng`, `end_lat/lng`만 사용** (외부 API 장애와 무관하게 검증 동작 보장)  
@@ -152,7 +152,7 @@ alembic upgrade head  # 로컬 반영
 | latitude | FLOAT | 위도 |
 | longitude | FLOAT | 경도 |
 
-> CUSTOM 코스 전용. DRNB 코스의 GPX는 두루누비 API에서 실시간 조회  
+> CUSTOM 코스 전용. DRNB 코스는 시작/종료 좌표만 `courses.start_lat/lng`, `end_lat/lng`에 저장 (경유지 전체 트랙은 저장하지 않음)  
 > UNIQUE INDEX on (course_id, sequence) — 같은 코스 내 순서 중복 방지  
 > 지도에서 순서대로 연결하면 실제 경로가 그려짐
 
@@ -179,7 +179,7 @@ alembic upgrade head  # 로컬 반영
 > **완주 인증 (GPS 검증)**: 코스의 `start_lat/lng`, `end_lat/lng`와 유저 좌표를 하버사인(Haversine) 공식으로 비교. 허용 반경 내(기본 300m, `config` 상수로 코스 담당이 조정 가능)에 들어왔는지 확인. 정방향(유저 시작≈코스 시작 AND 유저 종료≈코스 종료) 또는 역방향(유저 시작≈코스 종료 AND 유저 종료≈코스 시작) 모두 완주 인정 (해안 트레일은 양방향 주행이 흔함)  
 > **시간 가드**: `duration_seconds` 60초 미만은 완주 미처리(하한), 24시간 초과는 비정상 기록으로 400 처리(상한, 종료 깜빡 방어)  
 > **GPS 권한 필수**: 위치 권한 거부 시 러닝 기록 시작 불가 (완주 검증이 GPS 기반이므로). 시작이 됐다는 것은 GPS 좌표가 확보됐음을 보장  
-> 거리는 DRNB 코스는 두루누비 API, CUSTOM 코스는 `courses.distance`(km)에서 가져옴. `actual_distance` 컬럼 없음. `pace` 계산 시 거리가 0이면 서비스 레이어에서 방어  
+> 거리는 DRNB/CUSTOM 모두 `courses.distance`(km)에서 가져옴 (DRNB도 시드 스크립트가 저장). `actual_distance` 컬럼 없음. `pace` 계산 시 거리가 0이면 서비스 레이어에서 방어  
 > 같은 코스 기록은 횟수 제한 없이 누적 가능. 마이페이지에서 히스토리로 조회  
 > **탈퇴 처리**: 서비스 레이어에서 `user_id`를 명시적으로 NULL 업데이트. users는 Soft Delete(deleted_at 기록)이므로 DB 트리거 미발동. 기록 데이터는 보존하여 서비스 전체 통계에 활용
 
@@ -240,7 +240,7 @@ alembic upgrade head  # 로컬 반영
 | image_url | VARCHAR | 이미지 URL |
 | created_at | TIMESTAMP | 등록일 |
 
-> CUSTOM 코스 전용. DRNB 코스 이미지는 두루누비 API 실시간 조회
+> CUSTOM 코스 전용. DRNB 코스 이미지 조회는 미구현 (배치 전환으로 durunubi.py의 단건 상세조회 자체가 없어져 실시간 조회 경로도 없음 — 필요 시 별도 논의)
 
 ---
 

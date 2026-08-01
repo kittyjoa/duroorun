@@ -38,6 +38,7 @@ class Facility(Base):
 
     course_facilities: Mapped[list["CourseFacility"]] = relationship(
         back_populates="facility",
+        cascade="all, delete-orphan",
     )
 # 1. place_url은 kakao_place_id만 있으면 항상 계산 가능한 값
 # 지금 당장 버그를 일으키는 것은 아니지만, place_url 컬럼을 없애고

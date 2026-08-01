@@ -174,10 +174,6 @@ async def update_facility(
 
 async def delete_facility(session: AsyncSession, facility_id: int) -> None:
     """편의시설을 비활성화 (Soft Delete: is_active=False)."""
-    facility = await session.get(Facility, facility_id)
-    if facility is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="편의시설을 찾을 수 없습니다."
-        )
+    facility = await _get_facility_for_update(session, facility_id)
     facility.is_active = False
     await session.commit()

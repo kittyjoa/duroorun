@@ -28,6 +28,7 @@ from app.core.security import (
 )
 from app.domain.course.models import Course
 from app.domain.record.models import Record
+from app.domain.review.models import Review
 from app.domain.user.models import ProviderType, SocialAccount, User
 
 _KAKAO_AUTH_URL = "https://kauth.kakao.com/oauth/authorize"
@@ -348,7 +349,7 @@ async def withdraw_user(user: User, access_token: str, db: AsyncSession, redis: 
     # Soft Delete이므로 DB 트리거 미발동 — 서비스 레이어에서 직접 NULL 처리
     await db.execute(update(Record).where(Record.user_id == user.user_id).values(user_id=None))
 
-    # TODO: review 모델 구현 후 reviews 테이블 user_id NULL 업데이트 추가
+    await db.execute(update(Review).where(Review.user_id == user.user_id).values(user_id=None))
 
     await db.execute(
         update(Course).where(Course.created_by == user.user_id).values(created_by=None)

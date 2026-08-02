@@ -46,20 +46,27 @@ async def fetch_course_list(
     if res.status_code != 200:
         raise DurunubiAPIError(f"두루누비 API가 {res.status_code}를 반환했습니다.")
 
-    data = res.json()
-    header = data["response"]["header"]
-    if header["resultCode"] != _SUCCESS_RESULT_CODE:
-        raise DurunubiAPIError(f"두루누비 API 에러 {header['resultCode']}: {header['resultMsg']}")
+    try:
+        data = res.json()
+        header = data["response"]["header"]
+        result_code = header["resultCode"]
+        if result_code != _SUCCESS_RESULT_CODE:
+            raise DurunubiAPIError(f"두루누비 API 에러 {result_code}: {header['resultMsg']}")
 
-    body = data["response"]["body"]
-    total_count = body["totalCount"]
+        body = data["response"]["body"]
+        total_count = body["totalCount"]
+        items = body.get("items")
+        if not items:
+            return [], total_count
 
-    items = body.get("items")
-    if not items:
-        return [], total_count
-
-    item = items["item"]
-    # 결과 1건이면: 리스트 X, dict 하나로 옴 (data.go.kr JSON 변환 특성)
-    if isinstance(item, dict):
-        item = [item]
-    return item, total_count
+        item = items["item"]
+        # 결과 1건이면: 리스트 X, dict 하나로 옴 (data.go.kr JSON 변환 특성)
+        if isinstance(item, dict):
+            item = [item]
+        return item, total_count
+    except ValueError as e:
+        # res.json() 실패 — 200인데 JSON이 아닌 응답(HTML 에러 페이지 등)
+        raise DurunubiAPIError(f"두루누비 API 응답이 JSON 형식이 아닙니다: {e}") from None
+    except (KeyError, TypeError) as e:
+        # 기대한 키가 없음 — 두루누비 응답 스키마가 예상과 다름
+        raise DurunubiAPIError(f"두루누비 API 응답 구조가 예상과 다릅니다: {e}") from None

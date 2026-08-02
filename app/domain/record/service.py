@@ -167,15 +167,18 @@ async def end_record(
         if course is not None and course.distance
         else None
     )
+    # 러닝 도중 코스가 비활성화됐다면 완주 인증 기준점으로 신뢰하지 않는다
+    # (기록 자체는 정상 저장, 완주 인증만 보류 — 좌표 None 케이스와 동일한 처리)
+    course_verifiable = course is not None and course.is_active
     record.is_completed = _check_completion(
         user_start_lat=record.user_start_lat,
         user_start_lng=record.user_start_lng,
         user_end_lat=record.user_end_lat,
         user_end_lng=record.user_end_lng,
-        course_start_lat=course.start_lat if course is not None else None,
-        course_start_lng=course.start_lng if course is not None else None,
-        course_end_lat=course.end_lat if course is not None else None,
-        course_end_lng=course.end_lng if course is not None else None,
+        course_start_lat=course.start_lat if course_verifiable else None,
+        course_start_lng=course.start_lng if course_verifiable else None,
+        course_end_lat=course.end_lat if course_verifiable else None,
+        course_end_lng=course.end_lng if course_verifiable else None,
     )
     await session.commit()
     await session.refresh(record)

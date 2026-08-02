@@ -6,7 +6,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.security import get_current_user
 from app.database import get_db
 from app.domain.record import service as record_service
-from app.domain.record.schemas import RecordEndRequest, RecordListResponse, RecordResponse, RecordStartRequest
+from app.domain.record.schemas import (
+    RecordEndRequest,
+    RecordListResponse,
+    RecordResponse,
+    RecordStartRequest,
+)
 from app.domain.user.models import User
 
 router = APIRouter(prefix="/records", tags=["records"])

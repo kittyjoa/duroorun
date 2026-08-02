@@ -2,22 +2,22 @@
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class RecordStartRequest(BaseModel):
     """러닝시작: 시작 눌렀을 때 보내는 데이터"""
 
     course_id: int
-    user_start_lat: float
-    user_start_lng: float
+    user_start_lat: float = Field(ge=-90, le=90)
+    user_start_lng: float = Field(ge=-180, le=180)
 
 
 class RecordEndRequest(BaseModel):
     """러닝종료: 종료 눌렀을 때 보내는 데이터"""
 
-    user_end_lat: float
-    user_end_lng: float
+    user_end_lat: float = Field(ge=-90, le=90)
+    user_end_lng: float = Field(ge=-180, le=180)
 
 
 class RecordResponse(BaseModel):

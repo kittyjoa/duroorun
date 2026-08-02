@@ -2,12 +2,16 @@
 
 import enum
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, func
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
+
+if TYPE_CHECKING:
+    from app.domain.course.models import Course
 
 
 class FacilityType(enum.StrEnum):
@@ -30,15 +34,25 @@ class Facility(Base):
     longitude: Mapped[float] = mapped_column(Float, nullable=False)
     kakao_place_id: Mapped[str | None] = mapped_column(String, nullable=True)
     place_url: Mapped[str | None] = mapped_column(String, nullable=True)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true", nullable=False
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
-    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, onupdate=func.now())
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, onupdate=func.now()
+    )
 
     course_facilities: Mapped[list["CourseFacility"]] = relationship(
         back_populates="facility",
+        cascade="all, delete-orphan",
     )
+# 1. place_url은 kakao_place_id만 있으면 항상 계산 가능한 값
+# 지금 당장 버그를 일으키는 것은 아니지만, place_url 컬럼을 없애고
+# 응답 조립 시점(FacilityResponse 생성 시)이나 모델의 @property로 계산하는게 좋음
+# 2. (kakao_place_id, facility_type) 복합 unique 추가
+# 단순 유니크보다 이렇게 추가하면, 같은 장소 같은 편의시설 중복 방지 가능
 
 
 class CourseFacility(Base):
@@ -46,8 +60,12 @@ class CourseFacility(Base):
 
     __tablename__ = "course_facility"
 
-    course_id: Mapped[int] = mapped_column(Integer, ForeignKey("courses.course_id"), primary_key=True)
-    facility_id: Mapped[int] = mapped_column(Integer, ForeignKey("facilities.facility_id"), primary_key=True)
+    course_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("courses.course_id"), primary_key=True
+    )
+    facility_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("facilities.facility_id"), primary_key=True
+    )
     # 관리자가 매핑을 언제 연결했는지 추적용
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

@@ -32,6 +32,8 @@ class FacilityUpdateRequest(BaseModel):
     kakao_place_id: str | None = None
     # None이면 코스 연결 변경 없음, 빈 리스트면 전체 연결 해제
     course_ids: list[int] | None = None
+    # 삭제(is_active=false) 처리된 시설을 관리자가 되돌릴 때 사용. None이면 변경 없음
+    is_active: bool | None = None
 
 
 class FacilityResponse(BaseModel):
@@ -46,8 +48,7 @@ class FacilityResponse(BaseModel):
     latitude: float
     longitude: float
     kakao_place_id: str | None
-    # place_url은 요청 스키마에 없음 - service에서 kakao_place_id로 카카오 로컬 API 조회 후 조립
-    # (조립 로직 구현 전까지는 kakao_place_id 있어도 place_url=None으로 응답됨)
+    # _build_place_url에서 조립함
     place_url: str | None
     is_active: bool
     created_at: datetime

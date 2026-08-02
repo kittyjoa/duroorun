@@ -1,17 +1,20 @@
 """회원/인증 - 비즈니스 로직."""
 
+import re
 import secrets
 from datetime import UTC, datetime
 from urllib.parse import urlencode
 
 import httpx
-from fastapi import HTTPException, status
+from botocore.exceptions import BotoCoreError, ClientError
+from fastapi import HTTPException, UploadFile, status
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
 from sqlalchemy import delete, select, update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.clients.r2 import delete_file, upload_file
 from app.config import settings
 from app.core.security import (
     add_to_blacklist,
@@ -30,6 +33,26 @@ from app.domain.user.models import ProviderType, SocialAccount, User
 _KAKAO_AUTH_URL = "https://kauth.kakao.com/oauth/authorize"
 _KAKAO_TOKEN_URL = "https://kauth.kakao.com/oauth/token"
 _KAKAO_USER_URL = "https://kapi.kakao.com/v2/user/me"
+
+_ALLOWED_IMAGE_TYPES = {
+    "image/jpeg": "jpg",
+    "image/png": "png",
+    "image/webp": "webp",
+}
+
+_NICKNAME_PATTERN = re.compile(r"^[가-힣a-zA-Z0-9]+$")
+_LOCATION_PATTERN = re.compile(r"^[가-힣a-zA-Z0-9\s]+$")
+
+
+def _has_valid_image_signature(content_type: str, file_bytes: bytes) -> bool:
+    """Content-Type 헤더는 위조 가능하므로 실제 파일 시그니처(매직넘버)로 재검증합니다."""
+    if content_type == "image/jpeg":
+        return file_bytes.startswith(b"\xff\xd8\xff")
+    if content_type == "image/png":
+        return file_bytes.startswith(b"\x89PNG\r\n\x1a\n")
+    if content_type == "image/webp":
+        return file_bytes[:4] == b"RIFF" and file_bytes[8:12] == b"WEBP"
+    return False
 
 
 async def get_kakao_auth_url(redis: Redis) -> str:
@@ -206,9 +229,111 @@ async def logout(access_token: str, redis: Redis) -> None:
     await delete_refresh_token(user_id, redis)
 
 
+async def update_profile(
+    user: User, nickname: str | None, location: str | None, db: AsyncSession
+) -> User:
+    """닉네임/거주지를 수정합니다. 최초 가입 완료와 마이페이지 수정 모두 이 함수로 처리합니다."""
+    if nickname is not None:
+        nickname = nickname.strip()
+        valid_length = settings.NICKNAME_MIN_LENGTH <= len(nickname) <= settings.NICKNAME_MAX_LENGTH
+        if not valid_length or not _NICKNAME_PATTERN.match(nickname):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"닉네임은 한글/영문/숫자 {settings.NICKNAME_MIN_LENGTH}"
+                    f"~{settings.NICKNAME_MAX_LENGTH}자로 입력해주세요"
+                ),
+            )
+        user.nickname = nickname
+
+    if location is not None:
+        location = location.strip()
+        valid_length = 1 <= len(location) <= settings.LOCATION_MAX_LENGTH
+        if not valid_length or not _LOCATION_PATTERN.match(location):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"거주지는 한글/영문/숫자 1~{settings.LOCATION_MAX_LENGTH}자로 입력해주세요",
+            )
+        user.location = location
+
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="이미 사용 중인 닉네임입니다",
+        ) from None
+
+    await db.refresh(user)
+    return user
+
+
+async def upload_profile_image(user: User, file: UploadFile, db: AsyncSession) -> str:
+    """프로필 이미지를 R2에 업로드하고 기존 이미지는 삭제합니다."""
+    if file.content_type not in _ALLOWED_IMAGE_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="지원하지 않는 이미지 형식입니다 (jpg, png, webp만 가능)",
+        )
+
+    max_mb = settings.PROFILE_IMAGE_MAX_SIZE_MB
+    max_bytes = max_mb * 1024 * 1024
+    file_bytes = await file.read(max_bytes + 1)
+    if len(file_bytes) > max_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"이미지 크기는 최대 {max_mb}MB까지 업로드 가능합니다",
+        )
+
+    if not _has_valid_image_signature(file.content_type, file_bytes):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="파일 내용이 올바른 이미지 형식이 아닙니다",
+        )
+
+    extension = _ALLOWED_IMAGE_TYPES[file.content_type]
+    try:
+        new_url = await upload_file(
+            f"profile/{user.user_id}", file_bytes, extension, file.content_type
+        )
+    except (ClientError, BotoCoreError):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="이미지 업로드에 실패했습니다. 잠시 후 다시 시도해주세요",
+        ) from None
+
+    old_url = user.profile_image_url
+    user.profile_image_url = new_url
+    try:
+        await db.commit()
+    except SQLAlchemyError:
+        await db.rollback()
+        # DB 저장 실패 시 방금 올린 새 파일이 고아로 남지 않도록 R2에서도 제거
+        try:
+            await delete_file(new_url)
+        except ClientError:
+            pass
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="이미지 저장에 실패했습니다. 잠시 후 다시 시도해주세요",
+        ) from None
+
+    # 새 이미지 저장 확정 후에만 기존 이미지 삭제 — 실패해도 응답엔 영향 없음(고아 파일로만 남음)
+    if old_url:
+        try:
+            await delete_file(old_url)
+        except ClientError:
+            pass
+
+    return new_url
+
+
 async def withdraw_user(user: User, access_token: str, db: AsyncSession, redis: Redis) -> None:
     """회원 탈퇴: 개인정보 익명화 + 소셜 계정 삭제 + 연관 데이터 익명화 (단일 트랜잭션)."""
     now = datetime.now(tz=UTC)
+
+    old_profile_image_url = user.profile_image_url
 
     # row 삭제 없이 익명화 — 탈퇴 후에도 통계 집계에 계속 활용
     user.name = None
@@ -240,3 +365,10 @@ async def withdraw_user(user: User, access_token: str, db: AsyncSession, redis: 
         await delete_refresh_token(user.user_id, redis)
     except RedisError:
         pass
+
+    # R2 정리 실패해도 탈퇴는 완료 — DB에는 이미 NULL 처리됨(고아 파일로만 남음)
+    if old_profile_image_url:
+        try:
+            await delete_file(old_profile_image_url)
+        except ClientError:
+            pass

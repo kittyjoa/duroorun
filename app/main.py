@@ -1,5 +1,7 @@
 """FastAPI 앱 진입점."""
 
+import asyncio
+import sys
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -8,6 +10,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.router import router as api_router
 from app.config import settings
 from app.redis import close_redis
+
+# Windows 기본 이벤트 루프(ProactorEventLoop)는 psycopg async 드라이버와 호환되지 않음
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 
 @asynccontextmanager

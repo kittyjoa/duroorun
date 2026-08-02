@@ -3,14 +3,13 @@
 import asyncio
 import contextlib
 import uuid
-from datetime import UTC, datetime
 from functools import lru_cache
 
 import boto3
 from botocore.client import BaseClient
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import HTTPException, UploadFile, status
-from sqlalchemy import func, select
+from sqlalchemy import exists, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -73,15 +72,17 @@ async def create_review(
             status_code=status.HTTP_404_NOT_FOUND, detail="코스를 찾을 수 없습니다."
         )
 
-    # 완주 인증 확인
-    completed_record = await session.execute(
-        select(Record).where(
-            Record.user_id == user_id,
-            Record.course_id == course_id,
-            Record.is_completed.is_(True),
+    # 완주 인증 확인 (같은 코스를 여러 번 완주했을 수 있으므로 존재 여부만 확인)
+    completed = await session.scalar(
+        select(
+            exists().where(
+                Record.user_id == user_id,
+                Record.course_id == course_id,
+                Record.is_completed.is_(True),
+            )
         )
     )
-    if completed_record.scalar_one_or_none() is None:
+    if not completed:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="완주한 코스에만 리뷰를 작성할 수 있습니다.",
@@ -138,7 +139,6 @@ async def update_review(
         review.content = body.content
     if body.difficulty is not None:
         review.difficulty = body.difficulty
-    review.updated_at = datetime.now(UTC)
 
     await session.commit()
     await session.refresh(review)
@@ -285,6 +285,7 @@ async def upload_review_image(
     try:
         await session.commit()
     except Exception:
+        await session.rollback()
         with contextlib.suppress(ClientError, BotoCoreError):
             await asyncio.to_thread(
                 _get_r2_client().delete_object, Bucket=settings.R2_BUCKET_NAME, Key=key
@@ -329,17 +330,13 @@ async def delete_review_image(
             status_code=status.HTTP_403_FORBIDDEN, detail="본인의 리뷰 이미지만 삭제할 수 있습니다."
         )
 
-    # R2에서 삭제
+    # DB 삭제를 먼저 확정한 뒤 R2를 정리한다 (반대 순서면 R2 삭제 후 DB commit 실패 시
+    # DB에는 남아있는데 실제 파일은 없는 깨진 상태가 될 수 있음)
     key = image.image_url.removeprefix(f"{settings.R2_PUBLIC_URL.rstrip('/')}/")
-    try:
+    await session.delete(image)
+    await session.commit()
+
+    with contextlib.suppress(ClientError, BotoCoreError):
         await asyncio.to_thread(
             _get_r2_client().delete_object, Bucket=settings.R2_BUCKET_NAME, Key=key
         )
-    except (ClientError, BotoCoreError) as err:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="이미지 삭제에 실패했습니다.",
-        ) from err
-
-    await session.delete(image)
-    await session.commit()

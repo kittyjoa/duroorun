@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.domain.course.models import Course
 from app.domain.record.models import Record
 from app.domain.record.schemas import (
@@ -18,8 +19,6 @@ from app.domain.record.schemas import (
 )
 
 _EARTH_RADIUS_M = 6_371_000.0
-# 완주 인증 시작/종료 지점 허용 오차 - 모바일 GPS 오차(약 10~50m)를 감안한 값
-_COMPLETION_TOLERANCE_M = 100.0
 
 
 def _haversine_distance_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
@@ -43,17 +42,35 @@ def _check_completion(
 ) -> bool:
     """유저의 시작/종료 GPS가 코스 시작/종료 지점 허용 오차 내인지 확인.
 
+    정방향(유저 시작≈코스 시작, 유저 종료≈코스 종료) 또는 역방향(유저 시작≈코스 종료,
+    유저 종료≈코스 시작) 중 하나라도 만족하면 완주로 인정한다 (해안 트레일 양방향 주행 흔함).
     코스 좌표가 없으면(시드 누락 등) 검증 불가로 보고 미완주 처리한다.
     """
     if None in (course_start_lat, course_start_lng, course_end_lat, course_end_lng):
         return False
-    start_distance = _haversine_distance_m(
+
+    forward_start = _haversine_distance_m(
         user_start_lat, user_start_lng, course_start_lat, course_start_lng
     )
-    end_distance = _haversine_distance_m(
+    forward_end = _haversine_distance_m(
         user_end_lat, user_end_lng, course_end_lat, course_end_lng
     )
-    return start_distance <= _COMPLETION_TOLERANCE_M and end_distance <= _COMPLETION_TOLERANCE_M
+    if (
+        forward_start <= settings.COMPLETION_RADIUS_M
+        and forward_end <= settings.COMPLETION_RADIUS_M
+    ):
+        return True
+
+    reverse_start = _haversine_distance_m(
+        user_start_lat, user_start_lng, course_end_lat, course_end_lng
+    )
+    reverse_end = _haversine_distance_m(
+        user_end_lat, user_end_lng, course_start_lat, course_start_lng
+    )
+    return (
+        reverse_start <= settings.COMPLETION_RADIUS_M
+        and reverse_end <= settings.COMPLETION_RADIUS_M
+    )
 
 
 async def start_record(

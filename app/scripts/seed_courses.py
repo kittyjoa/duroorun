@@ -209,6 +209,8 @@ async def _fill_missing_coordinates(session: AsyncSession, gpx_urls: dict[str, s
         return
 
     failed: list[str] = []
+    # 코스 단위로 커밋 — 한 코스의 GPX 다운로드/파싱이 나중에 실패해도
+    # 그 앞에서 이미 성공한 코스들의 좌표 저장까지 롤백되지 않게
     async with httpx.AsyncClient(timeout=_GPX_TIMEOUT) as client:
         for course in courses:
             gpx_url = gpx_urls.get(course.dmb_id)

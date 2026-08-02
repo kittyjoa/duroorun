@@ -194,8 +194,11 @@ async def update_course(
                 detail="waypoints는 null일 수 없습니다.",
             )
         course.waypoints = []
+        # flush 없이 바로 새 waypoints를 대입하면
+        # 같은 flush 안에서 INSERT가 DELETE보다 먼저 실행돼
+        # 유니크 제약이 일시적으로 충돌할 수 있음
+        # ㅡ flush로 기존 행 삭제를 먼저 확정시킨 뒤 채워넣음
         await session.flush()
-        # 다 지운걸 반영(flush)시키고 새로 채워넣기
         course.waypoints = _build_waypoints(body.waypoints)
         course.start_lat = body.waypoints[0].latitude
         course.start_lng = body.waypoints[0].longitude

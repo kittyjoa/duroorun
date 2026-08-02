@@ -1,6 +1,7 @@
 """러닝 기록 - 비즈니스 로직."""
 
 from datetime import UTC, datetime
+from math import asin, cos, radians, sin, sqrt
 
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
@@ -15,6 +16,44 @@ from app.domain.record.schemas import (
     RecordResponse,
     RecordStartRequest,
 )
+
+_EARTH_RADIUS_M = 6_371_000.0
+# 완주 인증 시작/종료 지점 허용 오차 - 모바일 GPS 오차(약 10~50m)를 감안한 값
+_COMPLETION_TOLERANCE_M = 100.0
+
+
+def _haversine_distance_m(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    """두 좌표 사이의 지표면 거리(m) - Haversine 공식"""
+    phi1, phi2 = radians(lat1), radians(lat2)
+    d_phi = radians(lat2 - lat1)
+    d_lambda = radians(lng2 - lng1)
+    a = sin(d_phi / 2) ** 2 + cos(phi1) * cos(phi2) * sin(d_lambda / 2) ** 2
+    return 2 * _EARTH_RADIUS_M * asin(sqrt(a))
+
+
+def _check_completion(
+        user_start_lat: float,
+        user_start_lng: float,
+        user_end_lat: float,
+        user_end_lng: float,
+        course_start_lat: float | None,
+        course_start_lng: float | None,
+        course_end_lat: float | None,
+        course_end_lng: float | None,
+) -> bool:
+    """유저의 시작/종료 GPS가 코스 시작/종료 지점 허용 오차 내인지 확인.
+
+    코스 좌표가 없으면(시드 누락 등) 검증 불가로 보고 미완주 처리한다.
+    """
+    if None in (course_start_lat, course_start_lng, course_end_lat, course_end_lng):
+        return False
+    start_distance = _haversine_distance_m(
+        user_start_lat, user_start_lng, course_start_lat, course_start_lng
+    )
+    end_distance = _haversine_distance_m(
+        user_end_lat, user_end_lng, course_end_lat, course_end_lng
+    )
+    return start_distance <= _COMPLETION_TOLERANCE_M and end_distance <= _COMPLETION_TOLERANCE_M
 
 
 async def start_record(
@@ -105,21 +144,22 @@ async def end_record(
     record.user_end_lat = body.user_end_lat
     record.user_end_lng = body.user_end_lng
 
-    # course = await session.get(Course, record.course_id)
-    # record.pace = record.duration_seconds / course_distance
-    # TODO: 코스 거리 조회 후 pace 계산진행
-    # TODO: 코스 시작/종료 좌표 조회 필요함(course 테이블)
-    # is_completed = _check_completion(
-    #     user_start_lat=record.user_start_lat,
-    #     user_start_lng=record.user_start_lng,
-    #     user_end_lat=record.user_end_lat,
-    #     user_end_lng=record.user_end_lng,
-    #     course_start_lat= ,
-    #     course_start_lng= ,
-    #     course_end_lat= ,
-    #     course_end_lng= ,
-    # )
-    record.is_completed = False # 임시: 코스 좌표 연동 후 수정 예정
+    course = await session.get(Course, record.course_id)
+    record.pace = (
+        record.duration_seconds / course.distance
+        if course is not None and course.distance
+        else None
+    )
+    record.is_completed = _check_completion(
+        user_start_lat=record.user_start_lat,
+        user_start_lng=record.user_start_lng,
+        user_end_lat=record.user_end_lat,
+        user_end_lng=record.user_end_lng,
+        course_start_lat=course.start_lat if course is not None else None,
+        course_start_lng=course.start_lng if course is not None else None,
+        course_end_lat=course.end_lat if course is not None else None,
+        course_end_lng=course.end_lng if course is not None else None,
+    )
     await session.commit()
     await session.refresh(record)
     return RecordResponse.model_validate(record)

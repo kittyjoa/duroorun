@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.domain.course.models import Course
+from app.domain.record.models import Record
 from app.domain.review.models import Review, ReviewImage
 from app.domain.review.schemas import (
     ReviewCreateRequest,
@@ -72,17 +73,19 @@ async def create_review(
             status_code=status.HTTP_404_NOT_FOUND, detail="코스를 찾을 수 없습니다."
         )
 
-    # 완주 인증 확인 - TODO: record 연동 후 활성화 예정
-    # record = await session.execute(
-    #     select(Record).where(
-    #         Record.user_id == user_id, Record.course_id == course_id, Record.is_completed == True
-    #     )
-    # )
-    # if record.scalar_one_or_none() is None:
-    #     raise HTTPException(
-    #         status_code=status.HTTP_403_FORBIDDEN,
-    #         detail="완주한 코스에만 리뷰를 작성할 수 있습니다.",
-    #     )
+    # 완주 인증 확인
+    completed_record = await session.execute(
+        select(Record).where(
+            Record.user_id == user_id,
+            Record.course_id == course_id,
+            Record.is_completed.is_(True),
+        )
+    )
+    if completed_record.scalar_one_or_none() is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="완주한 코스에만 리뷰를 작성할 수 있습니다.",
+        )
 
     # 코스당 리뷰 1개 제한 확인
     existing = await session.execute(

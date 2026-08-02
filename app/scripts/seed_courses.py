@@ -40,6 +40,18 @@ def _is_target_region(item: dict) -> bool:
     return (item.get("sigun") or "").startswith(_TARGET_REGION)
 
 
+def _parse_estimated_time(raw: str | None) -> int | None:
+    """crsTotlRqrmHour를 분 단위 정수로 변환.
+
+    ㅡ 필드명은 "Hour"지만 실측 API 응답값은 이미 분 단위
+    ㅡ 소수 문자열이 와도 int() 캐스팅 실패로 코스 전체가 스킵되지 않도록
+       float 경유 후 반올림.
+    """
+    if not raw:
+        return None
+    return round(float(raw))
+
+
 def _map_item(item: dict) -> dict:
     """두루누비 API 응답 원본 dict -매핑-> courses 테이블 컬럼 dict"""
     return {
@@ -48,7 +60,7 @@ def _map_item(item: dict) -> dict:
         "course_name": item["crsKorNm"],
         "distance": float(item["crsDstnc"]) if item.get("crsDstnc") else None,
         "difficulty": _LEVEL_TO_DIFFICULTY.get(item.get("crsLevel")),
-        "estimated_time": int(item["crsTotlRqrmHour"]) if item.get("crsTotlRqrmHour") else None,
+        "estimated_time": _parse_estimated_time(item.get("crsTotlRqrmHour")),
         "course_description": item.get("crsContents") or None,
         "sigun": item.get("sigun") or None,
         "brd_div": item.get("brdDiv") or None,
@@ -88,14 +100,17 @@ async def _deactivate_missing_courses(session: AsyncSession, seen_dmb_ids: set[s
     """이번 실행에서 API 응답에 없었던 기존 DRNB 코스를 비활성화.
 
     ㅡ 두루누비 목록에서 실제로 빠진 코스(폐쇄/통합 등)가 계속 활성 상태로 남는 것 방지.
-    seen_dmb_ids가 비어있으면(이번 실행에서 아무것도 못 받음) 스킵 —
-    일시적 API 이상으로 전체 코스가 비활성화되는 것 방지.
+    ㅡ 이 시드가 관리하는 범위(해파랑길 + 강원)로 대상을 제한
+    ㅡ seen_dmb_ids가 비어있으면(이번 실행에서 아무것도 못 받음) 스킵
+       → 일시적 API 이상으로 전체 코스가 비활성화되는 것 방지.
     """
     if not seen_dmb_ids:
         return
     result = await session.execute(
         select(Course).where(
             Course.course_type == CourseType.DRNB,
+            Course.course_name.contains(_TRAIL_NAME),
+            Course.sigun.startswith(_TARGET_REGION),
             Course.is_active.is_(True),
             Course.dmb_id.is_not(None),
             Course.dmb_id.not_in(seen_dmb_ids),
@@ -112,20 +127,27 @@ async def _deactivate_missing_courses(session: AsyncSession, seen_dmb_ids: set[s
     )
 
 
-async def _fetch_all_courses() -> tuple[list[dict], dict[str, str]]:
-    """두루누비파일 fetch_course_list를 페이지 끝까지 반복 호출,
-       ㅡ 강원도 코스만 걸러서 전체 코스와 dmb_id -> gpxpath 매핑을 반환.
-    total_count는 crs_kor_nm 필터 기준(전체 해파랑길) 전체 개수라,
-    강원 필터링 후 개수와는 별도로 추적."""
+async def _fetch_all_courses() -> tuple[list[dict], dict[str, str], bool]:
+    """두루누비파일 fetch_course_list를 페이지 끝까지 반복 호출
+    ㅡ 강원도 코스만 걸러서 전체 코스와 dmb_id -> gpxpath 매핑을 반환.
+    ㅡ total_count는 crs_kor_nm 필터 기준(전체 해파랑길) 전체 개수라,
+       강원 필터링 후 개수와는 별도로 추적.
+    ㅡ 반환값 세 번째 요소(complete): total_count까지 다 받았다고 확인됐을때만 True,
+       페이지 중간에 빈 응답을 받거나 페이지 상한에 걸리면 False"""
     all_items: list[dict] = []
     gpx_urls: dict[str, str] = {}
     page_no = 1
     fetched_count = 0
+    complete = False
     while page_no <= _MAX_PAGES:
         items, total_count = await fetch_course_list(
             page_no, num_of_rows=_PAGE_SIZE, crs_kor_nm=_TRAIL_NAME
         )
         if not items:
+            logger.warning(
+                "페이지 %d에서 빈 응답을 받아 수집을 중단합니다 (누적 %d/%d건).",
+                page_no, fetched_count, total_count,
+            )
             break
         fetched_count += len(items)
         items = [item for item in items if _is_target_region(item)]
@@ -137,11 +159,12 @@ async def _fetch_all_courses() -> tuple[list[dict], dict[str, str]]:
             "코스 목록 수집 %d/%d건 (강원 %d건)", fetched_count, total_count, len(all_items)
         )
         if fetched_count >= total_count:
+            complete = True
             break
         page_no += 1
     else:
         logger.warning("페이지 상한(%d)에 도달해 목록 수집을 중단했습니다.", _MAX_PAGES)
-    return all_items, gpx_urls
+    return all_items, gpx_urls, complete
 
 
 def _extract_start_end(gpx_text: str) -> tuple[float, float, float, float] | None:
@@ -205,7 +228,7 @@ async def _fill_missing_coordinates(session: AsyncSession, gpx_urls: dict[str, s
 async def seed_courses() -> None:
     async with AsyncSessionLocal() as session:
         try:
-            all_items, gpx_urls = await _fetch_all_courses()
+            all_items, gpx_urls, complete = await _fetch_all_courses()
         except DurunubiAPIError as e:
             logger.error("두루누비 API 호출 실패, 시드를 중단합니다: %s", e)
             return
@@ -214,8 +237,11 @@ async def seed_courses() -> None:
             await _upsert_courses(session, all_items[i : i + _PAGE_SIZE])
         logger.info("코스 upsert 완료: %d건", len(all_items))
 
-        seen_dmb_ids = {item["crsIdx"] for item in all_items}
-        await _deactivate_missing_courses(session, seen_dmb_ids)
+        if complete:
+            seen_dmb_ids = {item["crsIdx"] for item in all_items}
+            await _deactivate_missing_courses(session, seen_dmb_ids)
+        else:
+            logger.warning("코스 목록을 끝까지 수집하지 못해 이번 실행은 비활성화 처리를 건너뜁니다.")
 
         await _fill_missing_coordinates(session, gpx_urls)
         logger.info("시드 완료")

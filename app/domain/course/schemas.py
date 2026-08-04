@@ -75,6 +75,8 @@ class DrnbCourseSummary(BaseModel):
     estimated_time: int | None
     sigun: str | None
     brd_div: str | None
+    # GPX 파싱 실패로 완주 인증 기준점(start/end 좌표)이 없는 코스면 False
+    has_verification_coords: bool
 
 
 class DrnbCourseListResponse(BaseModel):
@@ -101,13 +103,15 @@ class DrnbCourseDetailResponse(BaseModel):
     distance: float | None
     course_description: str | None
     # 완주 인증 검증 기준점 — 시드 스크립트가 gpxpath를 파싱해 저장
-    # TODO(record PR #7 연동): None 허용이 record의 두 좌표 사이 거리 검증과 맞물림.
-    # seed_courses.py가 항상 non-null로 채운다는 전제인데, 시드 실패/누락 시
-    # record 쪽에서 None을 어떻게 처리할지(검증 실패 vs 예외) 유선님과 confirm 필요.
+    # 팀 결정(2026-08-02): GPX 파싱 실패로 None이면 완주 인증을 에러로 막고
+    # 알림 문구를 명확히 띄우기로 함 — has_verification_coords로 좌표 유무 노출.
     start_lat: float | None
     start_lng: float | None
     end_lat: float | None
     end_lng: float | None
+    has_verification_coords: bool
+    # 두루누비 API가 이미지를 제공하지 않아 현재는 빈 리스트 (관리자 논의 전까지)
+    images: list[CourseImageResponse]
 
 
 class CustomCourseSummary(BaseModel):
@@ -146,7 +150,8 @@ class CustomCourseDetailResponse(BaseModel):
     estimated_time: int | None
     course_description: str | None
     created_by: int | None
-    # DRNB와 동일하게 record의 완주 인증 기준점으로 쓰임 — None 처리 정책은 위 TODO와 동일 이슈
+    # DRNB와 동일하게 record의 완주 인증 기준점으로 쓰임. 다만 커스텀 코스는 등록 시
+    # 첫/마지막 경유지로 항상 채워지므로 DRNB의 None 케이스 결정과 무관
     start_lat: float | None
     start_lng: float | None
     end_lat: float | None

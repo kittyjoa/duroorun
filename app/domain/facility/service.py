@@ -14,19 +14,8 @@ from app.domain.facility.schemas import (
     FacilityUpdateRequest,
 )
 
-_KAKAO_PLACE_URL_TEMPLATE = "https://place.map.kakao.com/{}"
-
 # Facility 컬럼이 nullable=False라 부분 수정 시에도 null 허용 X
 _REQUIRED_FIELDS = ("facility_type", "facility_name", "latitude", "longitude", "is_active")
-
-
-def _build_place_url(kakao_place_id: str | None) -> str | None:
-    """kakao_place_id로 카카오맵 장소 상세 URL을 조립.
-
-    ㅡ 카카오 Local API에는 id 기반 상세조회 엔드포인트가 없고,
-    장소 페이지 URL은 고정 패턴이라 API 호출 없이 문자열만 조립.
-    """
-    return _KAKAO_PLACE_URL_TEMPLATE.format(kakao_place_id) if kakao_place_id else None
 
 
 async def _validate_course_ids(session: AsyncSession, course_ids: list[int]) -> None:
@@ -81,7 +70,6 @@ async def create_facility(session: AsyncSession, body: FacilityCreateRequest) ->
         latitude=body.latitude,
         longitude=body.longitude,
         kakao_place_id=body.kakao_place_id,
-        place_url=_build_place_url(body.kakao_place_id),
     )
     facility.course_facilities = [CourseFacility(course_id=course_id) for course_id in course_ids]
 
@@ -151,8 +139,6 @@ async def update_facility(
             )
     for field, value in update_data.items():
         setattr(facility, field, value)
-    if "kakao_place_id" in update_data:
-        facility.place_url = _build_place_url(facility.kakao_place_id)
 
     # course_ids는 exclude_unset로 처리하면 안되어서 직접 처리
     # 프론트가 course_ids 필드 아예 안 넣으면: None ㅡ 코스연결 건들지마라

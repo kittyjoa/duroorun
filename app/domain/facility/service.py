@@ -2,6 +2,7 @@
 
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -74,7 +75,14 @@ async def create_facility(session: AsyncSession, body: FacilityCreateRequest) ->
     facility.course_facilities = [CourseFacility(course_id=course_id) for course_id in course_ids]
 
     session.add(facility)
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError as err:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="이미 등록된 장소+시설타입 조합입니다.",
+        ) from err
     await session.refresh(facility)
     return FacilityResponse.model_validate(facility)
 
@@ -153,7 +161,14 @@ async def update_facility(
             CourseFacility(course_id=course_id) for course_id in course_ids
         )
 
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError as err:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="이미 등록된 장소+시설타입 조합입니다.",
+        ) from err
     await session.refresh(facility)
     return FacilityResponse.model_validate(facility)
 

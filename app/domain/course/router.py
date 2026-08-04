@@ -1,6 +1,6 @@
 """코스 (DRNB + 커스텀) - API 엔드포인트 (APIRouter)."""
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import get_current_user
@@ -90,4 +90,30 @@ async def delete_course(
     """커스텀 코스 삭제 (작성자 본인 전용, Soft Delete)"""
     await course_service.delete_course(
         session=session, user_id=current_user.user_id, course_id=course_id
+    )
+
+
+@router.post("/custom/{course_id}/images", response_model=CustomCourseDetailResponse)
+async def upload_course_image(
+    course_id: int,
+    file: UploadFile,
+    session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """커스텀 코스 이미지 업로드 (작성자 본인 전용)"""
+    return await course_service.upload_course_image(
+        session=session, user_id=current_user.user_id, course_id=course_id, file=file
+    )
+
+
+@router.delete("/custom/{course_id}/images/{image_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_course_image(
+    course_id: int,
+    image_id: int,
+    session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """커스텀 코스 이미지 삭제 (작성자 본인 전용)"""
+    await course_service.delete_course_image(
+        session=session, user_id=current_user.user_id, course_id=course_id, image_id=image_id
     )

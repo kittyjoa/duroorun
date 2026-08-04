@@ -1,11 +1,16 @@
 """코스 (DRNB + 커스텀) - 비즈니스 로직."""
 
-from fastapi import HTTPException, status
+import contextlib
+
+from botocore.exceptions import BotoCoreError, ClientError
+from fastapi import HTTPException, UploadFile, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.domain.course.models import Course, CourseType, CourseWaypoint
+from app.clients.r2 import delete_file, upload_file
+from app.config import settings
+from app.domain.course.models import Course, CourseImage, CourseType, CourseWaypoint
 from app.domain.course.schemas import (
     CourseCreateRequest,
     CourseUpdateRequest,
@@ -20,6 +25,26 @@ from app.domain.course.schemas import (
 
 # Course 컬럼은 nullable=True지만 생성시 필수값이라, 수정 시 null 허용하면 X
 _REQUIRED_FIELDS = ("course_name", "distance", "difficulty", "estimated_time")
+
+_IMAGE_EXTENSIONS = {
+    "image/jpeg": "jpg",
+    "image/png": "png",
+    "image/webp": "webp",
+    "image/gif": "gif",
+}
+
+
+def _detect_image_content_type(data: bytes) -> str | None:
+    """파일 시그니처(매직바이트)로 실제 이미지 형식을 판별합니다."""
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+        return "image/webp"
+    return None
 
 
 def _build_waypoints(waypoints: list[CourseWaypointCreate]) -> list[CourseWaypoint]:
@@ -60,11 +85,13 @@ async def get_drnb_courses(session: AsyncSession, page: int, size: int) -> DrnbC
 async def get_drnb_course(session: AsyncSession, course_id: int) -> DrnbCourseDetailResponse:
     """DRNB 코스 상세를 조회합니다. 시드 스크립트로 저장된 DB 정보만 사용 (배치 갱신)."""
     result = await session.execute(
-        select(Course).where(
+        select(Course)
+        .where(
             Course.course_id == course_id,
             Course.course_type == CourseType.DRNB,
             Course.dmb_id.is_not(None),
         )
+        .options(selectinload(Course.images))
     )
     course = result.scalar_one_or_none()
     if course is None or not course.is_active:
@@ -219,3 +246,95 @@ async def delete_course(session: AsyncSession, user_id: int, course_id: int) -> 
         )
     course.is_active = False
     await session.commit()
+
+
+async def upload_course_image(
+    session: AsyncSession, user_id: int, course_id: int, file: UploadFile
+) -> CustomCourseDetailResponse:
+    """커스텀 코스 이미지 업로드 (작성자 본인 전용)."""
+    course = await _get_custom_course(session, course_id)
+    if course.created_by != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="본인의 코스에만 이미지를 업로드할 수 있습니다.",
+        )
+
+    count_result = await session.execute(
+        select(func.count()).select_from(CourseImage).where(CourseImage.course_id == course_id)
+    )
+    if count_result.scalar_one() >= settings.COURSE_IMAGE_MAX_COUNT:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"코스 이미지는 최대 {settings.COURSE_IMAGE_MAX_COUNT}개까지 업로드할 수 있습니다.",
+        )
+
+    # 파일 크기 확인 (제한 초과 시 즉시 중단, 전체를 다 읽지 않음)
+    max_bytes = settings.COURSE_IMAGE_MAX_SIZE_MB * 1024 * 1024
+    chunks = []
+    total_size = 0
+    while chunk := await file.read(1024 * 1024):
+        total_size += len(chunk)
+        if total_size > max_bytes:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"이미지 크기는 {settings.COURSE_IMAGE_MAX_SIZE_MB}MB 이하여야 합니다.",
+            )
+        chunks.append(chunk)
+    contents = b"".join(chunks)
+
+    # 파일 형식 확인 (Content-Type 헤더는 클라이언트가 조작 가능하므로 실제 파일 시그니처로 검증)
+    detected_content_type = _detect_image_content_type(contents)
+    if detected_content_type is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="jpg, png, webp, gif 형식만 업로드할 수 있습니다.",
+        )
+
+    # R2 업로드
+    ext = _IMAGE_EXTENSIONS[detected_content_type]
+    try:
+        image_url = await upload_file("course-images", contents, ext, detected_content_type)
+    except (ClientError, BotoCoreError) as err:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="이미지 업로드에 실패했습니다.",
+        ) from err
+
+    # DB 저장
+    image = CourseImage(course_id=course_id, image_url=image_url)
+    session.add(image)
+    try:
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        with contextlib.suppress(ClientError, BotoCoreError):
+            await delete_file(image_url)
+        raise
+
+    course = await _get_custom_course(session, course_id)
+    return CustomCourseDetailResponse.model_validate(course)
+
+
+async def delete_course_image(
+    session: AsyncSession, user_id: int, course_id: int, image_id: int
+) -> None:
+    """커스텀 코스 이미지 삭제 (작성자 본인 전용)."""
+    course = await _get_custom_course(session, course_id)
+    if course.created_by != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="본인의 코스 이미지만 삭제할 수 있습니다."
+        )
+
+    image = await session.get(CourseImage, image_id)
+    if image is None or image.course_id != course_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="이미지를 찾을 수 없습니다."
+        )
+
+    # DB 삭제 먼저 확정 → R2 정리
+    image_url = image.image_url
+    await session.delete(image)
+    await session.commit()
+
+    with contextlib.suppress(ClientError, BotoCoreError):
+        await delete_file(image_url)

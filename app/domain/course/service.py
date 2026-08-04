@@ -251,8 +251,12 @@ async def delete_course(session: AsyncSession, user_id: int, course_id: int) -> 
 async def upload_course_image(
     session: AsyncSession, user_id: int, course_id: int, file: UploadFile
 ) -> CustomCourseDetailResponse:
-    """커스텀 코스 이미지 업로드 (작성자 본인 전용)."""
-    course = await _get_custom_course(session, course_id)
+    """커스텀 코스 이미지 업로드 (작성자 본인 전용).
+
+    ㅡ 같은 코스에 대해 요청이 다수 들어온 경우, 직렬 순서대로 하나씩 처리.
+    한 요청이 락 잡고 커밋 될때까지 다른 요청들은 본인 순서 기다림.
+    """
+    course = await _get_custom_course(session, course_id, for_update=True)
     if course.created_by != user_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

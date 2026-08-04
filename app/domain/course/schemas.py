@@ -26,7 +26,8 @@ class CourseWaypointResponse(BaseModel):
 
 
 class CourseImageResponse(BaseModel):
-    """커스텀 코스 이미지 조회 시 응답 - 업로드 자체는 R2 업로드 엔드포인트에서 처리"""
+    """커스텀 코스 이미지 조회 시 응답
+    - 업로드는 POST /courses/custom/{course_id}/images에서 처리"""
 
     model_config = ConfigDict(from_attributes=True)
 

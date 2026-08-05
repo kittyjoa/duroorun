@@ -172,22 +172,26 @@ async def _fetch_all_courses() -> tuple[list[dict], dict[str, str], bool]:
 # 두루누비 강원도 해파랑길 코스들 중 6개가 계속 누락되어 생긴 병합 함수
 def _merge_manual_courses(
     all_items: list[dict], gpx_sources: dict[str, str | Path]
-) -> list[dict]:
+) -> tuple[list[dict], dict[str, str | Path]]:
     """API 응답에 없는 코스만 MANUAL_COURSES로 보충. API에 있으면 항상 API 데이터가 우선.
 
     ㅡ API가 나중에 이 코스를 정상 반환하기 시작하면, seen_ids에 이미 포함되므로
       여기서 자동으로 걸러져서 수동 데이터는 안 쓰임.
+    ㅡ 인자를 대체하지 않고, return 값으로만 이루어진 결과를 새로 준다?
     """
     seen_ids = {item["crsIdx"] for item in all_items}
     missing_manual = [m for m in MANUAL_COURSES if m["crsIdx"] not in seen_ids]
     if not missing_manual:
-        return all_items
+        return all_items, gpx_sources
     logger.info(
         "API 미제공 코스 %d건을 수동 데이터로 보충: %s",
         len(missing_manual), [m["crsIdx"] for m in missing_manual],
     )
-    gpx_sources.update({m["crsIdx"]: m["gpx_path"] for m in missing_manual if m.get("gpx_path")})
-    return all_items + missing_manual
+    merged_sources = {
+        **gpx_sources,
+        **{m["crsIdx"]: m["gpx_path"] for m in missing_manual if m.get("gpx_path")},
+    }
+    return all_items + missing_manual, merged_sources
 
 
 def _extract_start_end(gpx_text: str) -> tuple[float, float, float, float] | None:
@@ -267,7 +271,7 @@ async def seed_courses() -> None:
             logger.error("두루누비 API 호출 실패, 시드를 중단합니다: %s", e)
             return
 
-        all_items = _merge_manual_courses(all_items, gpx_sources)
+        all_items, gpx_sources = _merge_manual_courses(all_items, gpx_sources)
 
         for i in range(0, len(all_items), _PAGE_SIZE):
             await _upsert_courses(session, all_items[i : i + _PAGE_SIZE])

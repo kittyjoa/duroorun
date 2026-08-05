@@ -411,6 +411,8 @@ git restore --staged app/config.py
 | `app/main.py` | FastAPI 앱 진입점 |
 | `app/api/v1/router.py` | API 라우터 통합 |
 | `requirements.txt` | 패키지 의존성 |
+| `frontend/src/App.jsx` | 라우터 설정 (전체 페이지 라우트 관리) |
+| `frontend/package.json` | 프론트 패키지 의존성 |
 
 공통 파일 수정이 필요하면:
 1. 팀 채팅에 수정 내용 공유

@@ -1,5 +1,7 @@
 """회원/인증 - API 엔드포인트 (APIRouter)."""
 
+from urllib.parse import urlencode
+
 from fastapi import APIRouter, Cookie, Depends, File, HTTPException, Response, UploadFile, status
 from fastapi.responses import RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials
@@ -38,25 +40,18 @@ router = APIRouter(tags=["auth"])
 _REFRESH_COOKIE_PATH = "/api/v1/auth/refresh"
 
 
-@router.get("/auth/kakao", summary="카카오 로그인 페이지로 리다이렉트")
-async def kakao_auth(redis: Redis = Depends(get_redis)) -> RedirectResponse:
-    """카카오 OAuth 인증 페이지로 리다이렉트합니다."""
-    url = await get_kakao_auth_url(redis)
-    return RedirectResponse(url)
+def _oauth_success_redirect(
+    access_token: str, refresh_token: str, is_new_user: bool
+) -> RedirectResponse:
+    """소셜 로그인 성공 후 프론트로 리다이렉트합니다.
 
-
-@router.get("/auth/kakao/callback", response_model=TokenResponse, summary="카카오 로그인 콜백")
-async def kakao_callback(
-    code: str,
-    state: str,
-    response: Response,
-    db: AsyncSession = Depends(get_db),
-    redis: Redis = Depends(get_redis),
-) -> TokenResponse:
-    """카카오 OAuth 콜백을 처리하고 JWT를 발급합니다."""
-    access_token, refresh_token, is_new_user = await kakao_login(code, state, db, redis)
-
-    response.set_cookie(
+    소셜사 콜백은 브라우저 전체 페이지 이동이라 JSON을 직접 응답해도 프론트(SPA)가
+    받을 방법이 없음 — access_token/is_new_user는 쿼리스트링으로, refresh_token은
+    쿠키로 실어 프론트의 콜백 처리 페이지로 넘긴다.
+    """
+    params = urlencode({"access_token": access_token, "is_new_user": str(is_new_user).lower()})
+    redirect = RedirectResponse(f"{settings.FRONTEND_URL}/oauth/callback?{params}")
+    redirect.set_cookie(
         key="refresh_token",
         value=refresh_token,
         httponly=True,
@@ -65,8 +60,26 @@ async def kakao_callback(
         max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400,
         path=_REFRESH_COOKIE_PATH,
     )
+    return redirect
 
-    return TokenResponse(access_token=access_token, is_new_user=is_new_user)
+
+@router.get("/auth/kakao", summary="카카오 로그인 페이지로 리다이렉트")
+async def kakao_auth(redis: Redis = Depends(get_redis)) -> RedirectResponse:
+    """카카오 OAuth 인증 페이지로 리다이렉트합니다."""
+    url = await get_kakao_auth_url(redis)
+    return RedirectResponse(url)
+
+
+@router.get("/auth/kakao/callback", summary="카카오 로그인 콜백")
+async def kakao_callback(
+    code: str,
+    state: str,
+    db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
+) -> RedirectResponse:
+    """카카오 OAuth 콜백을 처리하고 프론트로 리다이렉트합니다."""
+    access_token, refresh_token, is_new_user = await kakao_login(code, state, db, redis)
+    return _oauth_success_redirect(access_token, refresh_token, is_new_user)
 
 
 @router.get("/auth/naver", summary="네이버 로그인 페이지로 리다이렉트")
@@ -76,28 +89,16 @@ async def naver_auth(redis: Redis = Depends(get_redis)) -> RedirectResponse:
     return RedirectResponse(url)
 
 
-@router.get("/auth/naver/callback", response_model=TokenResponse, summary="네이버 로그인 콜백")
+@router.get("/auth/naver/callback", summary="네이버 로그인 콜백")
 async def naver_callback(
     code: str,
     state: str,
-    response: Response,
     db: AsyncSession = Depends(get_db),
     redis: Redis = Depends(get_redis),
-) -> TokenResponse:
-    """네이버 OAuth 콜백을 처리하고 JWT를 발급합니다."""
+) -> RedirectResponse:
+    """네이버 OAuth 콜백을 처리하고 프론트로 리다이렉트합니다."""
     access_token, refresh_token, is_new_user = await naver_login(code, state, db, redis)
-
-    response.set_cookie(
-        key="refresh_token",
-        value=refresh_token,
-        httponly=True,
-        secure=settings.is_production,
-        samesite="none" if settings.is_production else "lax",
-        max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400,
-        path=_REFRESH_COOKIE_PATH,
-    )
-
-    return TokenResponse(access_token=access_token, is_new_user=is_new_user)
+    return _oauth_success_redirect(access_token, refresh_token, is_new_user)
 
 
 @router.get("/auth/google", summary="구글 로그인 페이지로 리다이렉트")
@@ -107,28 +108,16 @@ async def google_auth(redis: Redis = Depends(get_redis)) -> RedirectResponse:
     return RedirectResponse(url)
 
 
-@router.get("/auth/google/callback", response_model=TokenResponse, summary="구글 로그인 콜백")
+@router.get("/auth/google/callback", summary="구글 로그인 콜백")
 async def google_callback(
     code: str,
     state: str,
-    response: Response,
     db: AsyncSession = Depends(get_db),
     redis: Redis = Depends(get_redis),
-) -> TokenResponse:
-    """구글 OAuth 콜백을 처리하고 JWT를 발급합니다."""
+) -> RedirectResponse:
+    """구글 OAuth 콜백을 처리하고 프론트로 리다이렉트합니다."""
     access_token, refresh_token, is_new_user = await google_login(code, state, db, redis)
-
-    response.set_cookie(
-        key="refresh_token",
-        value=refresh_token,
-        httponly=True,
-        secure=settings.is_production,
-        samesite="none" if settings.is_production else "lax",
-        max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400,
-        path=_REFRESH_COOKIE_PATH,
-    )
-
-    return TokenResponse(access_token=access_token, is_new_user=is_new_user)
+    return _oauth_success_redirect(access_token, refresh_token, is_new_user)
 
 
 @router.post("/auth/refresh", response_model=TokenResponse, summary="토큰 재발급")

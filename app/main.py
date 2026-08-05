@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.router import router as api_router
 from app.config import settings
 from app.redis import close_redis
+from app.scheduler import shutdown_scheduler, start_scheduler
 
 # Windows 기본 이벤트 루프(ProactorEventLoop)는 psycopg async 드라이버와 호환되지 않음
 if sys.platform == "win32":
@@ -18,7 +19,9 @@ if sys.platform == "win32":
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    start_scheduler()
     yield
+    shutdown_scheduler()
     await close_redis()
 
 

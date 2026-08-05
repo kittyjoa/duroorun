@@ -6,6 +6,7 @@ import asyncio
 import logging
 import selectors
 import sys
+from pathlib import Path
 
 import gpxpy
 import httpx
@@ -16,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.clients.durunubi import DurunubiAPIError, fetch_course_list
 from app.database import AsyncSessionLocal
 from app.domain.course.models import Course, CourseType, Difficulty
+from app.scripts.manual_courses import MANUAL_COURSES
 
 # Course의 관계/FK가 참조하는 다른 도메인 모델들 — 직접 안 써도 import해야
 # SQLAlchemy가 courses.created_by(→users), course_facility(→facilities) 매핑을 해석할 수 있음
@@ -167,6 +169,27 @@ async def _fetch_all_courses() -> tuple[list[dict], dict[str, str], bool]:
     return all_items, gpx_urls, complete
 
 
+# 두루누비 강원도 해파랑길 코스들 중 6개가 계속 누락되어 생긴 병합 함수
+def _merge_manual_courses(
+    all_items: list[dict], gpx_sources: dict[str, str | Path]
+) -> list[dict]:
+    """API 응답에 없는 코스만 MANUAL_COURSES로 보충. API에 있으면 항상 API 데이터가 우선.
+
+    ㅡ API가 나중에 이 코스를 정상 반환하기 시작하면, seen_ids에 이미 포함되므로
+      여기서 자동으로 걸러져서 수동 데이터는 안 쓰임.
+    """
+    seen_ids = {item["crsIdx"] for item in all_items}
+    missing_manual = [m for m in MANUAL_COURSES if m["crsIdx"] not in seen_ids]
+    if not missing_manual:
+        return all_items
+    logger.info(
+        "API 미제공 코스 %d건을 수동 데이터로 보충: %s",
+        len(missing_manual), [m["crsIdx"] for m in missing_manual],
+    )
+    gpx_sources.update({m["crsIdx"]: m["gpx_path"] for m in missing_manual if m.get("gpx_path")})
+    return all_items + missing_manual
+
+
 def _extract_start_end(gpx_text: str) -> tuple[float, float, float, float] | None:
     """GPX 텍스트에서 첫/마지막 좌표를 추출. gpx가 track인지 route인지 아직 모름
        ㅡ 제3의구조거나 아예 없으면 좌표 추출 다시 생각해봐야함"""
@@ -181,26 +204,35 @@ def _extract_start_end(gpx_text: str) -> tuple[float, float, float, float] | Non
 
 
 async def _try_fetch_coords(
-    client: httpx.AsyncClient, gpx_url: str
+    client: httpx.AsyncClient, gpx_source: str | Path
 ) -> tuple[float, float, float, float] | None:
-    """gpxpath를 다운로드·파싱해 좌표를 반환. 다운로드/파싱 어느 쪽이 실패해도 None."""
+    """gpx_source(API gpxpath URL 문자열 또는 수동 파일 Path)를 읽어 좌표 반환.
+
+    ㅡ 다운로드/파일읽기/파싱 어느 쪽이 실패해도 None.
+    """
     try:
-        res = await client.get(gpx_url)
-        res.raise_for_status()
-        return _extract_start_end(res.text)
-    except httpx.HTTPError:
+        if isinstance(gpx_source, Path):
+            gpx_text = gpx_source.read_text(encoding="utf-8")
+        else:
+            res = await client.get(gpx_source)
+            res.raise_for_status()
+            gpx_text = res.text
+        return _extract_start_end(gpx_text)
+    except (httpx.HTTPError, OSError):
         return None
     except Exception:  # noqa: BLE001 — GPX 포맷이 코스마다 달라 파싱실패원인 특정 어려움
         return None
 
 
-async def _fill_missing_coordinates(session: AsyncSession, gpx_urls: dict[str, str]) -> None:
-    """좌표가 비어있는 DRNB 코스만 골라 gpxpath를 다운로드·파싱해서 채운다.
+async def _fill_missing_coordinates(
+    session: AsyncSession, gpx_sources: dict[str, str | Path]
+) -> None:
+    """좌표가 비어있는 DRNB 코스만 골라 gpx_sources(URL 또는 로컬 파일)를 읽어 채운다.
        ㅡ 좌표 비어있는 경우: 이번 실행에서 새로 추가된 코스, 예전 실행때 gpx 관련 실패한 코스"""
     result = await session.execute(
         select(Course).where(
             Course.course_type == CourseType.DRNB,
-            Course.dmb_id.in_(gpx_urls.keys()),
+            Course.dmb_id.in_(gpx_sources.keys()),
             Course.start_lat.is_(None),
         )
     )
@@ -213,8 +245,8 @@ async def _fill_missing_coordinates(session: AsyncSession, gpx_urls: dict[str, s
     # 그 앞에서 이미 성공한 코스들의 좌표 저장까지 롤백되지 않게
     async with httpx.AsyncClient(timeout=_GPX_TIMEOUT) as client:
         for course in courses:
-            gpx_url = gpx_urls.get(course.dmb_id)
-            coords = await _try_fetch_coords(client, gpx_url) if gpx_url else None
+            gpx_source = gpx_sources.get(course.dmb_id)
+            coords = await _try_fetch_coords(client, gpx_source) if gpx_source else None
             if coords is None:
                 failed.append(course.dmb_id)
                 continue
@@ -230,10 +262,12 @@ async def _fill_missing_coordinates(session: AsyncSession, gpx_urls: dict[str, s
 async def seed_courses() -> None:
     async with AsyncSessionLocal() as session:
         try:
-            all_items, gpx_urls, complete = await _fetch_all_courses()
+            all_items, gpx_sources, complete = await _fetch_all_courses()
         except DurunubiAPIError as e:
             logger.error("두루누비 API 호출 실패, 시드를 중단합니다: %s", e)
             return
+
+        all_items = _merge_manual_courses(all_items, gpx_sources)
 
         for i in range(0, len(all_items), _PAGE_SIZE):
             await _upsert_courses(session, all_items[i : i + _PAGE_SIZE])
@@ -245,7 +279,7 @@ async def seed_courses() -> None:
         else:
             logger.warning("코스 목록을 끝까지 수집하지 못해 이번 실행은 비활성화 처리를 건너뜁니다.")
 
-        await _fill_missing_coordinates(session, gpx_urls)
+        await _fill_missing_coordinates(session, gpx_sources)
         logger.info("시드 완료")
 
 

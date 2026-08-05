@@ -35,6 +35,8 @@ class Difficulty(enum.StrEnum):
     HARD = "HARD"
 
 
+# 코스 필터 관련 인덱스는 현재 규모에서 장점이 거의 없어 후순위
+# (전체 조회해도 괜찮은 규모고, 인덱스는 읽기 빠른대신 쓰기 느려짐)
 class Course(Base):
     """코스 (두루누비 공식 코스 + 유저 커스텀 코스)."""
 

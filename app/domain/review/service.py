@@ -14,7 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.domain.course.models import Course
+from app.domain.course.models import Course, Difficulty
 from app.domain.record.models import Record
 from app.domain.review.models import Review, ReviewImage
 from app.domain.review.schemas import (
@@ -33,6 +33,16 @@ _IMAGE_EXTENSIONS = {
     "image/gif": "gif",
 }
 
+# TODO: course 도메인과 공유하는 상수라 course/models.py의 Difficulty 옆으로 옮길 예정
+# (course 담당과 협의 필요)
+# 완성되면 app.domain.course.models import DIFFICULTY_SCORE 임포트만 진행
+_DIFFICULTY_SCORE = {
+    Difficulty.EASY: 1,
+    Difficulty.NORMAL: 2,
+    Difficulty.HARD: 3,
+}
+_SCORE_TO_DIFFICULTY = {score: difficulty for difficulty, score in _DIFFICULTY_SCORE.items()}
+# 여기까지 지우기
 
 def _detect_image_content_type(data: bytes) -> str | None:
     """파일 시그니처(매직바이트)로 실제 이미지 형식을 판별합니다."""
@@ -179,21 +189,40 @@ async def delete_review(
             )
 
 
+# TODO(course 담당): 코스 상세 조회(get_drnb_course/get_custom_course)에서
+# 이 함수를 가져다 응답에 포함해 주세요.
+async def get_average_difficulty(session: AsyncSession, course_id: int) -> Difficulty | None:
+    """코스별 유저 체감 난이도 평균 (탈퇴 유저 리뷰도 통계 목적으로 포함, 리뷰가 없으면 None).
+    EASY/NORMAL/HARD를 점수로 평균을 낸 뒤 가장 가까운 등급으로 반올림하여 표시한다.
+    """
+    result = await session.execute(
+        select(Review.difficulty).where(Review.course_id == course_id)
+    )
+    difficulties = result.scalars().all()
+    if not difficulties:
+        return None
+    avg_score = sum(_DIFFICULTY_SCORE[d] for d in difficulties) / len(difficulties)
+    rounded_score = min(max(round(avg_score), 1), 3)
+    return _SCORE_TO_DIFFICULTY[rounded_score]
+
+
 async def get_reviews(
         session: AsyncSession,
         course_id: int,
         page: int,
         size: int,
 ) -> ReviewListResponse:
-    """코스 리뷰 목록 조회 (탈퇴 유저 포함, 최신순으로 조회)"""
+    """코스 리뷰 목록 조회 (탈퇴 유저 리뷰는 노출 제외, 최신순으로 조회)"""
     offset = (page - 1) * size
     total_result = await session.execute(
-        select(func.count()).select_from(Review).where(Review.course_id == course_id)
+        select(func.count())
+        .select_from(Review)
+        .where(Review.course_id == course_id, Review.user_id.is_not(None))
     )
     total = total_result.scalar_one()
     result = await session.execute(
         select(Review)
-        .where(Review.course_id == course_id)
+        .where(Review.course_id == course_id, Review.user_id.is_not(None))
         .order_by(Review.created_at.desc())
         .offset(offset)
         .limit(size)

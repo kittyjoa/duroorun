@@ -10,7 +10,7 @@ from sqlalchemy.orm import selectinload
 
 from app.clients.r2 import delete_file, upload_file
 from app.config import settings
-from app.domain.course.models import Course, CourseImage, CourseType, CourseWaypoint
+from app.domain.course.models import Course, CourseImage, CourseType, CourseWaypoint, Difficulty
 from app.domain.course.schemas import (
     CourseCreateRequest,
     CourseUpdateRequest,
@@ -55,17 +55,37 @@ def _build_waypoints(waypoints: list[CourseWaypointCreate]) -> list[CourseWaypoi
     ]
 
 
-async def get_drnb_courses(session: AsyncSession, page: int, size: int) -> DrnbCourseListResponse:
+async def get_drnb_courses(
+    session: AsyncSession,
+    page: int,
+    size: int,
+    brd_div: str | None = None,
+    sigun: str | None = None,
+    difficulty: Difficulty | None = None,
+    estimated_time_min: int | None = None,
+    estimated_time_max: int | None = None,
+) -> DrnbCourseListResponse:
     """DRNB 코스 목록을 조회합니다. 시드 스크립트로 저장된 DB 정보만 사용 (배치 갱신).
 
+    ㅡ brd_div/sigun/difficulty는 정확히 일치, estimated_time은 min/max 범위로 필터링
     ㅡ 현재 시드 스크립트가 강원 코스만 적재하므로 DB엔 강원 코스만 존재.
-    추후 다른 지역까지 시드 대상이 넓어지면 이 쿼리에 sigun 필터 추가 필요.
+    추후 다른 지역까지 시드 대상이 넓어져도 이 필터로 그대로 좁혀볼 수 있음.
     """
     base_query = select(Course).where(
         Course.course_type == CourseType.DRNB,
         Course.is_active.is_(True),
         Course.dmb_id.is_not(None),  # 두루누비 응답엔 dmb_id 항상 존재한다는 약속 지킬수있음
     )
+    if brd_div is not None:
+        base_query = base_query.where(Course.brd_div == brd_div)
+    if sigun is not None:
+        base_query = base_query.where(Course.sigun == sigun)
+    if difficulty is not None:
+        base_query = base_query.where(Course.difficulty == difficulty)
+    if estimated_time_min is not None:
+        base_query = base_query.where(Course.estimated_time >= estimated_time_min)
+    if estimated_time_max is not None:
+        base_query = base_query.where(Course.estimated_time <= estimated_time_max)
 
     total = (
         await session.execute(select(func.count()).select_from(base_query.subquery()))
@@ -162,13 +182,25 @@ async def get_custom_courses(
     page: int,
     size: int,
     created_by: int | None = None,
+    difficulty: Difficulty | None = None,
+    distance_min: float | None = None,
+    distance_max: float | None = None,
 ) -> CustomCourseListResponse:
-    """커스텀 코스 목록을 조회합니다. 기본은 전체 공개, created_by 지정 시 해당 작성자 코스만."""
+    """커스텀 코스 목록을 조회합니다. 기본은 전체 공개, created_by 지정 시 해당 작성자 코스만.
+
+    ㅡ difficulty는 정확히 일치, distance는 min/max 범위로 필터링
+    """
     base_query = select(Course).where(
         Course.course_type == CourseType.CUSTOM, Course.is_active.is_(True)
     )
     if created_by is not None:
         base_query = base_query.where(Course.created_by == created_by)
+    if difficulty is not None:
+        base_query = base_query.where(Course.difficulty == difficulty)
+    if distance_min is not None:
+        base_query = base_query.where(Course.distance >= distance_min)
+    if distance_max is not None:
+        base_query = base_query.where(Course.distance <= distance_max)
 
     total = (
         await session.execute(select(func.count()).select_from(base_query.subquery()))

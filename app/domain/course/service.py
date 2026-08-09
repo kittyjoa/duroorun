@@ -1,6 +1,6 @@
 """코스 (DRNB + 커스텀) - 비즈니스 로직."""
 
-import contextlib
+import logging
 
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import HTTPException, UploadFile, status
@@ -22,6 +22,8 @@ from app.domain.course.schemas import (
     DrnbCourseListResponse,
     DrnbCourseSummary,
 )
+
+logger = logging.getLogger(__name__)
 
 # Course 컬럼은 nullable=True지만 생성시 필수값이라, 수정 시 null 허용하면 X
 _REQUIRED_FIELDS = ("course_name", "distance", "difficulty", "estimated_time")
@@ -343,8 +345,11 @@ async def upload_course_image(
         await session.commit()
     except Exception:
         await session.rollback()
-        with contextlib.suppress(ClientError, BotoCoreError):
+        try:
             await delete_file(image_url)
+        # 보상 삭제: db 저장 실패했으니 방금 r2에 올린 파일도 도로 삭제(보상 트랜잭션)
+        except (ClientError, BotoCoreError):
+            logger.exception("DB commit 실패 후 R2 보상 삭제도 실패: image_url=%s", image_url)
         raise
 
     course = await _get_custom_course(session, course_id)
@@ -372,5 +377,7 @@ async def delete_course_image(
     await session.delete(image)
     await session.commit()
 
-    with contextlib.suppress(ClientError, BotoCoreError):
+    try:
         await delete_file(image_url)
+    except (ClientError, BotoCoreError):
+        logger.exception("DB 삭제 후 R2 파일 삭제 실패: image_url=%s", image_url)

@@ -10,19 +10,19 @@ from pathlib import Path
 
 import gpxpy
 import httpx
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.clients.durunubi import DurunubiAPIError, fetch_course_list
 from app.database import AsyncSessionLocal
 from app.domain.course.models import Course, CourseType, Difficulty
-from app.scripts.manual_courses import MANUAL_COURSES
 
 # Course의 관계/FK가 참조하는 다른 도메인 모델들 — 직접 안 써도 import해야
 # SQLAlchemy가 courses.created_by(→users), course_facility(→facilities) 매핑을 해석할 수 있음
 from app.domain.facility import models as _facility_models  # noqa: F401
 from app.domain.user import models as _user_models  # noqa: F401
+from app.scripts.manual_courses import MANUAL_COURSES
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -237,7 +237,12 @@ async def _fill_missing_coordinates(
         select(Course).where(
             Course.course_type == CourseType.DRNB,
             Course.dmb_id.in_(gpx_sources.keys()),
-            Course.start_lat.is_(None),
+            or_(
+                Course.start_lat.is_(None),
+                Course.start_lng.is_(None),
+                Course.end_lat.is_(None),
+                Course.end_lng.is_(None),
+            ),
         )
     )
     courses = result.scalars().all()

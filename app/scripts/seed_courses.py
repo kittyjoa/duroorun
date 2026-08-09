@@ -226,8 +226,10 @@ async def _try_fetch_coords(
             gpx_text = res.text
         return _extract_start_end(gpx_text)
     except (httpx.HTTPError, OSError):
+        logger.exception("GPX 다운로드/파일읽기 실패: gpx_source=%s", gpx_source)
         return None
     except Exception:  # noqa: BLE001 — GPX 포맷이 코스마다 달라 파싱실패원인 특정 어려움
+        logger.exception("GPX 파싱 실패: gpx_source=%s", gpx_source)
         return None
 
 

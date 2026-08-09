@@ -49,6 +49,15 @@ def _detect_image_content_type(data: bytes) -> str | None:
     return None
 
 
+def _validate_range(min_value: float | None, max_value: float | None, field_label: str) -> None:
+    """min > max로 뒤바뀐 필터 요청을 걸러냄."""
+    if min_value is not None and max_value is not None and min_value > max_value:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"{field_label}_min은 {field_label}_max보다 클 수 없습니다.",
+        )
+
+
 def _build_waypoints(waypoints: list[CourseWaypointCreate]) -> list[CourseWaypoint]:
     """요청 좌표 리스트를 sequence(순서 번호)가 매겨진 CourseWaypoint 목록으로 변환."""
     return [
@@ -73,6 +82,8 @@ async def get_drnb_courses(
     ㅡ 현재 시드 스크립트가 강원 코스만 적재하므로 DB엔 강원 코스만 존재.
     추후 다른 지역까지 시드 대상이 넓어져도 이 필터로 그대로 좁혀볼 수 있음.
     """
+    _validate_range(estimated_time_min, estimated_time_max, "estimated_time")
+
     base_query = select(Course).where(
         Course.course_type == CourseType.DRNB,
         Course.is_active.is_(True),
@@ -190,6 +201,8 @@ async def get_custom_courses(
 
     ㅡ difficulty는 정확히 일치, distance는 min/max 범위로 필터링
     """
+    _validate_range(distance_min, distance_max, "distance")
+
     base_query = select(Course).where(
         Course.course_type == CourseType.CUSTOM, Course.is_active.is_(True)
     )

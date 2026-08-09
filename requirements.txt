@@ -30,7 +30,7 @@ boto3>=1.43.0
 gpxpy>=1.6.0
 
 # ===== 앱 스케줄러 (24시간 주기 코스 시드 재실행) =====
-apscheduler>=3.11.0
+apscheduler>=3.11.0,<4
 
 # ===== AI 리뷰 요약 (Gemini) =====
 google-genai>=2.8.0

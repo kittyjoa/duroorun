@@ -20,9 +20,11 @@ if sys.platform == "win32":
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     start_scheduler()
-    yield
-    shutdown_scheduler()
-    await close_redis()
+    try:
+        yield
+    finally:
+        shutdown_scheduler()
+        await close_redis()
 
 
 app = FastAPI(title="두루런 API", lifespan=lifespan)

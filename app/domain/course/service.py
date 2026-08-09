@@ -303,7 +303,10 @@ async def upload_course_image(
     if count_result.scalar_one() >= settings.COURSE_IMAGE_MAX_COUNT:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"코스 이미지는 최대 {settings.COURSE_IMAGE_MAX_COUNT}개까지 업로드할 수 있습니다.",
+            detail=(
+                f"코스 이미지는 최대 {settings.COURSE_IMAGE_MAX_COUNT}개까지 "
+                "업로드할 수 있습니다."
+            ),
         )
 
     # 파일 크기 확인 (제한 초과 시 즉시 중단, 전체를 다 읽지 않음)

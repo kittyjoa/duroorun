@@ -10,7 +10,7 @@ from pathlib import Path
 
 import gpxpy
 import httpx
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -228,21 +228,17 @@ async def _try_fetch_coords(
         return None
 
 
-async def _fill_missing_coordinates(
-    session: AsyncSession, gpx_sources: dict[str, str | Path]
-) -> None:
-    """좌표가 비어있는 DRNB 코스만 골라 gpx_sources(URL 또는 로컬 파일)를 읽어 채운다.
-       ㅡ 좌표 비어있는 경우: 이번 실행에서 새로 추가된 코스, 예전 실행때 gpx 관련 실패한 코스"""
+async def _sync_coordinates(session: AsyncSession, gpx_sources: dict[str, str | Path]) -> None:
+    """gpx_sources에 있는 모든 DRNB 코스의 GPX를 매번 다시 읽어 좌표를 최신화한다.
+
+    ㅡ 두루누비 원본 경로가 바뀌어도(완주 인증 기준점) 다음 실행 때 반영되도록 매번 재조회.
+    ㅡ GPX 다운로드/파싱 실패 시 기존 좌표를 지우지 않고 그대로 둠 (일시적 네트워크 오류 대비).
+    ㅡ 값이 실제로 안 바뀐 코스는 대입/커밋을 건너뛰어 불필요한 updated_at 갱신 방지.
+    """
     result = await session.execute(
         select(Course).where(
             Course.course_type == CourseType.DRNB,
             Course.dmb_id.in_(gpx_sources.keys()),
-            or_(
-                Course.start_lat.is_(None),
-                Course.start_lng.is_(None),
-                Course.end_lat.is_(None),
-                Course.end_lng.is_(None),
-            ),
         )
     )
     courses = result.scalars().all()
@@ -259,8 +255,10 @@ async def _fill_missing_coordinates(
             if coords is None:
                 failed.append(course.dmb_id)
                 continue
-            course.start_lat, course.start_lng, course.end_lat, course.end_lng = coords
-            await session.commit()
+            current = (course.start_lat, course.start_lng, course.end_lat, course.end_lng)
+            if current != coords:
+                course.start_lat, course.start_lng, course.end_lat, course.end_lng = coords
+                await session.commit()
 
     if failed:
         logger.warning(
@@ -286,9 +284,11 @@ async def seed_courses() -> None:
             seen_dmb_ids = {item["crsIdx"] for item in all_items}
             await _deactivate_missing_courses(session, seen_dmb_ids)
         else:
-            logger.warning("코스 목록을 끝까지 수집하지 못해 이번 실행은 비활성화 처리를 건너뜁니다.")
+            logger.warning(
+                "코스 목록을 끝까지 수집하지 못해 이번 실행은 비활성화 처리를 건너뜁니다."
+            )
 
-        await _fill_missing_coordinates(session, gpx_sources)
+        await _sync_coordinates(session, gpx_sources)
         logger.info("시드 완료")
 
 

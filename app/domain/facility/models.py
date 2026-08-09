@@ -58,7 +58,9 @@ class Facility(Base):
     @property
     def place_url(self) -> str | None:
         """kakao_place_id로 계산해 카카오맵 장소 상세 URL 조립 (컬럼 저장 X)."""
-        return _KAKAO_PLACE_URL_TEMPLATE.format(self.kakao_place_id) if self.kakao_place_id else None
+        if self.kakao_place_id is None:
+            return None
+        return _KAKAO_PLACE_URL_TEMPLATE.format(self.kakao_place_id)
 
 
 class CourseFacility(Base):

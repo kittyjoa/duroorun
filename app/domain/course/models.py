@@ -84,6 +84,7 @@ class Course(Base):
     images: Mapped[list["CourseImage"]] = relationship(
         back_populates="course",
         cascade="all, delete-orphan",
+        order_by="CourseImage.image_id",
     )
     # CourseFacility는 facility 도메인에 정의 — 문자열 참조로 순환 import 방지
     course_facilities: Mapped[list["CourseFacility"]] = relationship(

@@ -119,7 +119,11 @@ async def delete_course(
     )
 
 
-@router.post("/custom/{course_id}/images", response_model=CustomCourseDetailResponse)
+@router.post(
+    "/custom/{course_id}/images",
+    response_model=CustomCourseDetailResponse,
+    status_code=status.HTTP_201_CREATED,
+)
 async def upload_course_image(
     course_id: int,
     file: UploadFile,

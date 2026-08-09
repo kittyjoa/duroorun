@@ -18,6 +18,22 @@ from app.domain.facility.schemas import (
 # Facility 컬럼이 nullable=False라 부분 수정 시에도 null 허용 X
 _REQUIRED_FIELDS = ("facility_type", "facility_name", "latitude", "longitude", "is_active")
 
+_UNIQUE_VIOLATION_SQLSTATE = "23505"
+_DUPLICATE_FACILITY_CONSTRAINT = "uq_facility_kakao_place_type"
+
+
+def _is_duplicate_facility_conflict(err: IntegrityError) -> bool:
+    """IntegrityError가 (kakao_place_id, facility_type) unique 위반인지 확인.
+
+    ㅡ DB 관련 위반까지 "이미 등록된 장소" 409로 뭉개지 않도록,
+      sqlstate와 constraint 이름 확인해서 이 케이스만 정확히 골라냄.
+    """
+    orig = err.orig
+    if getattr(orig, "sqlstate", None) != _UNIQUE_VIOLATION_SQLSTATE:
+        return False
+    diag = getattr(orig, "diag", None)
+    return getattr(diag, "constraint_name", None) == _DUPLICATE_FACILITY_CONSTRAINT
+
 
 async def _validate_course_ids(session: AsyncSession, course_ids: list[int]) -> None:
     """연결하려는 course_id가 모두 존재하는지 확인."""
@@ -79,6 +95,8 @@ async def create_facility(session: AsyncSession, body: FacilityCreateRequest) ->
         await session.commit()
     except IntegrityError as err:
         await session.rollback()
+        if not _is_duplicate_facility_conflict(err):
+            raise
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="이미 등록된 장소+시설타입 조합입니다.",
@@ -165,6 +183,8 @@ async def update_facility(
         await session.commit()
     except IntegrityError as err:
         await session.rollback()
+        if not _is_duplicate_facility_conflict(err):
+            raise
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="이미 등록된 장소+시설타입 조합입니다.",

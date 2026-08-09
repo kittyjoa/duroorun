@@ -10,12 +10,12 @@ from pathlib import Path
 
 import gpxpy
 import httpx
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.clients.durunubi import DurunubiAPIError, fetch_course_list
-from app.database import AsyncSessionLocal
+from app.database import AsyncSessionLocal, engine
 from app.domain.course.models import Course, CourseType, Difficulty
 
 # Course의 관계/FK가 참조하는 다른 도메인 모델들 — 직접 안 써도 import해야
@@ -30,6 +30,9 @@ logger = logging.getLogger(__name__)
 _PAGE_SIZE = 100
 _MAX_PAGES = 500  # 페이지네이션 응답이 이상해도 무한루프에 빠지지 않도록 상한
 _GPX_TIMEOUT = 10.0
+# pg_advisory_lock 키 — 워커/컨테이너가 여러 개여도 seed_courses()가 동시에
+# 두 번 실행되지 않도록 DB 세션 레벨 락으로 직렬화 (임의의 정수, 앱 내에서 고유하면 됨)
+_SEED_LOCK_KEY = 727501
 _TRAIL_NAME = "해파랑길"  # 두루누비 전체 코스 중 우리 서비스가 다루는 노선만 서버단에서 필터링
 # 두루누비 API에 지역 파라미터가 없어 sigun 필터 사용
 _TARGET_REGION = "강원"
@@ -267,29 +270,50 @@ async def _sync_coordinates(session: AsyncSession, gpx_sources: dict[str, str | 
 
 
 async def seed_courses() -> None:
-    async with AsyncSessionLocal() as session:
-        try:
-            all_items, gpx_sources, complete = await _fetch_all_courses()
-        except DurunubiAPIError as e:
-            logger.error("두루누비 API 호출 실패, 시드를 중단합니다: %s", e)
-            return
+    """두루누비 코스 시드를 실행합니다.
 
-        all_items, gpx_sources = _merge_manual_courses(all_items, gpx_sources)
+    ㅡ pg_try_advisory_lock(postgres가 제공하는 락)으로 세션 레벨 락을 잡아,
+      워커/컨테이너가 여러 개라도 동시에 두 번 실행되지 않게.
+      락을 못 잡으면(이미 다른 프로세스가 실행 중) 이번 실행은 건너뜀.
+    ㅡ 락 전용 커넥션을 따로 열어 실제 시드 작업용 세션과 분리 — 락 해제를
+      실수로 빠뜨리지 않도록 finally에서 명시적으로 unlock 후 커넥션 종료.
+    """
+    lock_conn = await engine.connect()
+    got_lock = (
+        await lock_conn.execute(text("SELECT pg_try_advisory_lock(:key)"), {"key": _SEED_LOCK_KEY})
+    ).scalar_one()
+    if not got_lock:
+        logger.warning("다른 프로세스가 이미 코스 시드를 실행 중이라 이번 실행은 건너뜁니다.")
+        await lock_conn.close()
+        return
 
-        for i in range(0, len(all_items), _PAGE_SIZE):
-            await _upsert_courses(session, all_items[i : i + _PAGE_SIZE])
-        logger.info("코스 upsert 완료: %d건", len(all_items))
+    try:
+        async with AsyncSessionLocal() as session:
+            try:
+                all_items, gpx_sources, complete = await _fetch_all_courses()
+            except DurunubiAPIError as e:
+                logger.error("두루누비 API 호출 실패, 시드를 중단합니다: %s", e)
+                return
 
-        if complete:
-            seen_dmb_ids = {item["crsIdx"] for item in all_items}
-            await _deactivate_missing_courses(session, seen_dmb_ids)
-        else:
-            logger.warning(
-                "코스 목록을 끝까지 수집하지 못해 이번 실행은 비활성화 처리를 건너뜁니다."
-            )
+            all_items, gpx_sources = _merge_manual_courses(all_items, gpx_sources)
 
-        await _sync_coordinates(session, gpx_sources)
-        logger.info("시드 완료")
+            for i in range(0, len(all_items), _PAGE_SIZE):
+                await _upsert_courses(session, all_items[i : i + _PAGE_SIZE])
+            logger.info("코스 upsert 완료: %d건", len(all_items))
+
+            if complete:
+                seen_dmb_ids = {item["crsIdx"] for item in all_items}
+                await _deactivate_missing_courses(session, seen_dmb_ids)
+            else:
+                logger.warning(
+                    "코스 목록을 끝까지 수집하지 못해 이번 실행은 비활성화 처리를 건너뜁니다."
+                )
+
+            await _sync_coordinates(session, gpx_sources)
+            logger.info("시드 완료")
+    finally:
+        await lock_conn.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": _SEED_LOCK_KEY})
+        await lock_conn.close()
 
 
 if __name__ == "__main__":

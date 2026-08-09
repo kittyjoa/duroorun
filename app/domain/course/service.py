@@ -107,13 +107,11 @@ async def get_drnb_courses(
 async def get_drnb_course(session: AsyncSession, course_id: int) -> DrnbCourseDetailResponse:
     """DRNB 코스 상세를 조회합니다. 시드 스크립트로 저장된 DB 정보만 사용 (배치 갱신)."""
     result = await session.execute(
-        select(Course)
-        .where(
+        select(Course).where(
             Course.course_id == course_id,
             Course.course_type == CourseType.DRNB,
             Course.dmb_id.is_not(None),
         )
-        .options(selectinload(Course.images))
     )
     course = result.scalar_one_or_none()
     if course is None or not course.is_active:

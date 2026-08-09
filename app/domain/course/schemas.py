@@ -111,10 +111,6 @@ class DrnbCourseDetailResponse(BaseModel):
     end_lat: float | None
     end_lng: float | None
     has_verification_coords: bool
-    # 두루누비 API가 이미지를 제공하지 않아 현재는 빈 리스트
-    # 두루누비 코스 이미지는 프론트에서 기본 이미지로 대체 (2026.08.05)
-    # 시간이 남으면 저작권 없는 사진을 넣는 등 고도화해보기로
-    images: list[CourseImageResponse]
 
 
 class CustomCourseSummary(BaseModel):

@@ -80,6 +80,8 @@ async def _find_inactive_facility(
     """같은 (kakao_place_id, facility_type) 조합의 비활성 시설을 찾음 (재활성화용).
 
     ㅡ kakao_place_id가 None이면 unique 제약 대상 밖이라 검색하지 않음.
+    ㅡ with_for_update: 동시에 같은 조합을 재등록하는 요청이 겹쳐도 하나씩 순서대로
+      처리되게 락을 걸어, 두 요청이 같은 row를 동시에 재활성화하다 매핑이 유실되는 것 방지.
     """
     if kakao_place_id is None:
         return None
@@ -91,6 +93,7 @@ async def _find_inactive_facility(
             Facility.is_active.is_(False),
         )
         .options(selectinload(Facility.course_facilities))
+        .with_for_update()
     )
     return result.scalar_one_or_none()
 

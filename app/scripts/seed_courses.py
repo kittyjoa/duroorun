@@ -279,8 +279,11 @@ async def seed_courses() -> None:
       락을 못 잡으면(이미 다른 프로세스가 실행 중) 이번 실행은 건너뜀.
     ㅡ 락 전용 커넥션을 따로 열어 실제 시드 작업용 세션과 분리 — 락 해제를
       실수로 빠뜨리지 않도록 finally에서 명시적으로 unlock 후 커넥션 종료.
+    ㅡ AUTOCOMMIT: 각자 알아서 즉시 끝나게. (lock_conn: 락 전용 커넥션)
+      lock_conn 커넥션에서 실행되는 SQL문 하나하나가 독립적인 트랜잭션.
     """
     lock_conn = await engine.connect()
+    lock_conn = await lock_conn.execution_options(isolation_level="AUTOCOMMIT")
     got_lock = (
         await lock_conn.execute(text("SELECT pg_try_advisory_lock(:key)"), {"key": _SEED_LOCK_KEY})
     ).scalar_one()

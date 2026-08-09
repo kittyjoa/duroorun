@@ -282,32 +282,42 @@ async def delete_course(session: AsyncSession, user_id: int, course_id: int) -> 
     await session.commit()
 
 
+async def _count_course_images(session: AsyncSession, course_id: int) -> int:
+    """코스에 현재 저장된 이미지 개수."""
+    result = await session.execute(
+        select(func.count()).select_from(CourseImage).where(CourseImage.course_id == course_id)
+    )
+    return result.scalar_one()
+
+
+def _max_image_count_error() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=(
+            f"코스 이미지는 최대 {settings.COURSE_IMAGE_MAX_COUNT}개까지 업로드할 수 있습니다."
+        ),
+    )
+
+
 async def upload_course_image(
     session: AsyncSession, user_id: int, course_id: int, file: UploadFile
 ) -> CustomCourseDetailResponse:
     """커스텀 코스 이미지 업로드 (작성자 본인 전용).
 
-    ㅡ 같은 코스에 대해 요청이 다수 들어온 경우, 직렬 순서대로 하나씩 처리.
-    한 요청이 락 잡고 커밋 될때까지 다른 요청들은 본인 순서 기다림.
+    ㅡ 파일 읽기·검증·R2 업로드는 락 없이 수행
+    ㅡ 업로드 전 개수 체크: 이미 꽉 찼으면 400, 파일 안 읽음
+    ㅡ 저장 직전 for_update로 락 잡고 재확인 — 동시 업로드로 최대 개수를
+      넘기지 못하게 하는 진짜 방어선. 재확인에서 탈락하면 방금 올린 R2 파일 삭제.
     """
-    course = await _get_custom_course(session, course_id, for_update=True)
+    course = await _get_custom_course(session, course_id)
     if course.created_by != user_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="본인의 코스에만 이미지를 업로드할 수 있습니다.",
         )
 
-    count_result = await session.execute(
-        select(func.count()).select_from(CourseImage).where(CourseImage.course_id == course_id)
-    )
-    if count_result.scalar_one() >= settings.COURSE_IMAGE_MAX_COUNT:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                f"코스 이미지는 최대 {settings.COURSE_IMAGE_MAX_COUNT}개까지 "
-                "업로드할 수 있습니다."
-            ),
-        )
+    if await _count_course_images(session, course_id) >= settings.COURSE_IMAGE_MAX_COUNT:
+        raise _max_image_count_error()
 
     # 파일 크기 확인 (제한 초과 시 즉시 중단, 전체를 다 읽지 않음)
     max_bytes = settings.COURSE_IMAGE_MAX_SIZE_MB * 1024 * 1024
@@ -331,7 +341,7 @@ async def upload_course_image(
             detail="jpg, png, webp, gif 형식만 업로드할 수 있습니다.",
         )
 
-    # R2 업로드
+    # R2 업로드 (락 없이 — 여기가 느려도 다른 요청을 막지 않음)
     ext = _IMAGE_EXTENSIONS[detected_content_type]
     try:
         image_url = await upload_file("course-images", contents, ext, detected_content_type)
@@ -341,7 +351,17 @@ async def upload_course_image(
             detail="이미지 업로드에 실패했습니다.",
         ) from err
 
-    # DB 저장
+    # 여기서부터 락 — 개수 최종 재확인 + 저장을 원자적으로 묶음
+    await _get_custom_course(session, course_id, for_update=True)
+    if await _count_course_images(session, course_id) >= settings.COURSE_IMAGE_MAX_COUNT:
+        try:
+            await delete_file(image_url)
+        except (ClientError, BotoCoreError):
+            logger.exception(
+                "최대 개수 재확인 탈락 후 R2 롤백 삭제 실패: image_url=%s", image_url
+            )
+        raise _max_image_count_error()
+
     image = CourseImage(course_id=course_id, image_url=image_url)
     session.add(image)
     try:

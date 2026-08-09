@@ -7,6 +7,8 @@ seed_courses.py가 API 응답과 병합해서 사용.
 ㅡ manual_courses_gpx 폴더: 사이트에서 다운받은 6개 코스 gpx 파일
 ㅡ API가 나중에 이 코스를 정상적으로 반환하기 시작하면,
 시드파일의 _merge_manual_courses 로직이 자동으로 API 데이터 우선시함.
+ㅡ 수집일: 2026-08-05
+ㅡ 공공누리 "출처표시+상업적이용금지+변경금지" 조건에 따라 이용 가능한 정보들
 """
 
 from pathlib import Path

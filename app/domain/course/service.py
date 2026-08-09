@@ -330,19 +330,14 @@ async def upload_course_image(
     if await _count_course_images(session, course_id) >= settings.COURSE_IMAGE_MAX_COUNT:
         raise _max_image_count_error()
 
-    # 파일 크기 확인 (제한 초과 시 즉시 중단, 전체를 다 읽지 않음)
+    # 파일 크기 확인 (max_bytes+1까지만 읽어서, 초과 시에도 전체를 다 읽지 않음)
     max_bytes = settings.COURSE_IMAGE_MAX_SIZE_MB * 1024 * 1024
-    chunks = []
-    total_size = 0
-    while chunk := await file.read(1024 * 1024):
-        total_size += len(chunk)
-        if total_size > max_bytes:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"이미지 크기는 {settings.COURSE_IMAGE_MAX_SIZE_MB}MB 이하여야 합니다.",
-            )
-        chunks.append(chunk)
-    contents = b"".join(chunks)
+    contents = await file.read(max_bytes + 1)
+    if len(contents) > max_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"이미지 크기는 {settings.COURSE_IMAGE_MAX_SIZE_MB}MB 이하여야 합니다.",
+        )
 
     # 파일 형식 확인 (Content-Type 헤더는 클라이언트가 조작 가능하므로 실제 파일 시그니처로 검증)
     detected_content_type = _detect_image_content_type(contents)

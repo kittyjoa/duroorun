@@ -28,7 +28,8 @@ class Facility(Base):
 
     __tablename__ = "facilities"
     __table_args__ = (
-        # 같은 카카오 장소를 같은 시설 타입으로 중복 등록하는 것 방지
+        # 같은 카카오 장소를 같은 시설 타입으로 중복 등록하는 것 방지 (활성/비활성 무관)
+        # ㅡ 재등록은 create_facility()가 기존 비활성 row 재활성화 방식으로 처리
         # (NULL은 예외, 유니크 제약은 kakao_place_id가 채워진 경우에만 작동)
         UniqueConstraint("kakao_place_id", "facility_type", name="uq_facility_kakao_place_type"),
     )

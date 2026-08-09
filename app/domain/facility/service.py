@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.domain.course.models import Course
-from app.domain.facility.models import CourseFacility, Facility
+from app.domain.facility.models import CourseFacility, Facility, FacilityType
 from app.domain.facility.schemas import (
     FacilityCreateRequest,
     FacilityListResponse,
@@ -74,23 +74,59 @@ async def _get_facility_for_update(session: AsyncSession, facility_id: int) -> F
     return facility
 
 
+async def _find_inactive_facility(
+    session: AsyncSession, kakao_place_id: str | None, facility_type: FacilityType
+) -> Facility | None:
+    """같은 (kakao_place_id, facility_type) 조합의 비활성 시설을 찾음 (재활성화용).
+
+    ㅡ kakao_place_id가 None이면 unique 제약 대상 밖이라 검색하지 않음.
+    """
+    if kakao_place_id is None:
+        return None
+    result = await session.execute(
+        select(Facility)
+        .where(
+            Facility.kakao_place_id == kakao_place_id,
+            Facility.facility_type == facility_type,
+            Facility.is_active.is_(False),
+        )
+        .options(selectinload(Facility.course_facilities))
+    )
+    return result.scalar_one_or_none()
+
+
 async def create_facility(session: AsyncSession, body: FacilityCreateRequest) -> FacilityResponse:
-    """편의시설을 등록."""
+    """편의시설을 등록.
+
+    ㅡ 같은 (kakao_place_id, facility_type) 조합의 비활성 시설이 있으면 새로 만들지 않고
+      그 시설을 재활성화 + 최신 정보로 갱신 (비활성 row가 재등록마다 계속 쌓이는 것 방지).
+    """
     # course_ids 중복 제거 → 존재 검증 → 'Facility 생성 + CourseFacility 매핑' 저장
     course_ids = list(dict.fromkeys(body.course_ids))
     await _validate_course_ids(session, course_ids)
 
-    facility = Facility(
-        facility_type=body.facility_type,
-        facility_name=body.facility_name,
-        facility_address=body.facility_address,
-        latitude=body.latitude,
-        longitude=body.longitude,
-        kakao_place_id=body.kakao_place_id,
-    )
+    facility = await _find_inactive_facility(session, body.kakao_place_id, body.facility_type)
+    if facility is not None:
+        facility.is_active = True
+        facility.facility_name = body.facility_name
+        facility.facility_address = body.facility_address
+        facility.latitude = body.latitude
+        facility.longitude = body.longitude
+        facility.course_facilities.clear()
+        await session.flush()
+    else:
+        facility = Facility(
+            facility_type=body.facility_type,
+            facility_name=body.facility_name,
+            facility_address=body.facility_address,
+            latitude=body.latitude,
+            longitude=body.longitude,
+            kakao_place_id=body.kakao_place_id,
+        )
+        session.add(facility)
+
     facility.course_facilities = [CourseFacility(course_id=course_id) for course_id in course_ids]
 
-    session.add(facility)
     try:
         await session.commit()
     except IntegrityError as err:

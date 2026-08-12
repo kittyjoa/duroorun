@@ -35,6 +35,13 @@ class Difficulty(enum.StrEnum):
     HARD = "HARD"
 
 
+DIFFICULTY_SCORE = {
+    Difficulty.EASY: 1,
+    Difficulty.NORMAL: 2,
+    Difficulty.HARD: 3,
+}
+
+
 # 코스 필터 관련 인덱스는 현재 규모에서 장점이 거의 없어 후순위
 # (전체 조회해도 괜찮은 규모고, 인덱스는 읽기 빠른대신 쓰기 느려짐)
 class Course(Base):

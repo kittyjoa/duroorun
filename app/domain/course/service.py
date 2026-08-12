@@ -22,6 +22,7 @@ from app.domain.course.schemas import (
     DrnbCourseListResponse,
     DrnbCourseSummary,
 )
+from app.domain.review.service import get_average_difficulty
 
 logger = logging.getLogger(__name__)
 
@@ -129,7 +130,10 @@ async def get_drnb_course(session: AsyncSession, course_id: int) -> DrnbCourseDe
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="코스를 찾을 수 없습니다."
         )
-    return DrnbCourseDetailResponse.model_validate(course)
+    avg_difficulty = await get_average_difficulty(session, course_id)
+    response = DrnbCourseDetailResponse.model_validate(course)
+    response.average_difficulty = avg_difficulty
+    return response
 
 
 async def _get_custom_course(
@@ -185,7 +189,10 @@ async def create_course(
 async def get_custom_course(session: AsyncSession, course_id: int) -> CustomCourseDetailResponse:
     """커스텀 코스 상세를 조회합니다 (경유지/이미지 포함)."""
     course = await _get_custom_course(session, course_id)
-    return CustomCourseDetailResponse.model_validate(course)
+    avg_difficulty = await get_average_difficulty(session, course_id)
+    response = CustomCourseDetailResponse.model_validate(course)
+    response.average_difficulty = avg_difficulty
+    return response
 
 
 async def get_custom_courses(

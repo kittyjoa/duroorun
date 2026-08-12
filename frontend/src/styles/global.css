@@ -100,3 +100,25 @@ h2 { font-size:36px; letter-spacing:-1.5px; margin:8px 0 0; line-height:1.25; }
 .bottom-nav { position:absolute; z-index:10; bottom:0; left:0; right:0; height:65px; background:rgba(255,255,255,.97); border-top:1px solid #e4eae6; display:flex; align-items:center; justify-content:space-around; padding:0 10px 6px; }.bottom-nav a { width:52px; display:flex; flex-direction:column; align-items:center; gap:2px; color:#84938f; font-size:8px; }.bottom-nav i { font-family:Arial,sans-serif; font-style:normal; font-size:19px; height:24px; }.bottom-nav .active { color:var(--green); }.bottom-nav .run-fab { margin-top:-31px; color:var(--ink); }.bottom-nav .run-fab i { width:48px; height:48px; display:grid; place-items:center; background:var(--green); color:#fff; border:5px solid #f8faf7; border-radius:50%; font-size:12px; box-shadow:0 7px 18px rgba(13,177,75,.25); }.bottom-nav .run-fab span { margin-top:4px; }
 .preview-caption { align-self:center; color:var(--ink); }.preview-caption>span { color:var(--green); font-size:12px; letter-spacing:.17em; }.preview-caption h2 { font-size:52px; line-height:1.08; letter-spacing:-3px; margin:15px 0 22px; }.preview-caption p { color:#66807a; font-family:'Apple SD Gothic Neo',sans-serif; line-height:1.8; font-size:14px; }.preview-caption a { display:inline-block; margin-top:18px; padding-bottom:5px; color:var(--blue); border-bottom:1px solid #88a9bd; font-size:12px; }
 @media(max-width:760px){ .app-preview-page { padding:0; background:#f8faf7; }.phone-app { width:100%; height:100vh; max-width:430px; border:0; border-radius:0; box-shadow:none; }.preview-caption { display:none; } }
+
+/* 로그인 / 온보딩 / OAuth 콜백 */
+.login-page,.onboarding-page { min-height:100vh; display:flex; align-items:center; justify-content:center; background:linear-gradient(135deg,#f8f6ef,#dfece7); padding:24px; }
+.login-card,.onboarding-card { width:100%; max-width:400px; background:#fff; border-radius:16px; padding:40px 32px; box-shadow:0 20px 50px rgba(20,50,50,.12); text-align:center; }
+.login-eyebrow { color:var(--green); font-size:13px; letter-spacing:.08em; margin:0; }
+.login-card h1 { font-size:32px; letter-spacing:-1.5px; margin:14px 0 10px; }
+.login-desc,.onboarding-desc { color:#5c706c; font-family:'Apple SD Gothic Neo',sans-serif; font-size:14px; margin:0 0 28px; }
+.login-error { background:#fdecee; color:var(--red); font-size:13px; padding:10px 14px; border-radius:8px; margin:0 0 20px; }
+.login-buttons { display:flex; flex-direction:column; gap:12px; }
+.social-button { border:0; border-radius:8px; padding:14px; font-size:15px; font-weight:600; cursor:pointer; }
+.social-button.kakao { background:#fee500; color:#191600; }
+.social-button.naver { background:#03c75a; color:#fff; }
+.social-button.google { background:#fff; color:var(--ink); border:1px solid #dadce0; }
+.onboarding-card { text-align:left; }
+.onboarding-card h1 { font-size:26px; letter-spacing:-1px; margin:0 0 8px; text-align:center; }
+.onboarding-card .onboarding-desc { text-align:center; }
+.onboarding-card label { display:block; font-size:13px; color:#5c706c; margin:16px 0 6px; }
+.onboarding-card input { width:100%; padding:12px 14px; border:1px solid #dadce0; border-radius:8px; font-size:14px; }
+.onboarding-card .primary-button { width:100%; margin-top:26px; border:0; border-radius:8px; cursor:pointer; text-align:center; }
+.onboarding-card .primary-button:disabled { opacity:.6; cursor:not-allowed; }
+.onboarding-error { color:var(--red); font-size:13px; margin:14px 0 0; }
+.oauth-callback { min-height:100vh; display:flex; align-items:center; justify-content:center; color:var(--ink); font-family:'Apple SD Gothic Neo',sans-serif; }

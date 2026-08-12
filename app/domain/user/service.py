@@ -23,8 +23,8 @@ from app.core.security import (
     decode_token,
     decode_token_ignore_exp,
     delete_refresh_token,
+    rotate_refresh_jti,
     save_refresh_jti,
-    verify_and_rotate_refresh,
 )
 from app.domain.course.models import Course
 from app.domain.record.models import Record
@@ -34,6 +34,14 @@ from app.domain.user.models import ProviderType, SocialAccount, User
 _KAKAO_AUTH_URL = "https://kauth.kakao.com/oauth/authorize"
 _KAKAO_TOKEN_URL = "https://kauth.kakao.com/oauth/token"
 _KAKAO_USER_URL = "https://kapi.kakao.com/v2/user/me"
+
+_NAVER_AUTH_URL = "https://nid.naver.com/oauth2.0/authorize"
+_NAVER_TOKEN_URL = "https://nid.naver.com/oauth2.0/token"
+_NAVER_USER_URL = "https://openapi.naver.com/v1/nid/me"
+
+_GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+_GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+_GOOGLE_USER_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
 
 _ALLOWED_IMAGE_TYPES = {
     "image/jpeg": "jpg",
@@ -56,11 +64,11 @@ def _has_valid_image_signature(content_type: str, file_bytes: bytes) -> bool:
     return False
 
 
-async def get_kakao_auth_url(redis: Redis) -> str:
-    """카카오 OAuth 인증 URL을 생성하고 state를 Redis에 저장합니다."""
+async def get_kakao_auth_url(redis: Redis) -> tuple[str, str]:
+    """카카오 OAuth 인증 URL을 생성하고 state를 Redis에 저장합니다. (url, state)를 반환합니다."""
     state = secrets.token_urlsafe(32)
     try:
-        await redis.setex(f"oauth:state:{state}", settings.OAUTH_STATE_EXPIRE_SECONDS, "1")
+        await redis.setex(f"oauth:state:kakao:{state}", settings.OAUTH_STATE_EXPIRE_SECONDS, "1")
     except RedisError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -72,15 +80,22 @@ async def get_kakao_auth_url(redis: Redis) -> str:
         "response_type": "code",
         "state": state,
     })
-    return f"{_KAKAO_AUTH_URL}?{params}"
+    return f"{_KAKAO_AUTH_URL}?{params}", state
 
 
 async def kakao_login(
-    code: str, state: str, db: AsyncSession, redis: Redis
-) -> tuple[str, str, bool]:
-    """카카오 OAuth 콜백을 처리하고 (access_token, refresh_token, is_new_user)를 반환합니다."""
+    code: str, state: str, cookie_state: str | None, db: AsyncSession, redis: Redis
+) -> tuple[str, str]:
+    """카카오 OAuth 콜백을 처리하고 (access_token, refresh_token)을 반환합니다."""
+    # 콜백을 받은 브라우저가 로그인을 시작한 브라우저와 같은지 먼저 확인 (로그인 CSRF 방지)
+    if not cookie_state or cookie_state != state:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="유효하지 않은 요청입니다",
+        )
+
     # exists → delete 분리 시 레이스 컨디션 가능성이 있으므로 delete 결과로 한 번에 검증
-    state_key = f"oauth:state:{state}"
+    state_key = f"oauth:state:kakao:{state}"
     try:
         deleted = await redis.delete(state_key)
     except RedisError:
@@ -183,7 +198,290 @@ async def kakao_login(
     refresh_token, refresh_jti = create_refresh_token(user.user_id)
     await save_refresh_jti(user.user_id, refresh_jti, redis)
 
-    return access_token, refresh_token, is_new_user
+    return access_token, refresh_token
+
+
+async def get_naver_auth_url(redis: Redis) -> tuple[str, str]:
+    """네이버 OAuth 인증 URL을 생성하고 state를 Redis에 저장합니다. (url, state)를 반환합니다."""
+    state = secrets.token_urlsafe(32)
+    try:
+        await redis.setex(f"oauth:state:naver:{state}", settings.OAUTH_STATE_EXPIRE_SECONDS, "1")
+    except RedisError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="서버 오류가 발생했습니다. 잠시 후 다시 시도해주세요",
+        ) from None
+    params = urlencode({
+        "client_id": settings.NAVER_CLIENT_ID,
+        "redirect_uri": settings.NAVER_REDIRECT_URI,
+        "response_type": "code",
+        "state": state,
+    })
+    return f"{_NAVER_AUTH_URL}?{params}", state
+
+
+async def naver_login(
+    code: str, state: str, cookie_state: str | None, db: AsyncSession, redis: Redis
+) -> tuple[str, str]:
+    """네이버 OAuth 콜백을 처리하고 (access_token, refresh_token)을 반환합니다."""
+    # 콜백을 받은 브라우저가 로그인을 시작한 브라우저와 같은지 먼저 확인 (로그인 CSRF 방지)
+    if not cookie_state or cookie_state != state:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="유효하지 않은 요청입니다",
+        )
+
+    # exists → delete 분리 시 레이스 컨디션 가능성이 있으므로 delete 결과로 한 번에 검증
+    state_key = f"oauth:state:naver:{state}"
+    try:
+        deleted = await redis.delete(state_key)
+    except RedisError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="서버 오류가 발생했습니다. 잠시 후 다시 시도해주세요",
+        ) from None
+    if deleted == 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="유효하지 않은 state입니다",
+        )
+
+    try:
+        async with httpx.AsyncClient(timeout=settings.OAUTH_API_TIMEOUT) as client:
+            token_res = await client.post(
+                _NAVER_TOKEN_URL,
+                data={
+                    "grant_type": "authorization_code",
+                    "client_id": settings.NAVER_CLIENT_ID,
+                    "client_secret": settings.NAVER_CLIENT_SECRET,
+                    "redirect_uri": settings.NAVER_REDIRECT_URI,
+                    "code": code,
+                    "state": state,
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            if token_res.status_code != 200:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="네이버 토큰 발급에 실패했습니다",
+                )
+            naver_access_token = token_res.json().get("access_token")
+            if not naver_access_token:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="네이버 토큰 발급에 실패했습니다",
+                )
+
+            user_res = await client.get(
+                _NAVER_USER_URL,
+                headers={"Authorization": f"Bearer {naver_access_token}"},
+            )
+            if user_res.status_code != 200:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="네이버 유저 정보 조회에 실패했습니다",
+                )
+            user_info = user_res.json()
+    except httpx.TimeoutException:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="네이버 서버 응답이 지연되고 있습니다. 잠시 후 다시 시도해주세요",
+        ) from None
+    except httpx.RequestError:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="네이버 서버에 연결할 수 없습니다. 잠시 후 다시 시도해주세요",
+        ) from None
+
+    if user_info.get("resultcode") != "00":
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="네이버 유저 정보 조회에 실패했습니다",
+        )
+
+    naver_response = user_info.get("response") or {}
+    provider_uid = naver_response.get("id")
+    if not provider_uid:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="네이버 유저 정보 조회에 실패했습니다",
+        )
+    provider_uid = str(provider_uid)
+    name = naver_response.get("name")
+
+    result = await db.execute(
+        select(SocialAccount).where(
+            SocialAccount.provider_type == ProviderType.NAVER,
+            SocialAccount.provider_uid == provider_uid,
+        )
+    )
+    social = result.scalar_one_or_none()
+
+    is_new_user = social is None
+    if is_new_user:
+        try:
+            user = User(name=name)
+            db.add(user)
+            await db.flush()
+            db.add(SocialAccount(
+                user_id=user.user_id,
+                provider_type=ProviderType.NAVER,
+                provider_uid=provider_uid,
+            ))
+            await db.commit()
+        except IntegrityError:
+            await db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="이미 연동된 소셜 계정입니다",
+            ) from None
+    else:
+        result = await db.execute(select(User).where(User.user_id == social.user_id))
+        user = result.scalar_one()
+
+    access_token = create_access_token(user.user_id)
+    refresh_token, refresh_jti = create_refresh_token(user.user_id)
+    await save_refresh_jti(user.user_id, refresh_jti, redis)
+
+    return access_token, refresh_token
+
+
+async def get_google_auth_url(redis: Redis) -> tuple[str, str]:
+    """구글 OAuth 인증 URL을 생성하고 state를 Redis에 저장합니다. (url, state)를 반환합니다."""
+    state = secrets.token_urlsafe(32)
+    try:
+        await redis.setex(f"oauth:state:google:{state}", settings.OAUTH_STATE_EXPIRE_SECONDS, "1")
+    except RedisError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="서버 오류가 발생했습니다. 잠시 후 다시 시도해주세요",
+        ) from None
+    params = urlencode({
+        "client_id": settings.GOOGLE_CLIENT_ID,
+        "redirect_uri": settings.GOOGLE_REDIRECT_URI,
+        "response_type": "code",
+        "scope": "openid profile",
+        "state": state,
+    })
+    return f"{_GOOGLE_AUTH_URL}?{params}", state
+
+
+async def google_login(
+    code: str, state: str, cookie_state: str | None, db: AsyncSession, redis: Redis
+) -> tuple[str, str]:
+    """구글 OAuth 콜백을 처리하고 (access_token, refresh_token)을 반환합니다."""
+    # 콜백을 받은 브라우저가 로그인을 시작한 브라우저와 같은지 먼저 확인 (로그인 CSRF 방지)
+    if not cookie_state or cookie_state != state:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="유효하지 않은 요청입니다",
+        )
+
+    # exists → delete 분리 시 레이스 컨디션 가능성이 있으므로 delete 결과로 한 번에 검증
+    state_key = f"oauth:state:google:{state}"
+    try:
+        deleted = await redis.delete(state_key)
+    except RedisError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="서버 오류가 발생했습니다. 잠시 후 다시 시도해주세요",
+        ) from None
+    if deleted == 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="유효하지 않은 state입니다",
+        )
+
+    try:
+        async with httpx.AsyncClient(timeout=settings.OAUTH_API_TIMEOUT) as client:
+            token_res = await client.post(
+                _GOOGLE_TOKEN_URL,
+                data={
+                    "grant_type": "authorization_code",
+                    "client_id": settings.GOOGLE_CLIENT_ID,
+                    "client_secret": settings.GOOGLE_CLIENT_SECRET,
+                    "redirect_uri": settings.GOOGLE_REDIRECT_URI,
+                    "code": code,
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            if token_res.status_code != 200:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="구글 토큰 발급에 실패했습니다",
+                )
+            google_access_token = token_res.json().get("access_token")
+            if not google_access_token:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="구글 토큰 발급에 실패했습니다",
+                )
+
+            user_res = await client.get(
+                _GOOGLE_USER_URL,
+                headers={"Authorization": f"Bearer {google_access_token}"},
+            )
+            if user_res.status_code != 200:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="구글 유저 정보 조회에 실패했습니다",
+                )
+            user_info = user_res.json()
+    except httpx.TimeoutException:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="구글 서버 응답이 지연되고 있습니다. 잠시 후 다시 시도해주세요",
+        ) from None
+    except httpx.RequestError:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="구글 서버에 연결할 수 없습니다. 잠시 후 다시 시도해주세요",
+        ) from None
+
+    provider_uid = user_info.get("sub")
+    if not provider_uid:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="구글 유저 정보 조회에 실패했습니다",
+        )
+    provider_uid = str(provider_uid)
+    name = user_info.get("name")
+
+    result = await db.execute(
+        select(SocialAccount).where(
+            SocialAccount.provider_type == ProviderType.GOOGLE,
+            SocialAccount.provider_uid == provider_uid,
+        )
+    )
+    social = result.scalar_one_or_none()
+
+    is_new_user = social is None
+    if is_new_user:
+        try:
+            user = User(name=name)
+            db.add(user)
+            await db.flush()
+            db.add(SocialAccount(
+                user_id=user.user_id,
+                provider_type=ProviderType.GOOGLE,
+                provider_uid=provider_uid,
+            ))
+            await db.commit()
+        except IntegrityError:
+            await db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="이미 연동된 소셜 계정입니다",
+            ) from None
+    else:
+        result = await db.execute(select(User).where(User.user_id == social.user_id))
+        user = result.scalar_one()
+
+    access_token = create_access_token(user.user_id)
+    refresh_token, refresh_jti = create_refresh_token(user.user_id)
+    await save_refresh_jti(user.user_id, refresh_jti, redis)
+
+    return access_token, refresh_token
 
 
 async def refresh_tokens(refresh_token: str, redis: Redis) -> tuple[str, str]:
@@ -204,16 +502,16 @@ async def refresh_tokens(refresh_token: str, redis: Redis) -> tuple[str, str]:
             detail="유효하지 않은 토큰입니다",
         )
 
-    is_valid = await verify_and_rotate_refresh(user_id, incoming_jti, redis)
+    new_access_token = create_access_token(user_id)
+    new_refresh_token, new_jti = create_refresh_token(user_id)
+
+    # 검증(GET)과 교체(SET)를 원자적으로 처리 — 동시 재발급 요청 간 경쟁 조건 방지
+    is_valid = await rotate_refresh_jti(user_id, incoming_jti, new_jti, redis)
     if not is_valid:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="토큰이 탈취되었거나 만료되었습니다. 다시 로그인해주세요",
         )
-
-    new_access_token = create_access_token(user_id)
-    new_refresh_token, new_jti = create_refresh_token(user_id)
-    await save_refresh_jti(user_id, new_jti, redis)
 
     return new_access_token, new_refresh_token
 

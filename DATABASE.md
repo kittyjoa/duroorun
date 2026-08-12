@@ -191,13 +191,13 @@ alembic upgrade head  # 로컬 반영
 | review_id | PK | 리뷰 ID |
 | course_id | FK → courses (index) | 코스 |
 | user_id | FK → users nullable (index) | 작성자. 탈퇴 시 서비스 레이어에서 명시적 NULL 처리 |
-| contents | TEXT | 리뷰 내용 |
-| difficulty_rate | ENUM | 체감 난이도 (`EASY` / `NORMAL` / `HARD`) |
+| content | TEXT | 리뷰 내용 |
+| difficulty | ENUM | 체감 난이도 (`EASY` / `NORMAL` / `HARD`) |
 | created_at | TIMESTAMP | 작성일 |
 | updated_at | TIMESTAMP nullable | 수정일 |
 
 > 완주(`records.is_completed = true`)한 유저만 해당 코스 리뷰 작성 가능  
-> `difficulty_rate`는 유저의 주관적 체감 난이도 — `courses.difficulty`(공식 난이도)와 별도로 표시  
+> `difficulty`는 유저의 주관적 체감 난이도 — `courses.difficulty`(공식 난이도)와 별도로 표시  
 > UNIQUE INDEX on (course_id, user_id) — 일반 유저 간 코스당 리뷰 1개 제한 목적. PostgreSQL에서 NULL은 UNIQUE 제약에서 서로 다른 값으로 취급되므로 탈퇴 유저(`user_id = NULL`) 리뷰가 여러 개 쌓여도 인덱스 충돌 없음  
 > **탈퇴 처리**: 서비스 레이어에서 `user_id`를 명시적으로 NULL 업데이트. users는 Soft Delete(deleted_at 기록)이므로 DB 트리거 미발동. 리뷰 내용과 난이도 평점은 보존하되 API 응답에서 제외 (`user_id IS NULL` 필터링). 통계 데이터로만 활용
 

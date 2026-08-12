@@ -29,8 +29,12 @@ const OAuthCallback = () => {
         // is_new_user 대신 실제 프로필(닉네임/거주지) 값 기준으로 온보딩 필요 여부를 판단한다.
         // 온보딩을 중간에 그만둔 유저도 다음 로그인 때 다시 온보딩으로 보내기 위함.
         const res = await apiFetch('/v1/users/me');
-        const user = res.ok ? await res.json() : null;
-        const needsOnboarding = !user || !user.nickname || !user.location;
+        if (!res.ok) {
+          // 서버 오류/인증 문제까지 "온보딩 미완료"로 오판하지 않도록 여기서 바로 실패 처리
+          throw new Error('프로필 조회 실패');
+        }
+        const user = await res.json();
+        const needsOnboarding = !user.nickname || !user.location;
 
         navigate(needsOnboarding ? '/onboarding' : '/', { replace: true });
       } catch {

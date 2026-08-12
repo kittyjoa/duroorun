@@ -10,12 +10,16 @@ const startLogin = (provider) => {
 };
 
 const Login = () => {
+  const error = new URLSearchParams(window.location.search).get('error');
+
   return (
     <div className="login-page">
       <div className="login-card">
         <p className="login-eyebrow">두루런과 함께</p>
         <h1>바다를 따라, 나답게 달려요</h1>
         <p className="login-desc">소셜 계정으로 간편하게 시작해보세요</p>
+
+        {error && <p className="login-error">{error}</p>}
 
         <div className="login-buttons">
           {PROVIDERS.map(({ key, label }) => (

@@ -107,6 +107,7 @@ h2 { font-size:36px; letter-spacing:-1.5px; margin:8px 0 0; line-height:1.25; }
 .login-eyebrow { color:var(--green); font-size:13px; letter-spacing:.08em; margin:0; }
 .login-card h1 { font-size:32px; letter-spacing:-1.5px; margin:14px 0 10px; }
 .login-desc,.onboarding-desc { color:#5c706c; font-family:'Apple SD Gothic Neo',sans-serif; font-size:14px; margin:0 0 28px; }
+.login-error { background:#fdecee; color:var(--red); font-size:13px; padding:10px 14px; border-radius:8px; margin:0 0 20px; }
 .login-buttons { display:flex; flex-direction:column; gap:12px; }
 .social-button { border:0; border-radius:8px; padding:14px; font-size:15px; font-weight:600; cursor:pointer; }
 .social-button.kakao { background:#fee500; color:#191600; }

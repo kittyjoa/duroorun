@@ -14,7 +14,7 @@ const buildRequest = (options, accessToken) => ({
   },
 });
 
-const refreshAccessToken = async () => {
+export const refreshAccessToken = async () => {
   const res = await fetch(`/api${REFRESH_ENDPOINT}`, {
     method: 'POST',
     credentials: 'include',
@@ -44,3 +44,4 @@ export const apiFetch = async (url, options = {}) => {
 };
 
 export { getAccessToken, setAccessToken, clearAccessToken };
+

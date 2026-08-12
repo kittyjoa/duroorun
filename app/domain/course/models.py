@@ -35,6 +35,8 @@ class Difficulty(enum.StrEnum):
     HARD = "HARD"
 
 
+# 코스 필터 관련 인덱스는 현재 규모에서 장점이 거의 없어 후순위
+# (전체 조회해도 괜찮은 규모고, 인덱스는 읽기 빠른대신 쓰기 느려짐)
 class Course(Base):
     """코스 (두루누비 공식 코스 + 유저 커스텀 코스)."""
 
@@ -58,9 +60,8 @@ class Course(Base):
     sigun: Mapped[str | None] = mapped_column(String, nullable=True)
     brd_div: Mapped[str | None] = mapped_column(String, nullable=True)
     # 완주 인증 검증 기준점 — 런타임에 두루누비 API 미호출하고 DB 값만 사용
-    # TODO: seed_courses.py가 항상 값을 채운다는 전제. record의 완주 인증(두 좌표 사이 거리)이
-    # 이 컬럼을 기준점으로 쓰므로, None 케이스 처리 정책을 record PR과 맞춘 뒤
-    # 여기 nullable=True를 유지할지 재검토
+    # 팀 결정(2026-08-02): GPX 파싱 실패로 좌표가 None인 DRNB 코스는
+    # 완주 인증을 에러로 막고 알림 문구를 명확히 띄우기로 함. nullable=True는 유지
     start_lat: Mapped[float | None] = mapped_column(Float, nullable=True)
     start_lng: Mapped[float | None] = mapped_column(Float, nullable=True)
     end_lat: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -83,12 +84,22 @@ class Course(Base):
     images: Mapped[list["CourseImage"]] = relationship(
         back_populates="course",
         cascade="all, delete-orphan",
+        order_by="CourseImage.image_id",
     )
     # CourseFacility는 facility 도메인에 정의 — 문자열 참조로 순환 import 방지
     course_facilities: Mapped[list["CourseFacility"]] = relationship(
         back_populates="course",
         cascade="all, delete-orphan",
     )
+
+    @property
+    def has_verification_coords(self) -> bool:
+        """완주 인증 기준점(시작/종료 좌표)이 모두 채워져 있는지.
+
+        DRNB 코스는 GPX 파싱 실패 시 None으로 남을 수 있음
+        — record/프론트가 이 값으로 완주 인증 불가 코스를 판단해 에러/알림을 띄움.
+        """
+        return None not in (self.start_lat, self.start_lng, self.end_lat, self.end_lng)
 
 
 class CourseWaypoint(Base):

@@ -254,13 +254,13 @@ alembic upgrade head  # 로컬 반영
 | latitude | FLOAT | 위도 |
 | longitude | FLOAT | 경도 |
 | kakao_place_id | VARCHAR nullable | 카카오맵 장소 ID (상세정보 연동용) |
-| place_url | VARCHAR nullable | 카카오맵 장소 URL |
 | is_active | BOOLEAN | 활성 여부. 기본값 `true` |
 | created_at | TIMESTAMP | 등록일 |
 | updated_at | TIMESTAMP nullable | 수정일 |
 
 > 관리자가 직접 등록/관리  
-> `kakao_place_id`, `place_url`이 있으면 카카오맵 상세정보 연동 가능
+> `place_url`은 컬럼이 아니라 `kakao_place_id`로 항상 계산 가능한 값이라 `Facility.place_url` property로 조립해서 응답에만 노출 (DB에 저장 안 함)  
+> UNIQUE INDEX on (kakao_place_id, facility_type) — 같은 장소를 같은 시설 타입으로 중복 등록하는 것 방지 (NULL은 서로 다른 값 취급이라 kakao_place_id 없는 시설은 제약 대상 아님)
 
 ---
 
@@ -300,7 +300,7 @@ reviews        ──< review_images
 
 | 항목 | 내용 |
 |------|------|
-| 두루누비 코스 이미지 | API 응답에 이미지 필드 포함 여부 미확인. 확인 후 반영 |
+| ~~두루누비 코스 이미지~~ |`courseList` 응답 필드 실측 확인 결과 이미지 필드 없음. DRNB 코스 이미지는 API 미제공 — 일단 `course_images`는 CUSTOM 코스 전용 유지 |
 | GPX URL 접근 방식 | 시드 스크립트 작성 시 `gpxpath` URL에 직접 GET 가능한지 / 별도 인증 헤더 필요한지 확인 필요 |
 | 인덱스 추가 | 각 도메인 작업 시 조회 패턴에 맞춰 인덱스 추가 검토 (예: `records.user_id`, `records.course_id`, `records.is_completed`, `courses.course_type/sigun/difficulty`) |
 

@@ -69,6 +69,10 @@ class Settings(BaseSettings):
     NICKNAME_MAX_LENGTH: int = 10
     LOCATION_MAX_LENGTH: int = 50
 
+    # 앱 스케줄러 (기본 false — 로컬 서버 켤때마다 두루누비 API 호출되는거 방지.
+    # 배포 환경에서는 docker-compose.yml의 backend 서비스에서 true로)
+    SEED_ON_STARTUP: bool = False
+
     @property
     def is_production(self) -> bool:
         return self.ENVIRONMENT == "production"

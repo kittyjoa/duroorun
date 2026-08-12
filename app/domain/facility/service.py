@@ -2,11 +2,12 @@
 
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.domain.course.models import Course
-from app.domain.facility.models import CourseFacility, Facility
+from app.domain.facility.models import CourseFacility, Facility, FacilityType
 from app.domain.facility.schemas import (
     FacilityCreateRequest,
     FacilityListResponse,
@@ -14,19 +15,24 @@ from app.domain.facility.schemas import (
     FacilityUpdateRequest,
 )
 
-_KAKAO_PLACE_URL_TEMPLATE = "https://place.map.kakao.com/{}"
-
 # Facility 컬럼이 nullable=False라 부분 수정 시에도 null 허용 X
 _REQUIRED_FIELDS = ("facility_type", "facility_name", "latitude", "longitude", "is_active")
 
+_UNIQUE_VIOLATION_SQLSTATE = "23505"
+_DUPLICATE_FACILITY_CONSTRAINT = "uq_facility_kakao_place_type"
 
-def _build_place_url(kakao_place_id: str | None) -> str | None:
-    """kakao_place_id로 카카오맵 장소 상세 URL을 조립.
 
-    ㅡ 카카오 Local API에는 id 기반 상세조회 엔드포인트가 없고,
-    장소 페이지 URL은 고정 패턴이라 API 호출 없이 문자열만 조립.
+def _is_duplicate_facility_conflict(err: IntegrityError) -> bool:
+    """IntegrityError가 (kakao_place_id, facility_type) unique 위반인지 확인.
+
+    ㅡ DB 관련 위반까지 "이미 등록된 장소" 409로 뭉개지 않도록,
+      sqlstate와 constraint 이름 확인해서 이 케이스만 정확히 골라냄.
     """
-    return _KAKAO_PLACE_URL_TEMPLATE.format(kakao_place_id) if kakao_place_id else None
+    orig = err.orig
+    if getattr(orig, "sqlstate", None) != _UNIQUE_VIOLATION_SQLSTATE:
+        return False
+    diag = getattr(orig, "diag", None)
+    return getattr(diag, "constraint_name", None) == _DUPLICATE_FACILITY_CONSTRAINT
 
 
 async def _validate_course_ids(session: AsyncSession, course_ids: list[int]) -> None:
@@ -68,25 +74,72 @@ async def _get_facility_for_update(session: AsyncSession, facility_id: int) -> F
     return facility
 
 
+async def _find_inactive_facility(
+    session: AsyncSession, kakao_place_id: str | None, facility_type: FacilityType
+) -> Facility | None:
+    """같은 (kakao_place_id, facility_type) 조합의 비활성 시설을 찾음 (재활성화용).
+
+    ㅡ kakao_place_id가 None이면 unique 제약 대상 밖이라 검색하지 않음.
+    ㅡ with_for_update: 동시에 같은 조합을 재등록하는 요청이 겹쳐도 하나씩 순서대로
+      처리되게 락을 걸어, 두 요청이 같은 row를 동시에 재활성화하다 매핑이 유실되는 것 방지.
+    """
+    if kakao_place_id is None:
+        return None
+    result = await session.execute(
+        select(Facility)
+        .where(
+            Facility.kakao_place_id == kakao_place_id,
+            Facility.facility_type == facility_type,
+            Facility.is_active.is_(False),
+        )
+        .options(selectinload(Facility.course_facilities))
+        .with_for_update()
+    )
+    return result.scalar_one_or_none()
+
+
 async def create_facility(session: AsyncSession, body: FacilityCreateRequest) -> FacilityResponse:
-    """편의시설을 등록."""
+    """편의시설을 등록.
+
+    ㅡ 같은 (kakao_place_id, facility_type) 조합의 비활성 시설이 있으면 새로 만들지 않고
+      그 시설을 재활성화 + 최신 정보로 갱신 (비활성 row가 재등록마다 계속 쌓이는 것 방지).
+    """
     # course_ids 중복 제거 → 존재 검증 → 'Facility 생성 + CourseFacility 매핑' 저장
     course_ids = list(dict.fromkeys(body.course_ids))
     await _validate_course_ids(session, course_ids)
 
-    facility = Facility(
-        facility_type=body.facility_type,
-        facility_name=body.facility_name,
-        facility_address=body.facility_address,
-        latitude=body.latitude,
-        longitude=body.longitude,
-        kakao_place_id=body.kakao_place_id,
-        place_url=_build_place_url(body.kakao_place_id),
-    )
+    facility = await _find_inactive_facility(session, body.kakao_place_id, body.facility_type)
+    if facility is not None:
+        facility.is_active = True
+        facility.facility_name = body.facility_name
+        facility.facility_address = body.facility_address
+        facility.latitude = body.latitude
+        facility.longitude = body.longitude
+        facility.course_facilities.clear()
+        await session.flush()
+    else:
+        facility = Facility(
+            facility_type=body.facility_type,
+            facility_name=body.facility_name,
+            facility_address=body.facility_address,
+            latitude=body.latitude,
+            longitude=body.longitude,
+            kakao_place_id=body.kakao_place_id,
+        )
+        session.add(facility)
+
     facility.course_facilities = [CourseFacility(course_id=course_id) for course_id in course_ids]
 
-    session.add(facility)
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError as err:
+        await session.rollback()
+        if not _is_duplicate_facility_conflict(err):
+            raise
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="이미 등록된 장소+시설타입 조합입니다.",
+        ) from err
     await session.refresh(facility)
     return FacilityResponse.model_validate(facility)
 
@@ -151,8 +204,6 @@ async def update_facility(
             )
     for field, value in update_data.items():
         setattr(facility, field, value)
-    if "kakao_place_id" in update_data:
-        facility.place_url = _build_place_url(facility.kakao_place_id)
 
     # course_ids는 exclude_unset로 처리하면 안되어서 직접 처리
     # 프론트가 course_ids 필드 아예 안 넣으면: None ㅡ 코스연결 건들지마라
@@ -167,7 +218,16 @@ async def update_facility(
             CourseFacility(course_id=course_id) for course_id in course_ids
         )
 
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError as err:
+        await session.rollback()
+        if not _is_duplicate_facility_conflict(err):
+            raise
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="이미 등록된 장소+시설타입 조합입니다.",
+        ) from err
     await session.refresh(facility)
     return FacilityResponse.model_validate(facility)
 

@@ -31,14 +31,14 @@ def _haversine_distance_m(lat1: float, lng1: float, lat2: float, lng2: float) ->
 
 
 def _check_completion(
-        user_start_lat: float,
-        user_start_lng: float,
-        user_end_lat: float,
-        user_end_lng: float,
-        course_start_lat: float | None,
-        course_start_lng: float | None,
-        course_end_lat: float | None,
-        course_end_lng: float | None,
+    user_start_lat: float,
+    user_start_lng: float,
+    user_end_lat: float,
+    user_end_lng: float,
+    course_start_lat: float | None,
+    course_start_lng: float | None,
+    course_end_lat: float | None,
+    course_end_lng: float | None,
 ) -> bool:
     """유저의 시작/종료 GPS가 코스 시작/종료 지점 허용 오차 내인지 확인.
 
@@ -52,9 +52,7 @@ def _check_completion(
     forward_start = _haversine_distance_m(
         user_start_lat, user_start_lng, course_start_lat, course_start_lng
     )
-    forward_end = _haversine_distance_m(
-        user_end_lat, user_end_lng, course_end_lat, course_end_lng
-    )
+    forward_end = _haversine_distance_m(user_end_lat, user_end_lng, course_end_lat, course_end_lng)
     if (
         forward_start <= settings.COMPLETION_RADIUS_M
         and forward_end <= settings.COMPLETION_RADIUS_M
@@ -74,9 +72,9 @@ def _check_completion(
 
 
 async def start_record(
-        session: AsyncSession,
-        user_id: int,
-        body: RecordStartRequest,
+    session: AsyncSession,
+    user_id: int,
+    body: RecordStartRequest,
 ) -> RecordResponse:
     """러닝시작 - 기록생성"""
     course = await session.get(Course, body.course_id)
@@ -113,10 +111,10 @@ async def start_record(
 
 
 async def end_record(
-        session: AsyncSession,
-        user_id: int,
-        record_id: int,
-        body: RecordEndRequest,
+    session: AsyncSession,
+    user_id: int,
+    record_id: int,
+    body: RecordEndRequest,
 ) -> RecordResponse:
     """러닝종료 - 기록 업데이트 및 완주인증"""
     # 기록조회
@@ -140,7 +138,7 @@ async def end_record(
         )
     # 종료시점 설정 및 기록시간 계산
     record.ended_at = datetime.now(UTC)
-    if record.paused_at is not None: # 일시정지 중 종료
+    if record.paused_at is not None:  # 일시정지 중 종료
         record.total_paused_seconds += int((record.ended_at - record.paused_at).total_seconds())
         record.paused_at = None
     record.duration_seconds = (
@@ -152,7 +150,7 @@ async def end_record(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="러닝시간이 너무 짧아 기록되지 않았습니다.",
         )
-    if record.duration_seconds > 86400: # 24시간 초과 시
+    if record.duration_seconds > 86400:  # 24시간 초과 시
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="비정상적인 기록으로 저장되지 않았습니다.",
@@ -186,9 +184,9 @@ async def end_record(
 
 
 async def pause_record(
-        session: AsyncSession,
-        user_id: int,
-        record_id: int,
+    session: AsyncSession,
+    user_id: int,
+    record_id: int,
 ) -> RecordResponse:
     """러닝 일시정지"""
     result = await session.execute(
@@ -218,9 +216,9 @@ async def pause_record(
 
 
 async def resume_record(
-        session: AsyncSession,
-        user_id: int,
-        record_id: int,
+    session: AsyncSession,
+    user_id: int,
+    record_id: int,
 ) -> RecordResponse:
     """러닝 재시작"""
     result = await session.execute(
@@ -252,9 +250,9 @@ async def resume_record(
 
 
 async def delete_record(
-        session: AsyncSession,
-        user_id: int,
-        record_id: int,
+    session: AsyncSession,
+    user_id: int,
+    record_id: int,
 ) -> None:
     """러닝기록 삭제"""
     result = await session.execute(
@@ -274,9 +272,9 @@ async def delete_record(
 
 
 async def get_record(
-        session: AsyncSession,
-        user_id: int,
-        record_id: int,
+    session: AsyncSession,
+    user_id: int,
+    record_id: int,
 ) -> RecordResponse:
     """러닝기록 단건 조회(기록 1개 상세)"""
     record = await session.get(Record, record_id)
@@ -292,10 +290,10 @@ async def get_record(
 
 
 async def get_records(
-        session: AsyncSession,
-        user_id: int,
-        page: int,
-        size: int,
+    session: AsyncSession,
+    user_id: int,
+    page: int,
+    size: int,
 ) -> RecordListResponse:
     """내 러닝기록 조회(내 기록 전체리스트)"""
     offset = (page - 1) * size
@@ -317,4 +315,3 @@ async def get_records(
         page=page,
         size=size,
     )
-

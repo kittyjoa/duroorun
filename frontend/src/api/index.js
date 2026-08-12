@@ -8,7 +8,8 @@ const buildRequest = (options, accessToken) => ({
   ...options,
   credentials: 'include',
   headers: {
-    'Content-Type': 'application/json',
+    // FormData면 브라우저가 boundary 포함한 Content-Type을 직접 설정해야 하므로 건너뜀
+    ...(!(options.body instanceof FormData) && { 'Content-Type': 'application/json' }),
     ...(accessToken && { Authorization: `Bearer ${accessToken}` }),
     ...options.headers,
   },

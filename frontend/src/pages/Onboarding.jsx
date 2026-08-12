@@ -15,20 +15,24 @@ const Onboarding = () => {
     setError('');
     setSubmitting(true);
 
-    const res = await apiFetch('/v1/users/me', {
-      method: 'PUT',
-      body: JSON.stringify({ nickname, location }),
-    });
+    try {
+      const res = await apiFetch('/v1/users/me', {
+        method: 'PUT',
+        body: JSON.stringify({ nickname, location }),
+      });
 
-    setSubmitting(false);
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        setError(data?.detail ?? '가입 완료 중 오류가 발생했어요');
+        return;
+      }
 
-    if (!res.ok) {
-      const data = await res.json().catch(() => null);
-      setError(data?.detail ?? '가입 완료 중 오류가 발생했어요');
-      return;
+      navigate('/', { replace: true });
+    } catch {
+      setError('서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.');
+    } finally {
+      setSubmitting(false);
     }
-
-    navigate('/', { replace: true });
   };
 
   return (

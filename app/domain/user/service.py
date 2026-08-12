@@ -64,11 +64,11 @@ def _has_valid_image_signature(content_type: str, file_bytes: bytes) -> bool:
     return False
 
 
-async def get_kakao_auth_url(redis: Redis) -> str:
-    """카카오 OAuth 인증 URL을 생성하고 state를 Redis에 저장합니다."""
+async def get_kakao_auth_url(redis: Redis) -> tuple[str, str]:
+    """카카오 OAuth 인증 URL을 생성하고 state를 Redis에 저장합니다. (url, state)를 반환합니다."""
     state = secrets.token_urlsafe(32)
     try:
-        await redis.setex(f"oauth:state:{state}", settings.OAUTH_STATE_EXPIRE_SECONDS, "1")
+        await redis.setex(f"oauth:state:kakao:{state}", settings.OAUTH_STATE_EXPIRE_SECONDS, "1")
     except RedisError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -80,15 +80,22 @@ async def get_kakao_auth_url(redis: Redis) -> str:
         "response_type": "code",
         "state": state,
     })
-    return f"{_KAKAO_AUTH_URL}?{params}"
+    return f"{_KAKAO_AUTH_URL}?{params}", state
 
 
 async def kakao_login(
-    code: str, state: str, db: AsyncSession, redis: Redis
+    code: str, state: str, cookie_state: str | None, db: AsyncSession, redis: Redis
 ) -> tuple[str, str, bool]:
     """카카오 OAuth 콜백을 처리하고 (access_token, refresh_token, is_new_user)를 반환합니다."""
+    # 콜백을 받은 브라우저가 로그인을 시작한 브라우저와 같은지 먼저 확인 (로그인 CSRF 방지)
+    if not cookie_state or cookie_state != state:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="유효하지 않은 요청입니다",
+        )
+
     # exists → delete 분리 시 레이스 컨디션 가능성이 있으므로 delete 결과로 한 번에 검증
-    state_key = f"oauth:state:{state}"
+    state_key = f"oauth:state:kakao:{state}"
     try:
         deleted = await redis.delete(state_key)
     except RedisError:
@@ -194,11 +201,11 @@ async def kakao_login(
     return access_token, refresh_token, is_new_user
 
 
-async def get_naver_auth_url(redis: Redis) -> str:
-    """네이버 OAuth 인증 URL을 생성하고 state를 Redis에 저장합니다."""
+async def get_naver_auth_url(redis: Redis) -> tuple[str, str]:
+    """네이버 OAuth 인증 URL을 생성하고 state를 Redis에 저장합니다. (url, state)를 반환합니다."""
     state = secrets.token_urlsafe(32)
     try:
-        await redis.setex(f"oauth:state:{state}", settings.OAUTH_STATE_EXPIRE_SECONDS, "1")
+        await redis.setex(f"oauth:state:naver:{state}", settings.OAUTH_STATE_EXPIRE_SECONDS, "1")
     except RedisError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -210,15 +217,22 @@ async def get_naver_auth_url(redis: Redis) -> str:
         "response_type": "code",
         "state": state,
     })
-    return f"{_NAVER_AUTH_URL}?{params}"
+    return f"{_NAVER_AUTH_URL}?{params}", state
 
 
 async def naver_login(
-    code: str, state: str, db: AsyncSession, redis: Redis
+    code: str, state: str, cookie_state: str | None, db: AsyncSession, redis: Redis
 ) -> tuple[str, str, bool]:
     """네이버 OAuth 콜백을 처리하고 (access_token, refresh_token, is_new_user)를 반환합니다."""
+    # 콜백을 받은 브라우저가 로그인을 시작한 브라우저와 같은지 먼저 확인 (로그인 CSRF 방지)
+    if not cookie_state or cookie_state != state:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="유효하지 않은 요청입니다",
+        )
+
     # exists → delete 분리 시 레이스 컨디션 가능성이 있으므로 delete 결과로 한 번에 검증
-    state_key = f"oauth:state:{state}"
+    state_key = f"oauth:state:naver:{state}"
     try:
         deleted = await redis.delete(state_key)
     except RedisError:
@@ -332,11 +346,11 @@ async def naver_login(
     return access_token, refresh_token, is_new_user
 
 
-async def get_google_auth_url(redis: Redis) -> str:
-    """구글 OAuth 인증 URL을 생성하고 state를 Redis에 저장합니다."""
+async def get_google_auth_url(redis: Redis) -> tuple[str, str]:
+    """구글 OAuth 인증 URL을 생성하고 state를 Redis에 저장합니다. (url, state)를 반환합니다."""
     state = secrets.token_urlsafe(32)
     try:
-        await redis.setex(f"oauth:state:{state}", settings.OAUTH_STATE_EXPIRE_SECONDS, "1")
+        await redis.setex(f"oauth:state:google:{state}", settings.OAUTH_STATE_EXPIRE_SECONDS, "1")
     except RedisError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -349,15 +363,22 @@ async def get_google_auth_url(redis: Redis) -> str:
         "scope": "openid profile",
         "state": state,
     })
-    return f"{_GOOGLE_AUTH_URL}?{params}"
+    return f"{_GOOGLE_AUTH_URL}?{params}", state
 
 
 async def google_login(
-    code: str, state: str, db: AsyncSession, redis: Redis
+    code: str, state: str, cookie_state: str | None, db: AsyncSession, redis: Redis
 ) -> tuple[str, str, bool]:
     """구글 OAuth 콜백을 처리하고 (access_token, refresh_token, is_new_user)를 반환합니다."""
+    # 콜백을 받은 브라우저가 로그인을 시작한 브라우저와 같은지 먼저 확인 (로그인 CSRF 방지)
+    if not cookie_state or cookie_state != state:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="유효하지 않은 요청입니다",
+        )
+
     # exists → delete 분리 시 레이스 컨디션 가능성이 있으므로 delete 결과로 한 번에 검증
-    state_key = f"oauth:state:{state}"
+    state_key = f"oauth:state:google:{state}"
     try:
         deleted = await redis.delete(state_key)
     except RedisError:

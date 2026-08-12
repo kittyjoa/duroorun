@@ -38,6 +38,28 @@ from app.redis import get_redis
 router = APIRouter(tags=["auth"])
 
 _REFRESH_COOKIE_PATH = "/api/v1/auth/refresh"
+_OAUTH_STATE_COOKIE_PATH = "/api/v1/auth"
+
+
+def _oauth_redirect_start(url: str, state: str) -> RedirectResponse:
+    """소셜사 인증 페이지로 리다이렉트하며, state를 쿠키에도 심어 콜백 브라우저와 대조합니다.
+
+    Redis 저장만으로는 "그 state가 실존하는지"만 확인될 뿐, 콜백을 받은 브라우저가
+    로그인을 시작한 그 브라우저인지는 보장 못 함 — 공격자가 자신의 code/state를 담은
+    콜백 URL을 피해자에게 전달하면 피해자가 공격자 계정으로 로그인되는 로그인 CSRF가
+    가능해짐. 짧게 만료되는 httpOnly 쿠키로 브라우저를 묶어 이를 막는다.
+    """
+    redirect = RedirectResponse(url)
+    redirect.set_cookie(
+        key="oauth_state",
+        value=state,
+        httponly=True,
+        secure=settings.is_production,
+        samesite="none" if settings.is_production else "lax",
+        max_age=settings.OAUTH_STATE_EXPIRE_SECONDS,
+        path=_OAUTH_STATE_COOKIE_PATH,
+    )
+    return redirect
 
 
 def _oauth_success_redirect(refresh_token: str, is_new_user: bool) -> RedirectResponse:
@@ -59,32 +81,39 @@ def _oauth_success_redirect(refresh_token: str, is_new_user: bool) -> RedirectRe
         max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400,
         path=_REFRESH_COOKIE_PATH,
     )
+    redirect.delete_cookie(key="oauth_state", path=_OAUTH_STATE_COOKIE_PATH)
     return redirect
 
 
 def _oauth_error_redirect(detail: str) -> RedirectResponse:
     """소셜 로그인 실패 시 raw JSON 대신 프론트 로그인 페이지로 리다이렉트합니다."""
     params = urlencode({"error": detail})
-    return RedirectResponse(f"{settings.FRONTEND_URL}/login?{params}")
+    redirect = RedirectResponse(f"{settings.FRONTEND_URL}/login?{params}")
+    redirect.delete_cookie(key="oauth_state", path=_OAUTH_STATE_COOKIE_PATH)
+    return redirect
 
 
 @router.get("/auth/kakao", summary="카카오 로그인 페이지로 리다이렉트")
 async def kakao_auth(redis: Redis = Depends(get_redis)) -> RedirectResponse:
     """카카오 OAuth 인증 페이지로 리다이렉트합니다."""
-    url = await get_kakao_auth_url(redis)
-    return RedirectResponse(url)
+    url, state = await get_kakao_auth_url(redis)
+    return _oauth_redirect_start(url, state)
 
 
 @router.get("/auth/kakao/callback", summary="카카오 로그인 콜백")
 async def kakao_callback(
-    code: str,
     state: str,
+    code: str | None = None,
+    error: str | None = None,
+    oauth_state: str | None = Cookie(default=None),
     db: AsyncSession = Depends(get_db),
     redis: Redis = Depends(get_redis),
 ) -> RedirectResponse:
     """카카오 OAuth 콜백을 처리하고 프론트로 리다이렉트합니다."""
+    if error or not code:
+        return _oauth_error_redirect("로그인이 취소되었습니다")
     try:
-        _, refresh_token, is_new_user = await kakao_login(code, state, db, redis)
+        _, refresh_token, is_new_user = await kakao_login(code, state, oauth_state, db, redis)
     except HTTPException as e:
         return _oauth_error_redirect(e.detail)
     return _oauth_success_redirect(refresh_token, is_new_user)
@@ -93,20 +122,24 @@ async def kakao_callback(
 @router.get("/auth/naver", summary="네이버 로그인 페이지로 리다이렉트")
 async def naver_auth(redis: Redis = Depends(get_redis)) -> RedirectResponse:
     """네이버 OAuth 인증 페이지로 리다이렉트합니다."""
-    url = await get_naver_auth_url(redis)
-    return RedirectResponse(url)
+    url, state = await get_naver_auth_url(redis)
+    return _oauth_redirect_start(url, state)
 
 
 @router.get("/auth/naver/callback", summary="네이버 로그인 콜백")
 async def naver_callback(
-    code: str,
     state: str,
+    code: str | None = None,
+    error: str | None = None,
+    oauth_state: str | None = Cookie(default=None),
     db: AsyncSession = Depends(get_db),
     redis: Redis = Depends(get_redis),
 ) -> RedirectResponse:
     """네이버 OAuth 콜백을 처리하고 프론트로 리다이렉트합니다."""
+    if error or not code:
+        return _oauth_error_redirect("로그인이 취소되었습니다")
     try:
-        _, refresh_token, is_new_user = await naver_login(code, state, db, redis)
+        _, refresh_token, is_new_user = await naver_login(code, state, oauth_state, db, redis)
     except HTTPException as e:
         return _oauth_error_redirect(e.detail)
     return _oauth_success_redirect(refresh_token, is_new_user)
@@ -115,20 +148,24 @@ async def naver_callback(
 @router.get("/auth/google", summary="구글 로그인 페이지로 리다이렉트")
 async def google_auth(redis: Redis = Depends(get_redis)) -> RedirectResponse:
     """구글 OAuth 인증 페이지로 리다이렉트합니다."""
-    url = await get_google_auth_url(redis)
-    return RedirectResponse(url)
+    url, state = await get_google_auth_url(redis)
+    return _oauth_redirect_start(url, state)
 
 
 @router.get("/auth/google/callback", summary="구글 로그인 콜백")
 async def google_callback(
-    code: str,
     state: str,
+    code: str | None = None,
+    error: str | None = None,
+    oauth_state: str | None = Cookie(default=None),
     db: AsyncSession = Depends(get_db),
     redis: Redis = Depends(get_redis),
 ) -> RedirectResponse:
     """구글 OAuth 콜백을 처리하고 프론트로 리다이렉트합니다."""
+    if error or not code:
+        return _oauth_error_redirect("로그인이 취소되었습니다")
     try:
-        _, refresh_token, is_new_user = await google_login(code, state, db, redis)
+        _, refresh_token, is_new_user = await google_login(code, state, oauth_state, db, redis)
     except HTTPException as e:
         return _oauth_error_redirect(e.detail)
     return _oauth_success_redirect(refresh_token, is_new_user)

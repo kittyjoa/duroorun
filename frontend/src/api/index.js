@@ -57,4 +57,3 @@ export const apiFetch = async (url, options = {}) => {
 };
 
 export { getAccessToken, setAccessToken, clearAccessToken };
-

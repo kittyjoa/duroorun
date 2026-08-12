@@ -96,18 +96,34 @@ async def is_blacklisted(jti: str, redis: Redis) -> bool:
 # ──────────────────────────────────────────
 
 async def save_refresh_jti(user_id: int, jti: str, redis: Redis) -> None:
-    """Refresh Token jti를 Redis에 저장합니다 (재발급 시 덮어써서 로테이션)."""
+    """Refresh Token jti를 Redis에 저장합니다 (최초 로그인 전용 — 비교 없이 무조건 설정)."""
     ttl = settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400
     await redis.setex(f"refresh:{user_id}", ttl, jti)
 
 
-async def verify_and_rotate_refresh(user_id: int, incoming_jti: str, redis: Redis) -> bool:
-    """Refresh Token jti를 검증합니다. 불일치 시 즉시 삭제(탈취 방어)하고 False를 반환합니다."""
-    stored_jti = await redis.get(f"refresh:{user_id}")
-    if stored_jti != incoming_jti:
-        await redis.delete(f"refresh:{user_id}")
-        return False
-    return True
+# GET(비교) → SET을 분리하면 동시 재발급 요청 사이에 경쟁 조건이 생겨, 한 요청이 방금
+# 로테이션된 정상 jti를 "불일치"로 오판할 수 있음 — Lua로 원자적으로 처리한다.
+# 불일치 시 키를 삭제하지 않는다: 같은 옛 토큰으로 들어온 동시 요청 중 하나가 먼저
+# 로테이션에 성공한 뒤, 뒤늦게 도착한 나머지 요청이 "불일치"를 이유로 방금 발급된
+# 정상 세션까지 지워버리는 문제를 막기 위함 (그 요청 자체만 실패시키면 충분).
+_ROTATE_REFRESH_SCRIPT = """
+local stored = redis.call('GET', KEYS[1])
+if stored == ARGV[1] then
+    redis.call('SETEX', KEYS[1], ARGV[3], ARGV[2])
+    return 1
+else
+    return 0
+end
+"""
+
+
+async def rotate_refresh_jti(user_id: int, incoming_jti: str, new_jti: str, redis: Redis) -> bool:
+    """저장된 jti가 incoming_jti와 같을 때만 new_jti로 원자적으로 교체합니다."""
+    ttl = settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400
+    result = await redis.eval(
+        _ROTATE_REFRESH_SCRIPT, 1, f"refresh:{user_id}", incoming_jti, new_jti, ttl
+    )
+    return result == 1
 
 
 async def delete_refresh_token(user_id: int, redis: Redis) -> None:

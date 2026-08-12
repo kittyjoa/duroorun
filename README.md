@@ -411,6 +411,8 @@ git restore --staged app/config.py
 | `app/main.py` | FastAPI 앱 진입점 |
 | `app/api/v1/router.py` | API 라우터 통합 |
 | `requirements.txt` | 패키지 의존성 |
+| `frontend/src/App.jsx` | 라우터 설정 (전체 페이지 라우트 관리) |
+| `frontend/package.json` | 프론트 패키지 의존성 |
 
 공통 파일 수정이 필요하면:
 1. 팀 채팅에 수정 내용 공유
@@ -447,7 +449,7 @@ git restore --staged app/config.py
 - 로그아웃/탈퇴 시 Access는 Redis 블랙리스트(`blacklist:{access_jti}`) 등록, Refresh는 Redis에서 삭제
 - Refresh 쿠키는 `/api/v1/auth/refresh` 경로 한정. 환경 분기: 로컬 `secure=False`/`samesite=lax`, 프로덕션 `secure=True`/`samesite=none`
 - CORS 허용 주소 명시 (`*` 사용 금지, 우리 프론트 주소만 허용). httpOnly 쿠키 사용으로 `allow_credentials=True` 필수, 프론트는 `credentials: 'include'`
-- 소셜 로그인 OAuth state 검증 필수 (CSRF 방지). state는 Redis(`oauth:state:{state}`, TTL 5분) 저장
+- 소셜 로그인 OAuth state 검증 필수 (CSRF 방지). state는 Redis(`oauth:state:{provider}:{state}`, TTL 5분) 저장 + 로그인을 시작한 브라우저인지 확인하는 짧은 만료의 `oauth_state` httpOnly 쿠키로 이중 검증
 - API 소유권 검증 필수 (본인 리소스만 수정/삭제 가능. `user_id` 검증 챙기기)
 
 ---
@@ -456,3 +458,15 @@ git restore --staged app/config.py
 
 ### R2 이미지 삭제 순서
 DB 트랜잭션 성공(commit) 후에 R2 삭제 API 호출. 트랜잭션 실패 시 R2 파일만 지워지는 현상 방지.
+
+---
+
+## 배포 전 체크리스트
+
+실제 배포(AWS EC2 예정) 시점에 반드시 확인해야 할 항목들입니다.
+
+- **도메인 구조 확정 후 SameSite 정책 재검토**: 지금은 프로덕션에서 모든 인증 관련 쿠키(`refresh_token`, `oauth_state`)를 `samesite=none`으로 설정해둠 (어떤 도메인 구조든 동작하는 안전한 기본값). 프론트/API를 **같은 사이트의 서브도메인**(예: `app.duroorun.com` / `api.duroorun.com`, `COOKIE_DOMAIN=.duroorun.com`)으로 배포하기로 확정되면 `samesite=lax`로 좁히는 걸 검토. 완전히 다른 도메인을 쓴다면 `none` 유지 + `/auth/refresh`에 Origin 검증 등 CSRF 방어 추가 고려
+- **운영 환경 `/api` 프록시 설정 필요**: 현재 `frontend/vite.config.js`의 프록시는 로컬 개발 서버 전용. 배포 서버(nginx 등)에 `/api` → 백엔드 rewrite/프록시 설정이 없으면 프론트의 모든 API 요청이 404남. 별도 프록시가 없다면 프론트 API 베이스 URL을 환경변수로 분리하는 것도 고려
+- **`COOKIE_DOMAIN` 환경변수 설정**: `.env.example`에 안내된 대로 프로덕션에서 `.duroorun.com` 형태로 설정 필요 (프론트/API가 다른 서브도메인이면 필수)
+- **`JWT_SECRET_KEY` 길이 확인**: 로컬 개발 중 `InsecureKeyLengthWarning`(HMAC 키가 32바이트 미만) 경고가 뜬 적 있음. 배포용 시크릿 키는 32바이트 이상으로 새로 생성
+- **자동화된 인증 테스트 부재**: 현재 `tests/` 디렉토리가 비어있고 CI 체크도 없음. 최소한 로그인/토큰 재발급/실패 케이스 테스트 추가 검토

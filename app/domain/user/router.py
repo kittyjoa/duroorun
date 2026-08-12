@@ -58,20 +58,21 @@ def _oauth_redirect_start(url: str, state: str) -> RedirectResponse:
         samesite="none" if settings.is_production else "lax",
         max_age=settings.OAUTH_STATE_EXPIRE_SECONDS,
         path=_OAUTH_STATE_COOKIE_PATH,
+        domain=settings.COOKIE_DOMAIN or None,
     )
     return redirect
 
 
-def _oauth_success_redirect(refresh_token: str, is_new_user: bool) -> RedirectResponse:
+def _oauth_success_redirect(refresh_token: str) -> RedirectResponse:
     """소셜 로그인 성공 후 프론트로 리다이렉트합니다.
 
     소셜사 콜백은 브라우저 전체 페이지 이동이라 JSON을 직접 응답해도 프론트(SPA)가
     받을 방법이 없음 — access_token은 URL에 노출되면 브라우저 히스토리/Referrer/서버
-    로그로 새어나갈 수 있어 절대 싣지 않는다. is_new_user만 쿼리스트링으로, refresh_token은
-    쿠키로 실어 보내고, 프론트는 도착 즉시 /auth/refresh를 호출해 access_token을 받는다.
+    로그로 새어나갈 수 있어 절대 싣지 않는다. refresh_token만 쿠키로 실어 보내고,
+    프론트는 도착 즉시 /auth/refresh를 호출해 access_token을 받은 뒤 /users/me로
+    온보딩 완료 여부(닉네임/거주지 유무)를 직접 조회해 이동 경로를 정한다.
     """
-    params = urlencode({"is_new_user": str(is_new_user).lower()})
-    redirect = RedirectResponse(f"{settings.FRONTEND_URL}/oauth/callback?{params}")
+    redirect = RedirectResponse(f"{settings.FRONTEND_URL}/oauth/callback")
     redirect.set_cookie(
         key="refresh_token",
         value=refresh_token,
@@ -80,8 +81,11 @@ def _oauth_success_redirect(refresh_token: str, is_new_user: bool) -> RedirectRe
         samesite="none" if settings.is_production else "lax",
         max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400,
         path=_REFRESH_COOKIE_PATH,
+        domain=settings.COOKIE_DOMAIN or None,
     )
-    redirect.delete_cookie(key="oauth_state", path=_OAUTH_STATE_COOKIE_PATH)
+    redirect.delete_cookie(
+        key="oauth_state", path=_OAUTH_STATE_COOKIE_PATH, domain=settings.COOKIE_DOMAIN or None
+    )
     return redirect
 
 
@@ -89,7 +93,9 @@ def _oauth_error_redirect(detail: str) -> RedirectResponse:
     """소셜 로그인 실패 시 raw JSON 대신 프론트 로그인 페이지로 리다이렉트합니다."""
     params = urlencode({"error": detail})
     redirect = RedirectResponse(f"{settings.FRONTEND_URL}/login?{params}")
-    redirect.delete_cookie(key="oauth_state", path=_OAUTH_STATE_COOKIE_PATH)
+    redirect.delete_cookie(
+        key="oauth_state", path=_OAUTH_STATE_COOKIE_PATH, domain=settings.COOKIE_DOMAIN or None
+    )
     return redirect
 
 
@@ -113,10 +119,10 @@ async def kakao_callback(
     if error or not code:
         return _oauth_error_redirect("로그인이 취소되었습니다")
     try:
-        _, refresh_token, is_new_user = await kakao_login(code, state, oauth_state, db, redis)
+        _, refresh_token = await kakao_login(code, state, oauth_state, db, redis)
     except HTTPException as e:
         return _oauth_error_redirect(e.detail)
-    return _oauth_success_redirect(refresh_token, is_new_user)
+    return _oauth_success_redirect(refresh_token)
 
 
 @router.get("/auth/naver", summary="네이버 로그인 페이지로 리다이렉트")
@@ -139,10 +145,10 @@ async def naver_callback(
     if error or not code:
         return _oauth_error_redirect("로그인이 취소되었습니다")
     try:
-        _, refresh_token, is_new_user = await naver_login(code, state, oauth_state, db, redis)
+        _, refresh_token = await naver_login(code, state, oauth_state, db, redis)
     except HTTPException as e:
         return _oauth_error_redirect(e.detail)
-    return _oauth_success_redirect(refresh_token, is_new_user)
+    return _oauth_success_redirect(refresh_token)
 
 
 @router.get("/auth/google", summary="구글 로그인 페이지로 리다이렉트")
@@ -165,10 +171,10 @@ async def google_callback(
     if error or not code:
         return _oauth_error_redirect("로그인이 취소되었습니다")
     try:
-        _, refresh_token, is_new_user = await google_login(code, state, oauth_state, db, redis)
+        _, refresh_token = await google_login(code, state, oauth_state, db, redis)
     except HTTPException as e:
         return _oauth_error_redirect(e.detail)
-    return _oauth_success_redirect(refresh_token, is_new_user)
+    return _oauth_success_redirect(refresh_token)
 
 
 @router.post("/auth/refresh", response_model=TokenResponse, summary="토큰 재발급")
@@ -194,6 +200,7 @@ async def token_refresh(
         samesite="none" if settings.is_production else "lax",
         max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400,
         path=_REFRESH_COOKIE_PATH,
+        domain=settings.COOKIE_DOMAIN or None,
     )
 
     return TokenResponse(access_token=new_access_token, is_new_user=False)
@@ -208,7 +215,9 @@ async def logout_endpoint(
     """Access Token을 무효화하고 Refresh Token을 삭제합니다."""
     await logout(credentials.credentials, redis)
 
-    response.delete_cookie(key="refresh_token", path=_REFRESH_COOKIE_PATH)
+    response.delete_cookie(
+        key="refresh_token", path=_REFRESH_COOKIE_PATH, domain=settings.COOKIE_DOMAIN or None
+    )
 
     return MessageResponse(message="로그아웃 되었습니다")
 
@@ -263,6 +272,8 @@ async def withdraw(
     """개인정보를 익명화하고 소셜 계정을 삭제합니다."""
     await withdraw_user(user, credentials.credentials, db, redis)
 
-    response.delete_cookie(key="refresh_token", path=_REFRESH_COOKIE_PATH)
+    response.delete_cookie(
+        key="refresh_token", path=_REFRESH_COOKIE_PATH, domain=settings.COOKIE_DOMAIN or None
+    )
 
     return MessageResponse(message="회원 탈퇴가 완료되었습니다")

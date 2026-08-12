@@ -15,7 +15,10 @@ const buildRequest = (options, accessToken) => ({
   },
 });
 
-export const refreshAccessToken = async () => {
+// 401이 동시에 여러 개 발생해도 실제 재발급 요청은 하나만 나가도록 진행 중인 Promise를 공유합니다.
+let refreshPromise = null;
+
+const doRefresh = async () => {
   const res = await fetch(`/api${REFRESH_ENDPOINT}`, {
     method: 'POST',
     credentials: 'include',
@@ -27,6 +30,15 @@ export const refreshAccessToken = async () => {
   const data = await res.json();
   setAccessToken(data.access_token);
   return data.access_token;
+};
+
+export const refreshAccessToken = () => {
+  if (!refreshPromise) {
+    refreshPromise = doRefresh().finally(() => {
+      refreshPromise = null;
+    });
+  }
+  return refreshPromise;
 };
 
 // 401 응답 시 Refresh Token으로 재발급 후 원요청을 한 번만 재시도합니다.

@@ -23,8 +23,8 @@ from app.core.security import (
     decode_token,
     decode_token_ignore_exp,
     delete_refresh_token,
+    rotate_refresh_jti,
     save_refresh_jti,
-    verify_and_rotate_refresh,
 )
 from app.domain.course.models import Course
 from app.domain.record.models import Record
@@ -85,8 +85,8 @@ async def get_kakao_auth_url(redis: Redis) -> tuple[str, str]:
 
 async def kakao_login(
     code: str, state: str, cookie_state: str | None, db: AsyncSession, redis: Redis
-) -> tuple[str, str, bool]:
-    """카카오 OAuth 콜백을 처리하고 (access_token, refresh_token, is_new_user)를 반환합니다."""
+) -> tuple[str, str]:
+    """카카오 OAuth 콜백을 처리하고 (access_token, refresh_token)을 반환합니다."""
     # 콜백을 받은 브라우저가 로그인을 시작한 브라우저와 같은지 먼저 확인 (로그인 CSRF 방지)
     if not cookie_state or cookie_state != state:
         raise HTTPException(
@@ -198,7 +198,7 @@ async def kakao_login(
     refresh_token, refresh_jti = create_refresh_token(user.user_id)
     await save_refresh_jti(user.user_id, refresh_jti, redis)
 
-    return access_token, refresh_token, is_new_user
+    return access_token, refresh_token
 
 
 async def get_naver_auth_url(redis: Redis) -> tuple[str, str]:
@@ -222,8 +222,8 @@ async def get_naver_auth_url(redis: Redis) -> tuple[str, str]:
 
 async def naver_login(
     code: str, state: str, cookie_state: str | None, db: AsyncSession, redis: Redis
-) -> tuple[str, str, bool]:
-    """네이버 OAuth 콜백을 처리하고 (access_token, refresh_token, is_new_user)를 반환합니다."""
+) -> tuple[str, str]:
+    """네이버 OAuth 콜백을 처리하고 (access_token, refresh_token)을 반환합니다."""
     # 콜백을 받은 브라우저가 로그인을 시작한 브라우저와 같은지 먼저 확인 (로그인 CSRF 방지)
     if not cookie_state or cookie_state != state:
         raise HTTPException(
@@ -343,7 +343,7 @@ async def naver_login(
     refresh_token, refresh_jti = create_refresh_token(user.user_id)
     await save_refresh_jti(user.user_id, refresh_jti, redis)
 
-    return access_token, refresh_token, is_new_user
+    return access_token, refresh_token
 
 
 async def get_google_auth_url(redis: Redis) -> tuple[str, str]:
@@ -368,8 +368,8 @@ async def get_google_auth_url(redis: Redis) -> tuple[str, str]:
 
 async def google_login(
     code: str, state: str, cookie_state: str | None, db: AsyncSession, redis: Redis
-) -> tuple[str, str, bool]:
-    """구글 OAuth 콜백을 처리하고 (access_token, refresh_token, is_new_user)를 반환합니다."""
+) -> tuple[str, str]:
+    """구글 OAuth 콜백을 처리하고 (access_token, refresh_token)을 반환합니다."""
     # 콜백을 받은 브라우저가 로그인을 시작한 브라우저와 같은지 먼저 확인 (로그인 CSRF 방지)
     if not cookie_state or cookie_state != state:
         raise HTTPException(
@@ -481,7 +481,7 @@ async def google_login(
     refresh_token, refresh_jti = create_refresh_token(user.user_id)
     await save_refresh_jti(user.user_id, refresh_jti, redis)
 
-    return access_token, refresh_token, is_new_user
+    return access_token, refresh_token
 
 
 async def refresh_tokens(refresh_token: str, redis: Redis) -> tuple[str, str]:
@@ -502,16 +502,16 @@ async def refresh_tokens(refresh_token: str, redis: Redis) -> tuple[str, str]:
             detail="유효하지 않은 토큰입니다",
         )
 
-    is_valid = await verify_and_rotate_refresh(user_id, incoming_jti, redis)
+    new_access_token = create_access_token(user_id)
+    new_refresh_token, new_jti = create_refresh_token(user_id)
+
+    # 검증(GET)과 교체(SET)를 원자적으로 처리 — 동시 재발급 요청 간 경쟁 조건 방지
+    is_valid = await rotate_refresh_jti(user_id, incoming_jti, new_jti, redis)
     if not is_valid:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="토큰이 탈취되었거나 만료되었습니다. 다시 로그인해주세요",
         )
-
-    new_access_token = create_access_token(user_id)
-    new_refresh_token, new_jti = create_refresh_token(user_id)
-    await save_refresh_jti(user_id, new_jti, redis)
 
     return new_access_token, new_refresh_token
 

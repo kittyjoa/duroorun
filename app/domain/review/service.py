@@ -9,23 +9,30 @@ from math import floor
 import boto3
 from botocore.client import BaseClient
 from botocore.exceptions import BotoCoreError, ClientError
-from fastapi import HTTPException, UploadFile, status
+from fastapi import BackgroundTasks, HTTPException, UploadFile, status
 from sqlalchemy import exists, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.clients.gemini import summarize_reviews
 from app.config import settings
+from app.database import AsyncSessionLocal
 from app.domain.course.models import Course, Difficulty
 from app.domain.record.models import Record
-from app.domain.review.models import Review, ReviewImage
+from app.domain.review.models import Review, ReviewImage, ReviewSummary
 from app.domain.review.schemas import (
     ReviewCreateRequest,
     ReviewImageResponse,
     ReviewListResponse,
     ReviewResponse,
+    ReviewSummaryResponse,
     ReviewUpdateRequest,
 )
 from app.domain.user.models import UserRole
+
+# AI 리뷰 요약 생성/재생성 임계값 (FEATURES.md: 3개 도달 시 첫 생성, 이후 5개마다 재생성)
+_SUMMARY_FIRST_THRESHOLD = 3
+_SUMMARY_REGENERATE_INTERVAL = 5
 
 _IMAGE_EXTENSIONS = {
     "image/jpeg": "jpg",
@@ -46,7 +53,11 @@ _SCORE_TO_DIFFICULTY = {score: difficulty for difficulty, score in _DIFFICULTY_S
 
 
 def _detect_image_content_type(data: bytes) -> str | None:
-    """파일 시그니처(매직바이트)로 실제 이미지 형식을 판별합니다."""
+    """파일 시그니처(매직바이트)로 실제 이미지 형식을 판별합니다.
+
+    클라이언트가 보낸 Content-Type 헤더는 조작 가능해서 신뢰하지 않고,
+    파일 맨 앞 바이트가 jpg/png/gif/webp 중 하나의 고유 패턴과 일치하는지 직접 확인한다.
+    """
     if data.startswith(b"\xff\xd8\xff"):
         return "image/jpeg"
     if data.startswith(b"\x89PNG\r\n\x1a\n"):
@@ -74,6 +85,7 @@ async def create_review(
     user_id: int,
     course_id: int,
     body: ReviewCreateRequest,
+    background_tasks: BackgroundTasks,
 ) -> ReviewResponse:
     """리뷰 작성"""
     # 코스 존재 확인
@@ -83,7 +95,7 @@ async def create_review(
             status_code=status.HTTP_404_NOT_FOUND, detail="코스를 찾을 수 없습니다."
         )
 
-    # 완주 인증 확인 (같은 코스를 여러 번 완주했을 수 있으므로 존재 여부만 확인)
+    # 완주 인증 확인 (같은 코스를 여러 번 완주했을 수 있으므로 완주한 기록 존재여부만 확인)
     completed = await session.scalar(
         select(
             exists().where(
@@ -123,7 +135,78 @@ async def create_review(
             status_code=status.HTTP_409_CONFLICT, detail="이미 해당 코스에 리뷰를 작성했습니다."
         ) from err
     await session.refresh(review)
+    # AI 요약 생성/재생성 여부 판단은 응답을 막지 않도록 백그라운드로 실행
+    # (동기로 처리하면 Gemini 응답을 기다려야 해서, 하필 3/8/13...번째 리뷰를
+    # 작성한 사람만 로딩이 길어지는 문제가 생김 - 그걸 막기 위한 조치)
+    background_tasks.add_task(_maybe_update_summary, course_id)
     return ReviewResponse.model_validate(review)
+
+
+async def _maybe_update_summary(course_id: int) -> None:
+    """리뷰 개수가 임계값에 도달했으면 AI 요약을 생성/재생성한다.
+
+    요청 처리와 별도로(백그라운드 태스크로) 실행되므로 요청 세션을 재사용하지 않고
+    새 세션을 연다. Gemini 호출이 실패해도 예외를 삼키고 조용히 종료한다 — 다음
+    리뷰가 작성될 때 이 함수가 다시 호출되면서 자연스럽게 재시도된다.
+    """
+    async with AsyncSessionLocal() as session:
+        count_result = await session.execute(
+            select(func.count()).select_from(Review).where(Review.course_id == course_id)
+        )
+        review_count = count_result.scalar_one()
+        if review_count < _SUMMARY_FIRST_THRESHOLD:
+            return
+
+        summary_result = await session.execute(
+            select(ReviewSummary).where(ReviewSummary.course_id == course_id).with_for_update()
+        )
+        summary = summary_result.scalar_one_or_none()
+        if summary is not None:
+            reviews_since_last = review_count - summary.review_count
+            if reviews_since_last < _SUMMARY_REGENERATE_INTERVAL:
+                return
+
+        contents_result = await session.execute(
+            select(Review.content).where(Review.course_id == course_id)
+        )
+        review_contents = contents_result.scalars().all()
+
+        try:
+            summary_text = await summarize_reviews(review_contents)
+        except Exception:  # noqa: BLE001
+            # Gemini API 실패(APIError)뿐 아니라 클라이언트 생성 실패(ValueError, 키 누락 등)도
+            # 포함해 광범위하게 잡는다. 백그라운드 최선 노력 작업이므로 여기서 실패해도
+            # 다음 리뷰 작성 시 이 함수가 다시 호출되며 자연스럽게 재시도된다.
+            return
+
+        if summary is None:
+            session.add(
+                ReviewSummary(course_id=course_id, summary=summary_text, review_count=review_count)
+            )
+        else:
+            summary.summary = summary_text
+            summary.review_count = review_count
+
+        try:
+            await session.commit()
+        except IntegrityError:
+            # 두 리뷰가 거의 동시에 작성되면 백그라운드 작업도 거의 동시에 두 번 실행될 수
+            # 있음. 둘 다 "요약이 아직 없다"고 판단해서 각자 Gemini를 호출하지만,
+            # 코스당 요약은 1개만 허용되므로(UNIQUE 제약) 먼저 저장한 쪽만 성공하고
+            # 나머지는 여기서 IntegrityError가 남. 이미 요약이 만들어졌다는 뜻이므로
+            # 에러 없이 조용히 무시하고 끝낸다.
+            await session.rollback()
+
+
+async def get_review_summary(session: AsyncSession, course_id: int) -> ReviewSummaryResponse | None:
+    """코스의 AI 리뷰 요약 조회 (없으면 None - 코스 상세 응답에서 리뷰 원문만 표시)."""
+    result = await session.execute(
+        select(ReviewSummary).where(ReviewSummary.course_id == course_id)
+    )
+    summary = result.scalar_one_or_none()
+    if summary is None:
+        return None
+    return ReviewSummaryResponse.model_validate(summary)
 
 
 async def update_review(

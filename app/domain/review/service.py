@@ -242,8 +242,11 @@ async def upload_review_image(
     file: UploadFile,
 ) -> ReviewResponse:
     """리뷰 이미지 업로드"""
-    # 리뷰 존재 및 본인 확인
-    review = await session.get(Review, review_id)
+    # 리뷰 존재 및 본인 확인 (동시 업로드 시 개수 제한이 깨지지 않도록 row lock)
+    result = await session.execute(
+        select(Review).where(Review.review_id == review_id).with_for_update()
+    )
+    review = result.scalar_one_or_none()
     if review is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="리뷰를 찾을 수 없습니다."

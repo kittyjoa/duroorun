@@ -78,7 +78,7 @@ async def start_record(
 ) -> RecordResponse:
     """러닝시작 - 기록생성"""
     course = await session.get(Course, body.course_id)
-    if course is None:
+    if course is None or not course.is_active:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="코스를 찾을 수 없습니다."
         )

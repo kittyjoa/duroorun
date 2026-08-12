@@ -4,7 +4,7 @@ import enum
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint, func
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -12,6 +12,8 @@ from app.database import Base
 
 if TYPE_CHECKING:
     from app.domain.course.models import Course
+
+_KAKAO_PLACE_URL_TEMPLATE = "https://place.map.kakao.com/{}"
 
 
 class FacilityType(enum.StrEnum):
@@ -25,6 +27,12 @@ class Facility(Base):
     """편의시설 — 관리자만 등록/수정/삭제 가능."""
 
     __tablename__ = "facilities"
+    __table_args__ = (
+        # 같은 카카오 장소를 같은 시설 타입으로 중복 등록하는 것 방지 (활성/비활성 무관)
+        # ㅡ 재등록은 create_facility()가 기존 비활성 row 재활성화 방식으로 처리
+        # (NULL은 예외, 유니크 제약은 kakao_place_id가 채워진 경우에만 작동)
+        UniqueConstraint("kakao_place_id", "facility_type", name="uq_facility_kakao_place_type"),
+    )
 
     facility_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     facility_type: Mapped[FacilityType] = mapped_column(SAEnum(FacilityType), nullable=False)
@@ -33,7 +41,6 @@ class Facility(Base):
     latitude: Mapped[float] = mapped_column(Float, nullable=False)
     longitude: Mapped[float] = mapped_column(Float, nullable=False)
     kakao_place_id: Mapped[str | None] = mapped_column(String, nullable=True)
-    place_url: Mapped[str | None] = mapped_column(String, nullable=True)
     is_active: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default="true", nullable=False
     )
@@ -48,11 +55,13 @@ class Facility(Base):
         back_populates="facility",
         cascade="all, delete-orphan",
     )
-# 1. place_url은 kakao_place_id만 있으면 항상 계산 가능한 값
-# 지금 당장 버그를 일으키는 것은 아니지만, place_url 컬럼을 없애고
-# 응답 조립 시점(FacilityResponse 생성 시)이나 모델의 @property로 계산하는게 좋음
-# 2. (kakao_place_id, facility_type) 복합 unique 추가
-# 단순 유니크보다 이렇게 추가하면, 같은 장소 같은 편의시설 중복 방지 가능
+
+    @property
+    def place_url(self) -> str | None:
+        """kakao_place_id로 계산해 카카오맵 장소 상세 URL 조립 (컬럼 저장 X)."""
+        if self.kakao_place_id is None:
+            return None
+        return _KAKAO_PLACE_URL_TEMPLATE.format(self.kakao_place_id)
 
 
 class CourseFacility(Base):

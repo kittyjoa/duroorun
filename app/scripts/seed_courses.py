@@ -6,21 +6,23 @@ import asyncio
 import logging
 import selectors
 import sys
+from pathlib import Path
 
 import gpxpy
 import httpx
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.clients.durunubi import DurunubiAPIError, fetch_course_list
-from app.database import AsyncSessionLocal
+from app.database import AsyncSessionLocal, engine
 from app.domain.course.models import Course, CourseType, Difficulty
 
 # Course의 관계/FK가 참조하는 다른 도메인 모델들 — 직접 안 써도 import해야
 # SQLAlchemy가 courses.created_by(→users), course_facility(→facilities) 매핑을 해석할 수 있음
 from app.domain.facility import models as _facility_models  # noqa: F401
 from app.domain.user import models as _user_models  # noqa: F401
+from app.scripts.manual_courses import MANUAL_COURSES
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -28,6 +30,9 @@ logger = logging.getLogger(__name__)
 _PAGE_SIZE = 100
 _MAX_PAGES = 500  # 페이지네이션 응답이 이상해도 무한루프에 빠지지 않도록 상한
 _GPX_TIMEOUT = 10.0
+# pg_advisory_lock 키 — 워커/컨테이너가 여러 개여도 seed_courses()가 동시에
+# 두 번 실행되지 않도록 DB 세션 레벨 락으로 직렬화 (임의의 정수, 앱 내에서 고유하면 됨)
+_SEED_LOCK_KEY = 727501
 _TRAIL_NAME = "해파랑길"  # 두루누비 전체 코스 중 우리 서비스가 다루는 노선만 서버단에서 필터링
 # 두루누비 API에 지역 파라미터가 없어 sigun 필터 사용
 _TARGET_REGION = "강원"
@@ -167,6 +172,31 @@ async def _fetch_all_courses() -> tuple[list[dict], dict[str, str], bool]:
     return all_items, gpx_urls, complete
 
 
+# 두루누비 강원도 해파랑길 코스들 중 6개가 계속 누락되어 생긴 병합 함수
+def _merge_manual_courses(
+    all_items: list[dict], gpx_sources: dict[str, str | Path]
+) -> tuple[list[dict], dict[str, str | Path]]:
+    """API 응답에 없는 코스만 MANUAL_COURSES로 보충. API에 있으면 항상 API 데이터가 우선.
+
+    ㅡ API가 나중에 이 코스를 정상 반환하기 시작하면, seen_ids에 이미 포함되므로
+      여기서 자동으로 걸러져서 수동 데이터는 안 쓰임.
+    ㅡ 인자를 대체하지 않고, return 값으로만 이루어진 결과를 새로 준다?
+    """
+    seen_ids = {item["crsIdx"] for item in all_items}
+    missing_manual = [m for m in MANUAL_COURSES if m["crsIdx"] not in seen_ids]
+    if not missing_manual:
+        return all_items, gpx_sources
+    logger.info(
+        "API 미제공 코스 %d건을 수동 데이터로 보충: %s",
+        len(missing_manual), [m["crsIdx"] for m in missing_manual],
+    )
+    merged_sources = {
+        **gpx_sources,
+        **{m["crsIdx"]: m["gpx_path"] for m in missing_manual if m.get("gpx_path")},
+    }
+    return all_items + missing_manual, merged_sources
+
+
 def _extract_start_end(gpx_text: str) -> tuple[float, float, float, float] | None:
     """GPX 텍스트에서 첫/마지막 좌표를 추출. gpx가 track인지 route인지 아직 모름
        ㅡ 제3의구조거나 아예 없으면 좌표 추출 다시 생각해봐야함"""
@@ -181,27 +211,39 @@ def _extract_start_end(gpx_text: str) -> tuple[float, float, float, float] | Non
 
 
 async def _try_fetch_coords(
-    client: httpx.AsyncClient, gpx_url: str
+    client: httpx.AsyncClient, gpx_source: str | Path
 ) -> tuple[float, float, float, float] | None:
-    """gpxpath를 다운로드·파싱해 좌표를 반환. 다운로드/파싱 어느 쪽이 실패해도 None."""
+    """gpx_source(API gpxpath URL 문자열 또는 수동 파일 Path)를 읽어 좌표 반환.
+
+    ㅡ 다운로드/파일읽기/파싱 어느 쪽이 실패해도 None.
+    """
     try:
-        res = await client.get(gpx_url)
-        res.raise_for_status()
-        return _extract_start_end(res.text)
-    except httpx.HTTPError:
+        if isinstance(gpx_source, Path):
+            gpx_text = gpx_source.read_text(encoding="utf-8")
+        else:
+            res = await client.get(gpx_source)
+            res.raise_for_status()
+            gpx_text = res.text
+        return _extract_start_end(gpx_text)
+    except (httpx.HTTPError, OSError):
+        logger.exception("GPX 다운로드/파일읽기 실패: gpx_source=%s", gpx_source)
         return None
     except Exception:  # noqa: BLE001 — GPX 포맷이 코스마다 달라 파싱실패원인 특정 어려움
+        logger.exception("GPX 파싱 실패: gpx_source=%s", gpx_source)
         return None
 
 
-async def _fill_missing_coordinates(session: AsyncSession, gpx_urls: dict[str, str]) -> None:
-    """좌표가 비어있는 DRNB 코스만 골라 gpxpath를 다운로드·파싱해서 채운다.
-       ㅡ 좌표 비어있는 경우: 이번 실행에서 새로 추가된 코스, 예전 실행때 gpx 관련 실패한 코스"""
+async def _sync_coordinates(session: AsyncSession, gpx_sources: dict[str, str | Path]) -> None:
+    """gpx_sources에 있는 모든 DRNB 코스의 GPX를 매번 다시 읽어 좌표를 최신화한다.
+
+    ㅡ 두루누비 원본 경로가 바뀌어도(완주 인증 기준점) 다음 실행 때 반영되도록 매번 재조회.
+    ㅡ GPX 다운로드/파싱 실패 시 기존 좌표를 지우지 않고 그대로 둠 (일시적 네트워크 오류 대비).
+    ㅡ 값이 실제로 안 바뀐 코스는 대입/커밋을 건너뛰어 불필요한 updated_at 갱신 방지.
+    """
     result = await session.execute(
         select(Course).where(
             Course.course_type == CourseType.DRNB,
-            Course.dmb_id.in_(gpx_urls.keys()),
-            Course.start_lat.is_(None),
+            Course.dmb_id.in_(gpx_sources.keys()),
         )
     )
     courses = result.scalars().all()
@@ -213,13 +255,15 @@ async def _fill_missing_coordinates(session: AsyncSession, gpx_urls: dict[str, s
     # 그 앞에서 이미 성공한 코스들의 좌표 저장까지 롤백되지 않게
     async with httpx.AsyncClient(timeout=_GPX_TIMEOUT) as client:
         for course in courses:
-            gpx_url = gpx_urls.get(course.dmb_id)
-            coords = await _try_fetch_coords(client, gpx_url) if gpx_url else None
+            gpx_source = gpx_sources.get(course.dmb_id)
+            coords = await _try_fetch_coords(client, gpx_source) if gpx_source else None
             if coords is None:
                 failed.append(course.dmb_id)
                 continue
-            course.start_lat, course.start_lng, course.end_lat, course.end_lng = coords
-            await session.commit()
+            current = (course.start_lat, course.start_lng, course.end_lat, course.end_lng)
+            if current != coords:
+                course.start_lat, course.start_lng, course.end_lat, course.end_lng = coords
+                await session.commit()
 
     if failed:
         logger.warning(
@@ -228,25 +272,53 @@ async def _fill_missing_coordinates(session: AsyncSession, gpx_urls: dict[str, s
 
 
 async def seed_courses() -> None:
-    async with AsyncSessionLocal() as session:
-        try:
-            all_items, gpx_urls, complete = await _fetch_all_courses()
-        except DurunubiAPIError as e:
-            logger.error("두루누비 API 호출 실패, 시드를 중단합니다: %s", e)
-            return
+    """두루누비 코스 시드를 실행합니다.
 
-        for i in range(0, len(all_items), _PAGE_SIZE):
-            await _upsert_courses(session, all_items[i : i + _PAGE_SIZE])
-        logger.info("코스 upsert 완료: %d건", len(all_items))
+    ㅡ pg_try_advisory_lock(postgres가 제공하는 락)으로 세션 레벨 락을 잡아,
+      워커/컨테이너가 여러 개라도 동시에 두 번 실행되지 않게.
+      락을 못 잡으면(이미 다른 프로세스가 실행 중) 이번 실행은 건너뜀.
+    ㅡ 락 전용 커넥션을 따로 열어 실제 시드 작업용 세션과 분리 — 락 해제를
+      실수로 빠뜨리지 않도록 finally에서 명시적으로 unlock 후 커넥션 종료.
+    ㅡ AUTOCOMMIT: 각자 알아서 즉시 끝나게. (lock_conn: 락 전용 커넥션)
+      lock_conn 커넥션에서 실행되는 SQL문 하나하나가 독립적인 트랜잭션.
+    """
+    lock_conn = await engine.connect()
+    lock_conn = await lock_conn.execution_options(isolation_level="AUTOCOMMIT")
+    got_lock = (
+        await lock_conn.execute(text("SELECT pg_try_advisory_lock(:key)"), {"key": _SEED_LOCK_KEY})
+    ).scalar_one()
+    if not got_lock:
+        logger.warning("다른 프로세스가 이미 코스 시드를 실행 중이라 이번 실행은 건너뜁니다.")
+        await lock_conn.close()
+        return
 
-        if complete:
-            seen_dmb_ids = {item["crsIdx"] for item in all_items}
-            await _deactivate_missing_courses(session, seen_dmb_ids)
-        else:
-            logger.warning("코스 목록을 끝까지 수집하지 못해 이번 실행은 비활성화 처리를 건너뜁니다.")
+    try:
+        async with AsyncSessionLocal() as session:
+            try:
+                all_items, gpx_sources, complete = await _fetch_all_courses()
+            except DurunubiAPIError as e:
+                logger.error("두루누비 API 호출 실패, 시드를 중단합니다: %s", e)
+                return
 
-        await _fill_missing_coordinates(session, gpx_urls)
-        logger.info("시드 완료")
+            all_items, gpx_sources = _merge_manual_courses(all_items, gpx_sources)
+
+            for i in range(0, len(all_items), _PAGE_SIZE):
+                await _upsert_courses(session, all_items[i : i + _PAGE_SIZE])
+            logger.info("코스 upsert 완료: %d건", len(all_items))
+
+            if complete:
+                seen_dmb_ids = {item["crsIdx"] for item in all_items}
+                await _deactivate_missing_courses(session, seen_dmb_ids)
+            else:
+                logger.warning(
+                    "코스 목록을 끝까지 수집하지 못해 이번 실행은 비활성화 처리를 건너뜁니다."
+                )
+
+            await _sync_coordinates(session, gpx_sources)
+            logger.info("시드 완료")
+    finally:
+        await lock_conn.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": _SEED_LOCK_KEY})
+        await lock_conn.close()
 
 
 if __name__ == "__main__":

@@ -48,7 +48,6 @@ class FacilityResponse(BaseModel):
     latitude: float
     longitude: float
     kakao_place_id: str | None
-    # _build_place_url에서 조립함
     place_url: str | None
     is_active: bool
     created_at: datetime

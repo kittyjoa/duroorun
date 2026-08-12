@@ -74,7 +74,9 @@ async def get_reviews(
     )
 
 
-@router.post("/{review_id}/images", response_model=ReviewResponse)
+@router.post(
+    "/{review_id}/images", response_model=ReviewResponse, status_code=status.HTTP_201_CREATED
+)
 async def upload_review_image(
     review_id: int,
     file: UploadFile,

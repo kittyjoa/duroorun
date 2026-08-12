@@ -29,7 +29,7 @@ class Record(Base):
     user_end_lng: Mapped[float | None] = mapped_column(Float, nullable=True)
     is_completed: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false", nullable=False, index=True
-    ) #완주인증시 true로 바뀜
+    )  # 완주인증시 true로 바뀜
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

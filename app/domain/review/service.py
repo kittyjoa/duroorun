@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import uuid
 from functools import lru_cache
+from math import floor
 
 import boto3
 from botocore.client import BaseClient
@@ -14,7 +15,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.domain.course.models import Course
+from app.domain.course.models import Course, Difficulty
 from app.domain.record.models import Record
 from app.domain.review.models import Review, ReviewImage
 from app.domain.review.schemas import (
@@ -32,6 +33,16 @@ _IMAGE_EXTENSIONS = {
     "image/webp": "webp",
     "image/gif": "gif",
 }
+
+# TODO: course 도메인과 공유하는 상수라 course/models.py의 Difficulty 옆으로 옮길 예정
+# (course 담당과 협의 필요). 옮긴 뒤 아래 두 줄(_DIFFICULTY_SCORE, _SCORE_TO_DIFFICULTY)을
+# 삭제하고 from app.domain.course.models import DIFFICULTY_SCORE로 교체할 것
+_DIFFICULTY_SCORE = {
+    Difficulty.EASY: 1,
+    Difficulty.NORMAL: 2,
+    Difficulty.HARD: 3,
+}
+_SCORE_TO_DIFFICULTY = {score: difficulty for difficulty, score in _DIFFICULTY_SCORE.items()}
 
 
 def _detect_image_content_type(data: bytes) -> str | None:
@@ -59,10 +70,10 @@ def _get_r2_client() -> BaseClient:
 
 
 async def create_review(
-        session: AsyncSession,
-        user_id: int,
-        course_id: int,
-        body: ReviewCreateRequest,
+    session: AsyncSession,
+    user_id: int,
+    course_id: int,
+    body: ReviewCreateRequest,
 ) -> ReviewResponse:
     """리뷰 작성"""
     # 코스 존재 확인
@@ -116,10 +127,10 @@ async def create_review(
 
 
 async def update_review(
-        session: AsyncSession,
-        user_id: int,
-        review_id: int,
-        body: ReviewUpdateRequest,
+    session: AsyncSession,
+    user_id: int,
+    review_id: int,
+    body: ReviewUpdateRequest,
 ) -> ReviewResponse:
     """리뷰 수정"""
     result = await session.execute(
@@ -146,10 +157,10 @@ async def update_review(
 
 
 async def delete_review(
-        session: AsyncSession,
-        user_id: int,
-        review_id: int,
-        user_role: UserRole,
+    session: AsyncSession,
+    user_id: int,
+    review_id: int,
+    user_role: UserRole,
 ) -> None:
     """리뷰 삭제 (본인 또는 관리자)"""
     result = await session.execute(
@@ -179,21 +190,38 @@ async def delete_review(
             )
 
 
+# TODO(course 담당): 코스 상세 조회(get_drnb_course/get_custom_course)에서
+# 이 함수를 가져다 응답에 포함해 주세요.
+async def get_average_difficulty(session: AsyncSession, course_id: int) -> Difficulty | None:
+    """코스별 유저 체감 난이도 평균 (탈퇴 유저 리뷰도 통계 목적으로 포함, 리뷰가 없으면 None).
+    EASY/NORMAL/HARD를 점수로 평균을 낸 뒤 가장 가까운 등급으로 반올림하여 표시한다.
+    """
+    result = await session.execute(select(Review.difficulty).where(Review.course_id == course_id))
+    difficulties = result.scalars().all()
+    if not difficulties:
+        return None
+    avg_score = sum(_DIFFICULTY_SCORE[d] for d in difficulties) / len(difficulties)
+    rounded_score = min(max(floor(avg_score + 0.5), 1), 3)
+    return _SCORE_TO_DIFFICULTY[rounded_score]
+
+
 async def get_reviews(
-        session: AsyncSession,
-        course_id: int,
-        page: int,
-        size: int,
+    session: AsyncSession,
+    course_id: int,
+    page: int,
+    size: int,
 ) -> ReviewListResponse:
-    """코스 리뷰 목록 조회 (탈퇴 유저 포함, 최신순으로 조회)"""
+    """코스 리뷰 목록 조회 (탈퇴 유저 리뷰는 노출 제외, 최신순으로 조회)"""
     offset = (page - 1) * size
     total_result = await session.execute(
-        select(func.count()).select_from(Review).where(Review.course_id == course_id)
+        select(func.count())
+        .select_from(Review)
+        .where(Review.course_id == course_id, Review.user_id.is_not(None))
     )
     total = total_result.scalar_one()
     result = await session.execute(
         select(Review)
-        .where(Review.course_id == course_id)
+        .where(Review.course_id == course_id, Review.user_id.is_not(None))
         .order_by(Review.created_at.desc())
         .offset(offset)
         .limit(size)
@@ -208,14 +236,17 @@ async def get_reviews(
 
 
 async def upload_review_image(
-        session: AsyncSession,
-        user_id: int,
-        review_id: int,
-        file: UploadFile,
+    session: AsyncSession,
+    user_id: int,
+    review_id: int,
+    file: UploadFile,
 ) -> ReviewResponse:
     """리뷰 이미지 업로드"""
-    # 리뷰 존재 및 본인 확인
-    review = await session.get(Review, review_id)
+    # 리뷰 존재 및 본인 확인 (동시 업로드 시 개수 제한이 깨지지 않도록 row lock)
+    result = await session.execute(
+        select(Review).where(Review.review_id == review_id).with_for_update()
+    )
+    review = result.scalar_one_or_none()
     if review is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="리뷰를 찾을 수 없습니다."
@@ -238,19 +269,14 @@ async def upload_review_image(
             ),
         )
 
-    # 파일 크기 확인 (제한 초과 시 즉시 중단, 전체를 다 읽지 않음)
+    # 파일 크기 확인 (max_bytes+1까지만 읽어서 초과 여부 판단, 전체를 다 읽지 않음)
     max_bytes = settings.REVIEW_IMAGE_MAX_SIZE_MB * 1024 * 1024
-    chunks = []
-    total_size = 0
-    while chunk := await file.read(1024 * 1024):
-        total_size += len(chunk)
-        if total_size > max_bytes:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"이미지 크기는 {settings.REVIEW_IMAGE_MAX_SIZE_MB}MB 이하여야 합니다.",
-            )
-        chunks.append(chunk)
-    contents = b"".join(chunks)
+    contents = await file.read(max_bytes + 1)
+    if len(contents) > max_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"이미지 크기는 {settings.REVIEW_IMAGE_MAX_SIZE_MB}MB 이하여야 합니다.",
+        )
 
     # 파일 형식 확인 (Content-Type 헤더는 클라이언트가 조작 가능하므로 실제 파일 시그니처로 검증)
     detected_content_type = _detect_image_content_type(contents)
@@ -310,10 +336,10 @@ async def upload_review_image(
 
 
 async def delete_review_image(
-        session: AsyncSession,
-        user_id: int,
-        review_id: int,
-        image_id: int,
+    session: AsyncSession,
+    user_id: int,
+    review_id: int,
+    image_id: int,
 ) -> None:
     """리뷰 이미지 삭제"""
     # 이미지 존재 확인

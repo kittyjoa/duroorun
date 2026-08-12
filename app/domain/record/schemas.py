@@ -43,5 +43,3 @@ class RecordListResponse(BaseModel):
     total: int
     page: int
     size: int
-
-

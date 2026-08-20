@@ -34,6 +34,9 @@ class RecordResponse(BaseModel):
     created_at: datetime
     pace: float | None
     is_completed: bool
+    # 코스에 완주 인증 기준 좌표가 없어서 인증 판정 자체가 불가능한 경우에만 채워짐
+    # (그 외에는 항상 None — end_record가 아닌 다른 조회 응답에서도 None으로 나감)
+    verification_message: str | None = None
 
 
 class RecordListResponse(BaseModel):

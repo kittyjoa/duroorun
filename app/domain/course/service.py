@@ -22,6 +22,7 @@ from app.domain.course.schemas import (
     DrnbCourseListResponse,
     DrnbCourseSummary,
 )
+from app.domain.review.service import get_average_difficulty, get_review_summary
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +130,9 @@ async def get_drnb_course(session: AsyncSession, course_id: int) -> DrnbCourseDe
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="코스를 찾을 수 없습니다."
         )
+    # Course 모델의 실제 컬럼이 아니라 이 응답 한정으로만 붙이는 값 - DB에는 저장되지 않는다.
+    course.average_difficulty = await get_average_difficulty(session, course_id)
+    course.review_summary = await get_review_summary(session, course_id)
     return DrnbCourseDetailResponse.model_validate(course)
 
 
@@ -145,7 +149,7 @@ async def _get_custom_course(
         .options(selectinload(Course.waypoints), selectinload(Course.images))
     )
     if for_update:
-    # for_update 스위치로 수정/삭제할때만 True (같은 코스 건드리는 다른 요청 끼어들지 못하게)
+        # for_update 스위치로 수정/삭제할때만 True (같은 코스 건드리는 다른 요청 끼어들지 못하게)
         query = query.with_for_update()
         # with_for_update: 이 행을 읽으면서 동시에 잠그고, 내가 끝날때까지 기다리셈
     result = await session.execute(query)
@@ -185,6 +189,9 @@ async def create_course(
 async def get_custom_course(session: AsyncSession, course_id: int) -> CustomCourseDetailResponse:
     """커스텀 코스 상세를 조회합니다 (경유지/이미지 포함)."""
     course = await _get_custom_course(session, course_id)
+    # Course 모델의 실제 컬럼이 아니라 이 응답 한정으로만 붙이는 값 - DB에는 저장되지 않는다.
+    course.average_difficulty = await get_average_difficulty(session, course_id)
+    course.review_summary = await get_review_summary(session, course_id)
     return CustomCourseDetailResponse.model_validate(course)
 
 
@@ -363,9 +370,7 @@ async def upload_course_image(
         try:
             await delete_file(image_url)
         except (ClientError, BotoCoreError):
-            logger.exception(
-                "최대 개수 재확인 탈락 후 R2 롤백 삭제 실패: image_url=%s", image_url
-            )
+            logger.exception("최대 개수 재확인 탈락 후 R2 롤백 삭제 실패: image_url=%s", image_url)
         raise _max_image_count_error()
 
     image = CourseImage(course_id=course_id, image_url=image_url)

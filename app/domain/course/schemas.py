@@ -5,6 +5,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.domain.course.models import Difficulty
+from app.domain.review.schemas import ReviewSummaryResponse
 
 
 class CourseWaypointCreate(BaseModel):
@@ -111,6 +112,10 @@ class DrnbCourseDetailResponse(BaseModel):
     end_lat: float | None
     end_lng: float | None
     has_verification_coords: bool
+    # 리뷰 도메인 데이터 - review/service.py의 get_average_difficulty, get_review_summary로 계산.
+    # 리뷰가 없거나(난이도 평균) 3개 미만(AI 요약)이면 None
+    average_difficulty: Difficulty | None = None
+    review_summary: ReviewSummaryResponse | None = None
 
 
 class CustomCourseSummary(BaseModel):
@@ -160,3 +165,7 @@ class CustomCourseDetailResponse(BaseModel):
     updated_at: datetime | None
     waypoints: list[CourseWaypointResponse]
     images: list[CourseImageResponse]
+    # 리뷰 도메인 데이터 - review/service.py의 get_average_difficulty, get_review_summary로 계산.
+    # 리뷰가 없거나(난이도 평균) 3개 미만(AI 요약)이면 None
+    average_difficulty: Difficulty | None = None
+    review_summary: ReviewSummaryResponse | None = None

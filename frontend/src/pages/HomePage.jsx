@@ -1,3 +1,5 @@
+import Header from '../components/layout/Header';
+
 const courses = [
   { region: '강원 고성', title: '해파랑길 49코스', meta: '12.3km · 약 3시간', level: '보통', color: 'blue' },
   { region: '강원 속초', title: '영랑호 둘레길', meta: '8.1km · 약 1시간 20분', level: '쉬움', color: 'green' },
@@ -7,21 +9,7 @@ const courses = [
 export default function Home() {
   return (
     <main>
-      <header className="site-header">
-        <a className="brand" href="#top" aria-label="두루런 홈">
-          <span className="brand-mark">두루</span><span>런</span>
-        </a>
-        <nav aria-label="주요 메뉴">
-          <a href="#courses">코스 찾기</a>
-          <a href="#records">러닝 기록</a>
-          <a href="#custom">나만의 코스</a>
-          <a href="#community">러너 이야기</a>
-        </nav>
-        <div className="header-actions">
-          <button className="icon-button" aria-label="검색"><span className="search-icon" /></button>
-          <button className="login-button">로그인</button>
-        </div>
-      </header>
+      <Header />
 
       <section className="hero" id="top">
         <div className="route-line route-one" />

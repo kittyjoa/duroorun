@@ -12,9 +12,13 @@ const Header = () => {
     if (!getAccessToken()) return;
 
     (async () => {
-      const res = await apiFetch('/v1/users/me');
-      if (res.ok) {
-        setUser(await res.json());
+      try {
+        const res = await apiFetch('/v1/users/me');
+        if (res.ok) {
+          setUser(await res.json());
+        }
+      } catch {
+        // 네트워크 오류 시 로그인 안 한 것처럼 헤더를 그대로 둠 (별도 처리 불필요)
       }
     })();
   }, []);
@@ -36,9 +40,9 @@ const Header = () => {
         <span className="brand-mark">두루</span><span>런</span>
       </a>
       <nav aria-label="주요 메뉴">
-        <a href="#courses">코스 찾기</a>
-        <a href="#records">러닝 기록</a>
-        <a href="#custom">나만의 코스</a>
+        <a href="/#courses">코스 찾기</a>
+        <a href="/#records">러닝 기록</a>
+        <a href="/#custom">나만의 코스</a>
       </nav>
       <div className="header-actions">
         <button className="icon-button" aria-label="검색"><span className="search-icon" /></button>

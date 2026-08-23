@@ -1,9 +1,14 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 
-import { apiFetch } from '../api';
+import { apiFetch, getAccessToken } from '../api';
 import Header from '../components/layout/Header';
 
 const MyPage = () => {
+  const navigate = useNavigate();
+  const imageCloseRef = useRef(null);
+  const reviewCloseRef = useRef(null);
+
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -35,17 +40,35 @@ const MyPage = () => {
   }, [isImageOpen, isReviewOpen]);
 
   useEffect(() => {
+    if (!getAccessToken()) {
+      navigate('/login', { replace: true });
+      return;
+    }
+
     (async () => {
-      const res = await apiFetch('/v1/users/me');
-      if (res.ok) {
-        const data = await res.json();
-        setUser(data);
-        setNickname(data.nickname || '');
-        setLocation(data.location || '');
+      try {
+        const res = await apiFetch('/v1/users/me');
+        if (res.ok) {
+          const data = await res.json();
+          setUser(data);
+          setNickname(data.nickname || '');
+          setLocation(data.location || '');
+        }
+      } catch {
+        // 네트워크 오류 — user는 null로 남고, 아래 "정보를 불러오지 못했어요" 메시지로 처리됨
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
     })();
-  }, []);
+  }, [navigate]);
+
+  useEffect(() => {
+    if (isImageOpen) imageCloseRef.current?.focus();
+  }, [isImageOpen]);
+
+  useEffect(() => {
+    if (isReviewOpen) reviewCloseRef.current?.focus();
+  }, [isReviewOpen]);
 
   const handleSubmit = async (event) => {
     event.preventDefault();
@@ -101,6 +124,7 @@ const MyPage = () => {
     } catch {
       setError('서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.');
     } finally {
+      event.target.value = '';
       setUploading(false);
     }
   };
@@ -178,8 +202,15 @@ const MyPage = () => {
       </main>
 
       {isImageOpen && user?.profile_image_url && (
-        <div className="image-modal" onClick={() => setIsImageOpen(false)}>
+        <div
+          className="image-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-label="프로필 사진 원본"
+          onClick={() => setIsImageOpen(false)}
+        >
           <button
+            ref={imageCloseRef}
             type="button"
             className="image-modal-close"
             onClick={() => setIsImageOpen(false)}
@@ -196,9 +227,16 @@ const MyPage = () => {
       )}
 
       {isReviewOpen && (
-        <div className="image-modal" onClick={() => setIsReviewOpen(false)}>
+        <div
+          className="image-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-label="내가 쓴 리뷰"
+          onClick={() => setIsReviewOpen(false)}
+        >
           <div className="review-modal-card" onClick={(event) => event.stopPropagation()}>
             <button
+              ref={reviewCloseRef}
               type="button"
               className="image-modal-close review-modal-close"
               onClick={() => setIsReviewOpen(false)}

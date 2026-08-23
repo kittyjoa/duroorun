@@ -25,5 +25,7 @@ async def send_discord_alert(message: str) -> None:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             res = await client.post(settings.DISCORD_WEBHOOK_URL, json={"content": message})
             res.raise_for_status()
-    except httpx.HTTPError:
+    except Exception:
+        # httpx.HTTPError 외에도 URL 오타(httpx.InvalidURL) 등으로 실패할 수 있어
+        # 최대한 넓게 잡음 — 알림 함수 자체가 예외를 던지면 안 됨
         logger.exception("디스코드 알림 전송 실패")

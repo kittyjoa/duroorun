@@ -14,6 +14,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from app.clients.discord import send_discord_alert
+from app.clients.durunubi import DurunubiAPIError
 from app.config import settings
 from app.scripts.seed_courses import seed_courses
 
@@ -27,23 +28,33 @@ _RETRY_DELAYS_SECONDS = (60, 300)
 
 
 async def _run_seed_courses_with_retry() -> None:
-    """seed_courses()를 최대 _MAX_ATTEMPTS회 시도하고, 모두 실패하면 디스코드로 알림.
+    """seed_courses()를 실행합니다.
 
-    ㅡ 다른 프로세스가 이미 시드 돌려서 락 못 잡으면, 정상 스킵(return)
+    ㅡ DurunubiAPIError(네트워크/외부 API 계열, 일시적일 가능성이 높음)만 최대
+      _MAX_ATTEMPTS회 재시도. 그 외 예외(코드 버그, DB 오류 등 재시도해도 같은
+      결과가 나올 가능성이 높은 것들)는 재시도 없이 즉시 디스코드로 알림.
+    ㅡ 다른 프로세스가 이미 시드 돌려서 락 못 잡으면, 예외 없이 정상 스킵(return)
     """
     for attempt in range(1, _MAX_ATTEMPTS + 1):
         try:
             await seed_courses()
             return
-        except Exception:
-            logger.exception("두루누비 코스 시드 실패 (시도 %d/%d)", attempt, _MAX_ATTEMPTS)
+        except DurunubiAPIError:
+            logger.exception("두루누비 API 호출 실패 (시도 %d/%d)", attempt, _MAX_ATTEMPTS)
             if attempt == _MAX_ATTEMPTS:
                 await send_discord_alert(
-                    f"🚨 두루누비 코스 시드가 {_MAX_ATTEMPTS}회 재시도 후에도 실패했습니다. "
-                    "서버 로그(course_sync_logs)를 확인해주세요."
+                    f"🚨 두루누비 코스 시드가 {_MAX_ATTEMPTS}회 재시도 후에도 "
+                    "API 호출에 실패했습니다. 서버 로그(course_sync_logs)를 확인해주세요."
                 )
                 return
             await asyncio.sleep(_RETRY_DELAYS_SECONDS[attempt - 1])
+        except Exception:
+            logger.exception("두루누비 코스 시드 중 예상치 못한 오류 (재시도 없이 즉시 알림)")
+            await send_discord_alert(
+                "🚨 두루누비 코스 시드가 예상치 못한 오류로 실패했습니다(재시도 없이 즉시 알림). "
+                "서버 로그(course_sync_logs)를 확인해주세요."
+            )
+            return
 
 
 def start_scheduler() -> None:

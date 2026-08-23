@@ -311,7 +311,12 @@ async def seed_courses() -> None:
                 all_items, gpx_sources, complete = await _fetch_all_courses()
             except DurunubiAPIError as e:
                 logger.error("두루누비 API 호출 실패, 시드를 중단합니다: %s", e)
-                await _record_sync_log(session, SyncStatus.FAILURE, error_message=str(e))
+                try:
+                    await _record_sync_log(
+                        session, SyncStatus.FAILURE, error_message=f"{type(e).__name__}: {e}"
+                    )
+                except Exception:
+                    logger.exception("실패 기록(course_sync_logs) 저장에도 실패했습니다.")
                 raise
 
             try:
@@ -334,10 +339,15 @@ async def seed_courses() -> None:
                 logger.info("시드 완료")
             except Exception as e:
                 logger.exception("코스 시드 중 예상치 못한 오류로 중단합니다.")
-                # DB 오류로 세션이 실패 트랜잭션 상태일 수 있어, FAILURE 기록 전 롤백 필수
-                # (안 하면 _record_sync_log의 commit이 원본 오류를 가리고 또 실패함)
-                await session.rollback()
-                await _record_sync_log(session, SyncStatus.FAILURE, error_message=str(e))
+                try:
+                    # DB 오류로 세션이 실패 트랜잭션 상태일 수 있어, FAILURE 기록 전 롤백 필수
+                    # (안 하면 _record_sync_log의 commit이 원본 오류를 가리고 또 실패함)
+                    await session.rollback()
+                    await _record_sync_log(
+                        session, SyncStatus.FAILURE, error_message=f"{type(e).__name__}: {e}"
+                    )
+                except Exception:
+                    logger.exception("실패 기록(course_sync_logs) 저장에도 실패했습니다.")
                 raise
     finally:
         await lock_conn.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": _SEED_LOCK_KEY})

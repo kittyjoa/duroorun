@@ -111,7 +111,7 @@ class DrnbCourseDetailResponse(BaseModel):
     end_lat: float | None
     end_lng: float | None
     has_verification_coords: bool
-    average_difficulty: Difficulty | None
+    average_difficulty: Difficulty | None = None
 
 
 class CustomCourseSummary(BaseModel):
@@ -161,4 +161,4 @@ class CustomCourseDetailResponse(BaseModel):
     updated_at: datetime | None
     waypoints: list[CourseWaypointResponse]
     images: list[CourseImageResponse]
-    average_difficulty: Difficulty | None
+    average_difficulty: Difficulty | None = None

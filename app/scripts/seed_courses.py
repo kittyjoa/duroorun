@@ -312,25 +312,33 @@ async def seed_courses() -> None:
             except DurunubiAPIError as e:
                 logger.error("두루누비 API 호출 실패, 시드를 중단합니다: %s", e)
                 await _record_sync_log(session, SyncStatus.FAILURE, error_message=str(e))
-                return
+                raise
 
-            all_items, gpx_sources = _merge_manual_courses(all_items, gpx_sources)
+            try:
+                all_items, gpx_sources = _merge_manual_courses(all_items, gpx_sources)
 
-            for i in range(0, len(all_items), _PAGE_SIZE):
-                await _upsert_courses(session, all_items[i : i + _PAGE_SIZE])
-            logger.info("코스 upsert 완료: %d건", len(all_items))
+                for i in range(0, len(all_items), _PAGE_SIZE):
+                    await _upsert_courses(session, all_items[i : i + _PAGE_SIZE])
+                logger.info("코스 upsert 완료: %d건", len(all_items))
 
-            if complete:
-                seen_dmb_ids = {item["crsIdx"] for item in all_items}
-                await _deactivate_missing_courses(session, seen_dmb_ids)
-            else:
-                logger.warning(
-                    "코스 목록을 끝까지 수집하지 못해 이번 실행은 비활성화 처리를 건너뜁니다."
-                )
+                if complete:
+                    seen_dmb_ids = {item["crsIdx"] for item in all_items}
+                    await _deactivate_missing_courses(session, seen_dmb_ids)
+                else:
+                    logger.warning(
+                        "코스 목록을 끝까지 수집하지 못해 이번 실행은 비활성화 처리를 건너뜁니다."
+                    )
 
-            await _sync_coordinates(session, gpx_sources)
-            await _record_sync_log(session, SyncStatus.SUCCESS, fetched_count=len(all_items))
-            logger.info("시드 완료")
+                await _sync_coordinates(session, gpx_sources)
+                await _record_sync_log(session, SyncStatus.SUCCESS, fetched_count=len(all_items))
+                logger.info("시드 완료")
+            except Exception as e:
+                logger.exception("코스 시드 중 예상치 못한 오류로 중단합니다.")
+                # DB 오류로 세션이 실패 트랜잭션 상태일 수 있어, FAILURE 기록 전 롤백 필수
+                # (안 하면 _record_sync_log의 commit이 원본 오류를 가리고 또 실패함)
+                await session.rollback()
+                await _record_sync_log(session, SyncStatus.FAILURE, error_message=str(e))
+                raise
     finally:
         await lock_conn.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": _SEED_LOCK_KEY})
         await lock_conn.close()

@@ -6,12 +6,14 @@
   분리하거나 분산 락 추가 필요.
 """
 
+import asyncio
 import logging
 from datetime import datetime
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
+from app.clients.discord import send_discord_alert
 from app.config import settings
 from app.scripts.seed_courses import seed_courses
 
@@ -19,6 +21,29 @@ logger = logging.getLogger(__name__)
 
 _scheduler = AsyncIOScheduler()
 _JOB_ID = "seed_courses"
+_MAX_ATTEMPTS = 3
+# 1차 실패 후 1분, 2차 실패 후 5분 대기하고 재시도 (일시적 API/네트워크 blip 대응)
+_RETRY_DELAYS_SECONDS = (60, 300)
+
+
+async def _run_seed_courses_with_retry() -> None:
+    """seed_courses()를 최대 _MAX_ATTEMPTS회 시도하고, 모두 실패하면 디스코드로 알림.
+
+    ㅡ 다른 프로세스가 이미 시드 돌려서 락 못 잡으면, 정상 스킵(return)
+    """
+    for attempt in range(1, _MAX_ATTEMPTS + 1):
+        try:
+            await seed_courses()
+            return
+        except Exception:
+            logger.exception("두루누비 코스 시드 실패 (시도 %d/%d)", attempt, _MAX_ATTEMPTS)
+            if attempt == _MAX_ATTEMPTS:
+                await send_discord_alert(
+                    f"🚨 두루누비 코스 시드가 {_MAX_ATTEMPTS}회 재시도 후에도 실패했습니다. "
+                    "서버 로그(course_sync_logs)를 확인해주세요."
+                )
+                return
+            await asyncio.sleep(_RETRY_DELAYS_SECONDS[attempt - 1])
 
 
 def start_scheduler() -> None:
@@ -38,7 +63,7 @@ def start_scheduler() -> None:
     """
     job_kwargs = {"next_run_time": datetime.now()} if settings.SEED_ON_STARTUP else {}
     _scheduler.add_job(
-        seed_courses,
+        _run_seed_courses_with_retry,
         trigger=CronTrigger(hour=8, minute=0),
         id=_JOB_ID,
         replace_existing=True,

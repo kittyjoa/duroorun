@@ -35,6 +35,11 @@ class Difficulty(enum.StrEnum):
     HARD = "HARD"
 
 
+class SyncStatus(enum.StrEnum):
+    SUCCESS = "SUCCESS"
+    FAILURE = "FAILURE"
+
+
 DIFFICULTY_SCORE = {
     Difficulty.EASY: 1,
     Difficulty.NORMAL: 2,
@@ -107,6 +112,24 @@ class Course(Base):
         — record/프론트가 이 값으로 완주 인증 불가 코스를 판단해 에러/알림을 띄움.
         """
         return None not in (self.start_lat, self.start_lng, self.end_lat, self.end_lng)
+
+
+class CourseSyncLog(Base):
+    """두루누비 코스 동기화(seed_courses) 실행 이력 - api 호출 기록 테이블.
+
+    ㅡ 로컬 DB 저장 방식 신청서에 기재한 "동기화 시도(성공/실패) 이력 확인 가능" 구현 목적
+    """
+
+    __tablename__ = "course_sync_logs"
+
+    # PK/ 성공실패/ 수집•upsert한 코스건수/ 실패시 에러메시지/ 실행시각
+    sync_log_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    status: Mapped[SyncStatus] = mapped_column(SAEnum(SyncStatus), nullable=False)
+    fetched_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    executed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
 
 
 class CourseWaypoint(Base):

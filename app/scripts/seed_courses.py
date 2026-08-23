@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.clients.durunubi import DurunubiAPIError, fetch_course_list
 from app.database import AsyncSessionLocal, engine
-from app.domain.course.models import Course, CourseType, Difficulty
+from app.domain.course.models import Course, CourseSyncLog, CourseType, Difficulty, SyncStatus
 
 # Course의 관계/FK가 참조하는 다른 도메인 모델들 — 직접 안 써도 import해야
 # SQLAlchemy가 courses.created_by(→users), course_facility(→facilities) 매핑을 해석할 수 있음
@@ -130,6 +130,19 @@ async def _deactivate_missing_courses(session: AsyncSession, seen_dmb_ids: set[s
     logger.warning(
         "API 응답에서 빠진 코스 %d건 비활성화: %s", len(missing), [c.dmb_id for c in missing]
     )
+
+
+async def _record_sync_log(
+    session: AsyncSession,
+    status: SyncStatus,
+    fetched_count: int | None = None,
+    error_message: str | None = None,
+) -> None:
+    """동기화 시도 1건을 course_sync_logs에 기록(신청서에 따른 api 호출 기록용)."""
+    session.add(
+        CourseSyncLog(status=status, fetched_count=fetched_count, error_message=error_message)
+    )
+    await session.commit()
 
 
 async def _fetch_all_courses() -> tuple[list[dict], dict[str, str], bool]:
@@ -298,6 +311,7 @@ async def seed_courses() -> None:
                 all_items, gpx_sources, complete = await _fetch_all_courses()
             except DurunubiAPIError as e:
                 logger.error("두루누비 API 호출 실패, 시드를 중단합니다: %s", e)
+                await _record_sync_log(session, SyncStatus.FAILURE, error_message=str(e))
                 return
 
             all_items, gpx_sources = _merge_manual_courses(all_items, gpx_sources)
@@ -315,6 +329,7 @@ async def seed_courses() -> None:
                 )
 
             await _sync_coordinates(session, gpx_sources)
+            await _record_sync_log(session, SyncStatus.SUCCESS, fetched_count=len(all_items))
             logger.info("시드 완료")
     finally:
         await lock_conn.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": _SEED_LOCK_KEY})

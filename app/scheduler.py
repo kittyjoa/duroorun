@@ -10,6 +10,7 @@ import logging
 from datetime import datetime
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 
 from app.config import settings
 from app.scripts.seed_courses import seed_courses
@@ -23,9 +24,12 @@ _JOB_ID = "seed_courses"
 def start_scheduler() -> None:
     """앱 시작 시 스케줄러를 등록·기동합니다.
 
-    ㅡ 24시간 주기로 seed_courses()를 재실행해 두루누비 코스 데이터를 최신화.
-    ㅡ next_run_time: SEED_ON_STARTUP=true일 때만 기동 즉시 1회 실행. false면 이 인자를
-      아예 안 넘김. 트리거가 알아서 "24시간 뒤 첫 실행"으로 계산.
+    ㅡ 매일 08:00(고정 시각)에 seed_courses()를 실행해 두루누비 코스 데이터를 최신화.
+      두루누비 원본 데이터가 매일 오전 07:30 이후 동기화되는 점을 고려한 시각.
+    ㅡ interval: 앱 기동 시점 기준으로 24시간마다 도는 거라 재시작할 때마다 실행 시각 밀림.
+      cron(채택): 고정 시각 실행(신청서 동기화 계획에 맞추기 위해)
+    ㅡ next_run_time: SEED_ON_STARTUP=true일 때만 기동 즉시 1회 실행.
+      false면 이 인자를 아예 안 넘김. 트리거가 알아서 "다음 08:00"으로 계산.
     ㅡ 로컬 서버 켤때마다 API 호출되는 걸 막기 위해 기본값은 false.
       로컬에서 즉시실행 테스트하려면 .env에 SEED_ON_STARTUP=true로 켜면 됨.
     ㅡ replace_existing=True: 이미 같은 id로 등록된 job이 있어도 덮어씀
@@ -35,8 +39,7 @@ def start_scheduler() -> None:
     job_kwargs = {"next_run_time": datetime.now()} if settings.SEED_ON_STARTUP else {}
     _scheduler.add_job(
         seed_courses,
-        trigger="interval",
-        hours=24,
+        trigger=CronTrigger(hour=8, minute=0),
         id=_JOB_ID,
         replace_existing=True,
         misfire_grace_time=3600,
@@ -45,7 +48,7 @@ def start_scheduler() -> None:
     )
     _scheduler.start()
     logger.info(
-        "코스 시드 스케줄러 시작 (24시간 주기, 기동 시 즉시 실행=%s)", settings.SEED_ON_STARTUP
+        "코스 시드 스케줄러 시작 (매일 08:00, 기동 시 즉시 실행=%s)", settings.SEED_ON_STARTUP
     )
 
 

@@ -1,16 +1,21 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
-import { apiFetch, getAccessToken } from '../api';
+import { apiFetch } from '../api';
 import Header from '../components/layout/Header';
+import { useUser } from '../contexts/UserContext';
+import useFocusTrap from '../hooks/useFocusTrap';
+
+// 백엔드 검증 규칙과 동일 (app/config.py) — 서버가 최종 검증하고, 여긴 UX용 사전 안내
+const NICKNAME_PATTERN = '[가-힣a-zA-Z0-9]{2,10}';
+const LOCATION_PATTERN = '[가-힣a-zA-Z0-9\\s]{1,50}';
+const PROFILE_IMAGE_MAX_SIZE_MB = 2;
 
 const MyPage = () => {
   const navigate = useNavigate();
-  const imageCloseRef = useRef(null);
-  const reviewCloseRef = useRef(null);
-
-  const [user, setUser] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const imageModalRef = useRef(null);
+  const reviewModalRef = useRef(null);
+  const { user, setUser, isLoading } = useUser();
 
   const [nickname, setNickname] = useState('');
   const [location, setLocation] = useState('');
@@ -40,35 +45,20 @@ const MyPage = () => {
   }, [isImageOpen, isReviewOpen]);
 
   useEffect(() => {
-    if (!getAccessToken()) {
+    if (!isLoading && !user) {
       navigate('/login', { replace: true });
-      return;
     }
-
-    (async () => {
-      try {
-        const res = await apiFetch('/v1/users/me');
-        if (res.ok) {
-          const data = await res.json();
-          setUser(data);
-          setNickname(data.nickname || '');
-          setLocation(data.location || '');
-        }
-      } catch {
-        // 네트워크 오류 — user는 null로 남고, 아래 "정보를 불러오지 못했어요" 메시지로 처리됨
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, [navigate]);
+  }, [isLoading, user, navigate]);
 
   useEffect(() => {
-    if (isImageOpen) imageCloseRef.current?.focus();
-  }, [isImageOpen]);
+    if (user) {
+      setNickname(user.nickname || '');
+      setLocation(user.location || '');
+    }
+  }, [user]);
 
-  useEffect(() => {
-    if (isReviewOpen) reviewCloseRef.current?.focus();
-  }, [isReviewOpen]);
+  useFocusTrap(imageModalRef, isImageOpen);
+  useFocusTrap(reviewModalRef, isReviewOpen);
 
   const handleSubmit = async (event) => {
     event.preventDefault();
@@ -102,6 +92,13 @@ const MyPage = () => {
     if (!file) return;
 
     setError('');
+
+    if (file.size > PROFILE_IMAGE_MAX_SIZE_MB * 1024 * 1024) {
+      setError(`이미지 크기는 최대 ${PROFILE_IMAGE_MAX_SIZE_MB}MB까지 업로드 가능합니다`);
+      event.target.value = '';
+      return;
+    }
+
     setUploading(true);
 
     try {
@@ -135,8 +132,8 @@ const MyPage = () => {
       <main className="mypage-page">
         <h1>마이페이지</h1>
 
-        {loading && <p>불러오는 중...</p>}
-        {!loading && !user && <p>정보를 불러오지 못했어요.</p>}
+        {isLoading && <p>불러오는 중...</p>}
+        {!isLoading && !user && <p>정보를 불러오지 못했어요.</p>}
 
         {user && (
           <>
@@ -174,6 +171,9 @@ const MyPage = () => {
                 value={nickname}
                 onChange={(event) => setNickname(event.target.value)}
                 placeholder="한글/영문/숫자 2~10자"
+                pattern={NICKNAME_PATTERN}
+                title="한글/영문/숫자 2~10자로 입력해주세요"
+                maxLength={10}
                 required
               />
 
@@ -183,6 +183,9 @@ const MyPage = () => {
                 value={location}
                 onChange={(event) => setLocation(event.target.value)}
                 placeholder="예: 강원 속초시"
+                pattern={LOCATION_PATTERN}
+                title="한글/영문/숫자 1~50자로 입력해주세요"
+                maxLength={50}
                 required
               />
 
@@ -203,22 +206,23 @@ const MyPage = () => {
 
       {isImageOpen && user?.profile_image_url && (
         <div
-          className="image-modal"
+          ref={imageModalRef}
+          className="modal-overlay"
           role="dialog"
           aria-modal="true"
           aria-label="프로필 사진 원본"
           onClick={() => setIsImageOpen(false)}
         >
           <button
-            ref={imageCloseRef}
             type="button"
-            className="image-modal-close"
+            className="modal-close"
             onClick={() => setIsImageOpen(false)}
             aria-label="닫기"
           >
             ×
           </button>
           <img
+            className="modal-image"
             src={user.profile_image_url}
             alt="프로필 사진 원본"
             onClick={(event) => event.stopPropagation()}
@@ -228,7 +232,8 @@ const MyPage = () => {
 
       {isReviewOpen && (
         <div
-          className="image-modal"
+          ref={reviewModalRef}
+          className="modal-overlay"
           role="dialog"
           aria-modal="true"
           aria-label="내가 쓴 리뷰"
@@ -236,9 +241,8 @@ const MyPage = () => {
         >
           <div className="review-modal-card" onClick={(event) => event.stopPropagation()}>
             <button
-              ref={reviewCloseRef}
               type="button"
-              className="image-modal-close review-modal-close"
+              className="modal-close review-modal-close"
               onClick={() => setIsReviewOpen(false)}
               aria-label="닫기"
             >

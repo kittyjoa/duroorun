@@ -149,10 +149,10 @@ h2 { font-size:36px; letter-spacing:-1.5px; margin:8px 0 0; line-height:1.25; }
 .mypage-review-button span { color:#9aa9a5; }
 button.profile-avatar { border:0; padding:0; font:inherit; cursor:pointer; }
 
-/* 프로필 사진 원본 보기 (라이트박스) / 내 리뷰 관리 모달 */
-.image-modal { position:fixed; inset:0; background:rgba(16,42,43,.85); display:flex; align-items:center; justify-content:center; z-index:100; padding:24px; }
-.image-modal img { max-width:min(90vw,480px); max-height:80vh; border-radius:12px; object-fit:contain; }
-.image-modal-close { position:absolute; top:24px; right:24px; width:40px; height:40px; border-radius:50%; border:0; background:rgba(255,255,255,.15); color:#fff; font-size:22px; cursor:pointer; }
+/* 공용 모달 오버레이 (프로필 사진 원본 보기, 내 리뷰 관리 등) */
+.modal-overlay { position:fixed; inset:0; background:rgba(16,42,43,.85); display:flex; align-items:center; justify-content:center; z-index:100; padding:24px; }
+.modal-image { max-width:min(90vw,480px); max-height:80vh; border-radius:12px; object-fit:contain; }
+.modal-close { position:absolute; top:24px; right:24px; width:40px; height:40px; border-radius:50%; border:0; background:rgba(255,255,255,.15); color:#fff; font-size:22px; cursor:pointer; }
 .review-modal-card { position:relative; width:100%; max-width:360px; background:#fff; border-radius:16px; padding:32px; text-align:center; }
 .review-modal-card h2 { font-size:18px; margin:0 0 10px; }
 .review-modal-card p { color:#5c706c; font-size:14px; margin:0; }

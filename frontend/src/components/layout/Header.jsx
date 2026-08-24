@@ -1,27 +1,25 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
-import { apiFetch, clearAccessToken, getAccessToken } from '../../api';
+import { apiFetch, clearAccessToken } from '../../api';
+import { useUser } from '../../contexts/UserContext';
 
 const Header = () => {
   const navigate = useNavigate();
-  const [user, setUser] = useState(null);
+  const profileMenuRef = useRef(null);
+  const { user, setUser } = useUser();
   const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
-    if (!getAccessToken()) return;
-
-    (async () => {
-      try {
-        const res = await apiFetch('/v1/users/me');
-        if (res.ok) {
-          setUser(await res.json());
-        }
-      } catch {
-        // 네트워크 오류 시 로그인 안 한 것처럼 헤더를 그대로 둠 (별도 처리 불필요)
+    if (!menuOpen) return undefined;
+    const handleClickOutside = (event) => {
+      if (profileMenuRef.current && !profileMenuRef.current.contains(event.target)) {
+        setMenuOpen(false);
       }
-    })();
-  }, []);
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [menuOpen]);
 
   const handleLogout = async () => {
     try {
@@ -47,7 +45,7 @@ const Header = () => {
       <div className="header-actions">
         <button className="icon-button" aria-label="검색"><span className="search-icon" /></button>
         {user ? (
-          <div className="profile-menu">
+          <div className="profile-menu" ref={profileMenuRef}>
             <div className="profile-avatar" aria-hidden="true">
               {user.profile_image_url ? (
                 <img src={user.profile_image_url} alt="" />

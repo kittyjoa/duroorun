@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { apiFetch } from '../api';
+import { useUser } from '../contexts/UserContext';
 
 const Onboarding = () => {
   const [nickname, setNickname] = useState('');
@@ -9,6 +10,7 @@ const Onboarding = () => {
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const navigate = useNavigate();
+  const { setUser } = useUser();
 
   const handleSubmit = async (event) => {
     event.preventDefault();
@@ -27,6 +29,8 @@ const Onboarding = () => {
         return;
       }
 
+      // 헤더가 바로 새 닉네임을 보여주도록 전역 상태(Context)도 같이 갱신
+      setUser(await res.json());
       navigate('/', { replace: true });
     } catch {
       setError('서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.');

@@ -10,10 +10,12 @@ const UserContext = createContext(null);
 export const UserProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [hasError, setHasError] = useState(false);
 
   const refreshUser = async () => {
     if (!getAccessToken()) {
       setUser(null);
+      setHasError(false);
       setIsLoading(false);
       return null;
     }
@@ -23,12 +25,21 @@ export const UserProvider = ({ children }) => {
       if (res.ok) {
         const data = await res.json();
         setUser(data);
+        setHasError(false);
         return data;
       }
-      setUser(null);
+      // apiFetch가 401은 이미 내부에서 재발급 재시도까지 해봤으므로, 그래도 401이면 진짜 로그아웃 상태.
+      // 5xx 등 다른 실패는 일시적 오류로 보고 user를 그대로 둔다 (로그인 상태를 함부로 지우지 않음).
+      if (res.status === 401) {
+        setUser(null);
+        setHasError(false);
+      } else {
+        setHasError(true);
+      }
       return null;
     } catch {
-      setUser(null);
+      // 네트워크 오류도 인증 실패로 단정하지 않음
+      setHasError(true);
       return null;
     } finally {
       setIsLoading(false);
@@ -40,7 +51,7 @@ export const UserProvider = ({ children }) => {
   }, []);
 
   return (
-    <UserContext.Provider value={{ user, setUser, refreshUser, isLoading }}>
+    <UserContext.Provider value={{ user, setUser, refreshUser, isLoading, hasError }}>
       {children}
     </UserContext.Provider>
   );

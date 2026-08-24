@@ -15,7 +15,7 @@ const MyPage = () => {
   const navigate = useNavigate();
   const imageModalRef = useRef(null);
   const reviewModalRef = useRef(null);
-  const { user, setUser, isLoading } = useUser();
+  const { user, setUser, isLoading, hasError } = useUser();
 
   const [nickname, setNickname] = useState('');
   const [location, setLocation] = useState('');
@@ -45,17 +45,20 @@ const MyPage = () => {
   }, [isImageOpen, isReviewOpen]);
 
   useEffect(() => {
-    if (!isLoading && !user) {
+    // hasError면 일시적인 조회 실패일 뿐 진짜 로그아웃이 아니므로 로그인 화면으로 보내지 않음
+    if (!isLoading && !user && !hasError) {
       navigate('/login', { replace: true });
     }
-  }, [isLoading, user, navigate]);
+  }, [isLoading, user, hasError, navigate]);
 
   useEffect(() => {
     if (user) {
       setNickname(user.nickname || '');
       setLocation(user.location || '');
     }
-  }, [user]);
+    // profile_image_url만 바뀌었을 때(사진 업로드)는 재실행 안 되도록 닉네임/거주지 값만 의존성으로 좁힘
+    // — 그렇지 않으면 사진 업로드 시 입력 중이던 닉네임/거주지가 서버 값으로 덮어써짐
+  }, [user?.nickname, user?.location]);
 
   useFocusTrap(imageModalRef, isImageOpen);
   useFocusTrap(reviewModalRef, isReviewOpen);
@@ -133,7 +136,10 @@ const MyPage = () => {
         <h1>마이페이지</h1>
 
         {isLoading && <p>불러오는 중...</p>}
-        {!isLoading && !user && <p>정보를 불러오지 못했어요.</p>}
+        {!isLoading && !user && hasError && (
+          <p>일시적인 오류로 정보를 불러오지 못했어요. 잠시 후 다시 시도해주세요.</p>
+        )}
+        {!isLoading && !user && !hasError && <p>정보를 불러오지 못했어요.</p>}
 
         {user && (
           <>

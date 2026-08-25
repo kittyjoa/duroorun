@@ -12,7 +12,7 @@ from botocore.client import BaseClient
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import BackgroundTasks, HTTPException, UploadFile, status
 from psycopg.errors import UniqueViolation
-from sqlalchemy import exists, func, select
+from sqlalchemy import case, exists, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -243,6 +243,11 @@ async def _maybe_update_summary(course_id: int) -> None:
             return
 
         async with AsyncSessionLocal() as session:
+            # 스냅샷(요약에 쓴 최대 50개)에 없는 리뷰가 그 사이 추가/삭제돼도 review_count가
+            # 실제 전체 개수와 어긋날 수 있으므로, 전체 개수도 그대로인지 함께 확인한다.
+            if await _count_reviews(session, course_id) != review_count:
+                return
+
             recheck_result = await session.execute(
                 select(Review.review_id, Review.updated_at).where(Review.review_id.in_(snapshot))
             )
@@ -296,6 +301,22 @@ async def get_review_summary(session: AsyncSession, course_id: int) -> ReviewSum
     return ReviewSummaryResponse.model_validate(summary)
 
 
+async def _invalidate_summary(session: AsyncSession, course_id: int) -> None:
+    """코스의 기존 AI 요약을 무효화(삭제)한다.
+
+    어떤 리뷰가 요약에 쓰였는지 추적하지 않으므로, 리뷰 내용이 바뀌거나(수정) 리뷰가
+    없어지면(삭제) 보수적으로 항상 무효화한다 - review_count만 보정하고 텍스트는 남겨두면
+    "이미 반영됨(차이 0)"으로 계산되어 옛 요약이 갱신 없이 계속 노출되는 문제가 있었다.
+    """
+    summary_result = await session.execute(
+        select(ReviewSummary).where(ReviewSummary.course_id == course_id)
+    )
+    summary = summary_result.scalar_one_or_none()
+    if summary is not None:
+        await session.delete(summary)
+        await session.commit()
+
+
 async def update_review(
     session: AsyncSession,
     user_id: int,
@@ -332,13 +353,7 @@ async def update_review(
         # 현재 리뷰 기준으로 재생성을 예약한다 (무효화만 하고 끝내면, 이후 새 리뷰가 작성되지
         # 않는 한 요약이 계속 없는 상태로 남을 수 있음).
         course_id = review.course_id
-        summary_result = await session.execute(
-            select(ReviewSummary).where(ReviewSummary.course_id == course_id)
-        )
-        summary = summary_result.scalar_one_or_none()
-        if summary is not None:
-            await session.delete(summary)
-            await session.commit()
+        await _invalidate_summary(session, course_id)
         background_tasks.add_task(_maybe_update_summary, course_id)
 
     return ReviewResponse.model_validate(review)
@@ -379,17 +394,8 @@ async def delete_review(
                 _get_r2_client().delete_object, Bucket=settings.R2_BUCKET_NAME, Key=key
             )
 
-    # 삭제된 리뷰가 기존 요약에 반영돼 있었을 수 있으므로 무효화한다 (update_review와 동일한
-    # 정책 - 어떤 리뷰가 요약에 쓰였는지 추적하지 않으므로 보수적으로 항상 무효화한다).
-    # review_count만 보정하고 텍스트는 남겨두면, 다음 재생성 판단이 "이미 반영됨(차이 0)"으로
-    # 계산되어 정작 삭제된 리뷰가 포함된 옛 요약이 갱신 없이 계속 노출되는 문제가 있었다.
-    summary_result = await session.execute(
-        select(ReviewSummary).where(ReviewSummary.course_id == course_id)
-    )
-    summary = summary_result.scalar_one_or_none()
-    if summary is not None:
-        await session.delete(summary)
-        await session.commit()
+    # 삭제된 리뷰가 기존 요약에 반영돼 있었을 수 있으므로 무효화한다 (update_review와 동일한 정책)
+    await _invalidate_summary(session, course_id)
 
     remaining = await _count_reviews(session, course_id)
     if remaining >= _SUMMARY_FIRST_THRESHOLD:
@@ -397,18 +403,25 @@ async def delete_review(
         background_tasks.add_task(_maybe_update_summary, course_id)
 
 
-# TODO(course 담당): 코스 상세 조회(get_drnb_course/get_custom_course)에서
-# 이 함수를 가져다 응답에 포함해 주세요.
 async def get_average_difficulty(session: AsyncSession, course_id: int) -> Difficulty | None:
     """코스별 유저 체감 난이도 평균 (탈퇴 유저 리뷰도 통계 목적으로 포함, 리뷰가 없으면 None).
     EASY/NORMAL/HARD를 점수로 평균을 낸 뒤 가장 가까운 등급으로 반올림하여 표시한다.
     """
-    result = await session.execute(select(Review.difficulty).where(Review.course_id == course_id))
-    difficulties = result.scalars().all()
-    if not difficulties:
+    # 리뷰가 수천 개인 코스에서도 매번 전체 행을 파이썬으로 끌어오지 않도록 평균을 DB에서 계산
+    score_expr = case(
+        (Review.difficulty == Difficulty.EASY, _DIFFICULTY_SCORE[Difficulty.EASY]),
+        (Review.difficulty == Difficulty.NORMAL, _DIFFICULTY_SCORE[Difficulty.NORMAL]),
+        (Review.difficulty == Difficulty.HARD, _DIFFICULTY_SCORE[Difficulty.HARD]),
+    )
+    result = await session.execute(
+        select(func.avg(score_expr), func.count())
+        .select_from(Review)
+        .where(Review.course_id == course_id)
+    )
+    avg_score, count = result.one()
+    if not count:
         return None
-    avg_score = sum(_DIFFICULTY_SCORE[d] for d in difficulties) / len(difficulties)
-    rounded_score = min(max(floor(avg_score + 0.5), 1), 3)
+    rounded_score = min(max(floor(float(avg_score) + 0.5), 1), 3)
     return _SCORE_TO_DIFFICULTY[rounded_score]
 
 

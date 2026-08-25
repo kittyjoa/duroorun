@@ -7,6 +7,9 @@ import { useDebouncedValue } from '../hooks/useDebouncedValue';
 const DIFFICULTY_LABEL = { EASY: '쉬움', NORMAL: '보통', HARD: '어려움' };
 const DIFFICULTY_COLOR = { EASY: 'green', NORMAL: 'blue', HARD: 'red' };
 
+// TODO: 더보기 버튼이나 무한스크롤로 20~30개씩 끊어 불러오기 (특히 커스텀)
+// 필터 변경하면 페이지 1로 초기화하는 처리도? 더보기 방식이어도?
+
 // 해파랑길 강원 구간(29~50코스)이 지나는 시/군, 삼척→고성 순 (남→북)
 // DB에 저장된 sigun 값과 정확히 일치해야 필터가 걸림 (백엔드가 == 비교)
 const GANGWON_SIGUN_OPTIONS = [
@@ -31,8 +34,12 @@ const CUSTOM_INITIAL_FILTERS = {
   distanceMax: '',
 };
 
+const PAGE_SIZE = 100;
+
 const buildDrnbQuery = (filters) => {
   const params = new URLSearchParams();
+  params.set('page', '1');
+  params.set('size', String(PAGE_SIZE));
   if (filters.sigun) params.set('sigun', filters.sigun);
   if (filters.difficulty) params.set('difficulty', filters.difficulty);
   if (filters.estimatedTimeMin) params.set('estimated_time_min', filters.estimatedTimeMin);
@@ -42,6 +49,8 @@ const buildDrnbQuery = (filters) => {
 
 const buildCustomQuery = (filters) => {
   const params = new URLSearchParams();
+  params.set('page', '1');
+  params.set('size', String(PAGE_SIZE));
   if (filters.difficulty) params.set('difficulty', filters.difficulty);
   if (filters.distanceMin) params.set('distance_min', filters.distanceMin);
   if (filters.distanceMax) params.set('distance_max', filters.distanceMax);

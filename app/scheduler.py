@@ -9,6 +9,7 @@
 import asyncio
 import logging
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -20,7 +21,8 @@ from app.scripts.seed_courses import seed_courses
 
 logger = logging.getLogger(__name__)
 
-_scheduler = AsyncIOScheduler()
+KST = ZoneInfo("Asia/Seoul")
+_scheduler = AsyncIOScheduler(timezone=KST)
 _JOB_ID = "seed_courses"
 _MAX_ATTEMPTS = 3
 # 1차 실패 후 1분, 2차 실패 후 5분 대기하고 재시도 (일시적 API/네트워크 blip 대응)
@@ -72,10 +74,10 @@ def start_scheduler() -> None:
     ㅡ misfire_grace_time/coalesce: 서버 재시작 등으로 실행 시각을 놓쳐도
       1시간 이내면 뒤늦게라도 실행하되, 밀린 실행이 쌓여도 한 번만 실행.
     """
-    job_kwargs = {"next_run_time": datetime.now()} if settings.SEED_ON_STARTUP else {}
+    job_kwargs = {"next_run_time": datetime.now(KST)} if settings.SEED_ON_STARTUP else {}
     _scheduler.add_job(
         _run_seed_courses_with_retry,
-        trigger=CronTrigger(hour=8, minute=0),
+        trigger=CronTrigger(hour=8, minute=0, timezone=KST),
         id=_JOB_ID,
         replace_existing=True,
         misfire_grace_time=3600,

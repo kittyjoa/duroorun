@@ -138,3 +138,12 @@ h2 { font-size:36px; letter-spacing:-1.5px; margin:8px 0 0; line-height:1.25; }
 .course-detail-info dd { margin:0; font-size:16px; color:var(--ink); }
 .course-detail-desc { color:#5c706c; font-family:'Apple SD Gothic Neo',sans-serif; font-size:14px; line-height:1.8; }
 @media (max-width:560px) { .course-detail-info { grid-template-columns:1fr; } }
+
+/* 코스 타입 탭 / 필터 바 */
+.course-type-tabs { display:flex; gap:10px; margin:20px 0; }
+.course-type-tabs button { border:1px solid #e1e7e2; background:#fff; color:#5c706c; padding:10px 18px; border-radius:22px; cursor:pointer; font-size:14px; }
+.course-type-tabs button.active { background:var(--ink); color:#fff; border-color:var(--ink); }
+.course-filter-bar { display:flex; flex-wrap:wrap; gap:10px; margin-bottom:28px; }
+.course-filter-bar input, .course-filter-bar select { border:1px solid #dadce0; border-radius:8px; padding:10px 12px; font-size:13px; font-family:'Apple SD Gothic Neo',sans-serif; }
+.course-detail-images { display:flex; flex-wrap:wrap; gap:10px; margin-top:20px; }
+.course-detail-images img { width:160px; height:120px; object-fit:cover; border-radius:8px; }

@@ -6,7 +6,7 @@ import { apiFetch } from '../api';
 const DIFFICULTY_LABEL = { EASY: '쉬움', NORMAL: '보통', HARD: '어려움' };
 
 const CourseDetail = () => {
-  const { courseId } = useParams();
+  const { courseType, courseId } = useParams();
   const [course, setCourse] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -16,7 +16,7 @@ const CourseDetail = () => {
       setLoading(true);
       setError('');
       try {
-        const res = await apiFetch(`/v1/courses/drnb/${courseId}`);
+        const res = await apiFetch(`/v1/courses/${courseType}/${courseId}`);
         if (!res.ok) {
           setError('코스 정보를 찾을 수 없어요.');
           return;
@@ -30,7 +30,7 @@ const CourseDetail = () => {
       }
     };
     fetchCourse();
-  }, [courseId]);
+  }, [courseType, courseId]);
 
   if (loading) {
     return (
@@ -55,7 +55,9 @@ const CourseDetail = () => {
       </Link>
 
       <div className="course-detail-heading">
-        <span className="section-kicker">{course.sigun ?? course.brd_div}</span>
+        <span className="section-kicker">
+          {courseType === 'drnb' ? (course.sigun ?? course.brd_div) : '커스텀 코스'}
+        </span>
         <h1>{course.course_name}</h1>
       </div>
 
@@ -78,13 +80,29 @@ const CourseDetail = () => {
             {course.estimated_time != null ? `약 ${course.estimated_time}분` : '정보 없음'}
           </dd>
         </div>
-        <div>
-          <dt>완주 인증</dt>
-          <dd>{course.has_verification_coords ? '가능' : '불가 (좌표 정보 없음)'}</dd>
-        </div>
+        {courseType === 'drnb' && (
+          <div>
+            <dt>완주 인증</dt>
+            <dd>{course.has_verification_coords ? '가능' : '불가 (좌표 정보 없음)'}</dd>
+          </div>
+        )}
+        {courseType === 'custom' && (
+          <div>
+            <dt>경유지 수</dt>
+            <dd>{course.waypoints?.length ?? 0}개</dd>
+          </div>
+        )}
       </dl>
 
       {course.course_description && <p className="course-detail-desc">{course.course_description}</p>}
+
+      {courseType === 'custom' && course.images?.length > 0 && (
+        <div className="course-detail-images">
+          {course.images.map((image) => (
+            <img key={image.image_id} src={image.image_url} alt={course.course_name} />
+          ))}
+        </div>
+      )}
     </main>
   );
 };

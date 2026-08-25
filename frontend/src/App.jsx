@@ -18,7 +18,7 @@ const App = () => {
         <Route path="/oauth/callback" element={<OAuthCallback />} />
         <Route path="/onboarding" element={<Onboarding />} />
         <Route path="/courses" element={<CourseList />} />
-        <Route path="/courses/:courseId" element={<CourseDetail />} />
+        <Route path="/courses/:courseType/:courseId" element={<CourseDetail />} />
       </Routes>
     </BrowserRouter>
   );

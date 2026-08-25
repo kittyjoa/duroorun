@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import logging
 import uuid
 from functools import lru_cache
 from math import floor
@@ -10,6 +11,7 @@ import boto3
 from botocore.client import BaseClient
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import BackgroundTasks, HTTPException, UploadFile, status
+from psycopg.errors import UniqueViolation
 from sqlalchemy import exists, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -29,6 +31,8 @@ from app.domain.review.schemas import (
     ReviewUpdateRequest,
 )
 from app.domain.user.models import UserRole
+
+logger = logging.getLogger(__name__)
 
 # AI 리뷰 요약 생성/재생성 임계값 (FEATURES.md: 3개 도달 시 첫 생성, 이후 5개마다 재생성)
 _SUMMARY_FIRST_THRESHOLD = 3
@@ -142,23 +146,29 @@ async def create_review(
     return ReviewResponse.model_validate(review)
 
 
+async def _count_reviews(session: AsyncSession, course_id: int) -> int:
+    result = await session.execute(
+        select(func.count()).select_from(Review).where(Review.course_id == course_id)
+    )
+    return result.scalar_one()
+
+
 async def _maybe_update_summary(course_id: int) -> None:
     """리뷰 개수가 임계값에 도달했으면 AI 요약을 생성/재생성한다.
 
     요청 처리와 별도로(백그라운드 태스크로) 실행되므로 요청 세션을 재사용하지 않고
-    새 세션을 연다. Gemini 호출이 실패해도 예외를 삼키고 조용히 종료한다 — 다음
-    리뷰가 작성될 때 이 함수가 다시 호출되면서 자연스럽게 재시도된다.
+    새 세션을 연다. 판단에 필요한 데이터만 먼저 읽고 세션을 닫은 뒤 Gemini를 호출한다
+    — 응답이 느려질 때 DB 락/트랜잭션/커넥션을 그만큼 오래 붙들고 있지 않기 위함.
+    Gemini 호출이 실패해도 예외를 삼키고 조용히 종료한다 — 다음 리뷰가 작성될 때
+    이 함수가 다시 호출되면서 자연스럽게 재시도된다.
     """
     async with AsyncSessionLocal() as session:
-        count_result = await session.execute(
-            select(func.count()).select_from(Review).where(Review.course_id == course_id)
-        )
-        review_count = count_result.scalar_one()
+        review_count = await _count_reviews(session, course_id)
         if review_count < _SUMMARY_FIRST_THRESHOLD:
             return
 
         summary_result = await session.execute(
-            select(ReviewSummary).where(ReviewSummary.course_id == course_id).with_for_update()
+            select(ReviewSummary).where(ReviewSummary.course_id == course_id)
         )
         summary = summary_result.scalar_one_or_none()
         if summary is not None:
@@ -171,14 +181,30 @@ async def _maybe_update_summary(course_id: int) -> None:
         )
         review_contents = contents_result.scalars().all()
 
-        try:
-            summary_text = await summarize_reviews(review_contents)
-        except Exception:  # noqa: BLE001
-            # Gemini API 실패(APIError)뿐 아니라 클라이언트 생성 실패(ValueError, 키 누락 등)도
-            # 포함해 광범위하게 잡는다. 백그라운드 최선 노력 작업이므로 여기서 실패해도
-            # 다음 리뷰 작성 시 이 함수가 다시 호출되며 자연스럽게 재시도된다.
+    try:
+        summary_text = await summarize_reviews(review_contents)
+    except Exception:  # noqa: BLE001
+        # Gemini API 실패(APIError)뿐 아니라 클라이언트 생성 실패(ValueError, 키 누락 등)도
+        # 포함해 광범위하게 잡는다. 백그라운드 최선 노력 작업이므로 여기서 실패해도
+        # 다음 리뷰 작성 시 이 함수가 다시 호출되며 자연스럽게 재시도된다. 원인 파악을
+        # 위해 로그는 남긴다.
+        logger.exception("리뷰 AI 요약 생성 실패: course_id=%s", course_id)
+        return
+
+    if not summary_text or not summary_text.strip():
+        logger.warning("Gemini가 빈 요약을 반환해 저장하지 않음: course_id=%s", course_id)
+        return
+
+    async with AsyncSessionLocal() as session:
+        # Gemini 호출 사이에 리뷰가 삭제되어 3개 미만이 됐을 수 있으므로 재확인
+        review_count = await _count_reviews(session, course_id)
+        if review_count < _SUMMARY_FIRST_THRESHOLD:
             return
 
+        summary_result = await session.execute(
+            select(ReviewSummary).where(ReviewSummary.course_id == course_id).with_for_update()
+        )
+        summary = summary_result.scalar_one_or_none()
         if summary is None:
             session.add(
                 ReviewSummary(course_id=course_id, summary=summary_text, review_count=review_count)
@@ -189,13 +215,18 @@ async def _maybe_update_summary(course_id: int) -> None:
 
         try:
             await session.commit()
-        except IntegrityError:
+        except IntegrityError as err:
+            await session.rollback()
+            if not isinstance(err.orig, UniqueViolation):
+                logger.exception(
+                    "리뷰 AI 요약 저장 중 예상치 못한 DB 오류: course_id=%s", course_id
+                )
+                raise
             # 두 리뷰가 거의 동시에 작성되면 백그라운드 작업도 거의 동시에 두 번 실행될 수
             # 있음. 둘 다 "요약이 아직 없다"고 판단해서 각자 Gemini를 호출하지만,
             # 코스당 요약은 1개만 허용되므로(UNIQUE 제약) 먼저 저장한 쪽만 성공하고
-            # 나머지는 여기서 IntegrityError가 남. 이미 요약이 만들어졌다는 뜻이므로
-            # 에러 없이 조용히 무시하고 끝낸다.
-            await session.rollback()
+            # 나머지는 여기서 UNIQUE 제약 위반으로 남는다. 이미 요약이 만들어졌다는
+            # 뜻이므로 에러 없이 조용히 무시하고 끝낸다.
 
 
 async def get_review_summary(session: AsyncSession, course_id: int) -> ReviewSummaryResponse | None:
@@ -229,6 +260,7 @@ async def update_review(
             status_code=status.HTTP_403_FORBIDDEN, detail="본인의 리뷰만 수정할 수 있습니다."
         )
 
+    content_changed = body.content is not None and body.content != review.content
     if body.content is not None:
         review.content = body.content
     if body.difficulty is not None:
@@ -236,6 +268,19 @@ async def update_review(
 
     await session.commit()
     await session.refresh(review)
+
+    if content_changed:
+        # 리뷰 내용이 바뀌면 기존 AI 요약이 옛 내용을 반영한 채로 남아있게 되므로 무효화한다.
+        # Gemini를 다시 호출하지는 않고(비용), 이후 리뷰 개수가 재생성 기준을 충족하면
+        # 자연스럽게 다시 생성된다 - 그 전까지는 "요약 없음"으로 리뷰 원문만 표시된다.
+        summary_result = await session.execute(
+            select(ReviewSummary).where(ReviewSummary.course_id == review.course_id)
+        )
+        summary = summary_result.scalar_one_or_none()
+        if summary is not None:
+            await session.delete(summary)
+            await session.commit()
+
     return ReviewResponse.model_validate(review)
 
 
@@ -244,6 +289,7 @@ async def delete_review(
     user_id: int,
     review_id: int,
     user_role: UserRole,
+    background_tasks: BackgroundTasks,
 ) -> None:
     """리뷰 삭제 (본인 또는 관리자)"""
     result = await session.execute(
@@ -258,6 +304,7 @@ async def delete_review(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="본인의 리뷰만 삭제할 수 있습니다."
         )
+    course_id = review.course_id
     keys = [
         image.image_url.removeprefix(f"{settings.R2_PUBLIC_URL.rstrip('/')}/")
         for image in review.images
@@ -271,6 +318,32 @@ async def delete_review(
             await asyncio.to_thread(
                 _get_r2_client().delete_object, Bucket=settings.R2_BUCKET_NAME, Key=key
             )
+
+    remaining = await _count_reviews(session, course_id)
+    if remaining < _SUMMARY_FIRST_THRESHOLD:
+        # 리뷰가 3개 미만으로 줄면 기존 AI 요약은 더 이상 유효하지 않음
+        # (FEATURES.md: 3개 미만이면 요약 없이 리뷰 원문만 표시)
+        summary_result = await session.execute(
+            select(ReviewSummary).where(ReviewSummary.course_id == course_id)
+        )
+        summary = summary_result.scalar_one_or_none()
+        if summary is not None:
+            await session.delete(summary)
+            await session.commit()
+    else:
+        summary_result = await session.execute(
+            select(ReviewSummary).where(ReviewSummary.course_id == course_id).with_for_update()
+        )
+        summary = summary_result.scalar_one_or_none()
+        if summary is not None and summary.review_count > remaining:
+            # 삭제로 실제 리뷰 수가 줄었는데 review_count 기준값이 그대로면, 다음
+            # 재생성까지 필요한 "+5"가 실제보다 더 많이 쌓여야 하는 것처럼 계산되어
+            # 재생성 시점이 불필요하게 늦어진다. 기준값을 현재 개수로 맞춰 방지한다.
+            summary.review_count = remaining
+            await session.commit()
+        # 리뷰 삭제도 재생성 여부를 다시 판단할 계기이므로 백그라운드로 재평가한다
+        # (요약이 아직 한 번도 생성되지 않은 경우를 포함).
+        background_tasks.add_task(_maybe_update_summary, course_id)
 
 
 # TODO(course 담당): 코스 상세 조회(get_drnb_course/get_custom_course)에서

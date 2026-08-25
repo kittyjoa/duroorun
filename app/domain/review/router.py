@@ -53,6 +53,7 @@ async def update_review(
 @router.delete("/{review_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_review(
     review_id: int,
+    background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -62,6 +63,7 @@ async def delete_review(
         user_id=current_user.user_id,
         review_id=review_id,
         user_role=current_user.user_role,
+        background_tasks=background_tasks,
     )
 
 

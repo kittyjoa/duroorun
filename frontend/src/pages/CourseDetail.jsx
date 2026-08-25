@@ -12,11 +12,15 @@ const CourseDetail = () => {
   const [error, setError] = useState('');
 
   useEffect(() => {
+    // 이 effect가 재실행된 뒤(= 더 최신 요청이 시작된 뒤) 도착하는 이전 응답은 무시
+    let ignore = false;
+
     const fetchCourse = async () => {
       setLoading(true);
       setError('');
       try {
         const res = await apiFetch(`/v1/courses/${courseType}/${courseId}`);
+        if (ignore) return;
         if (!res.ok) {
           setError('코스 정보를 찾을 수 없어요.');
           return;
@@ -24,12 +28,16 @@ const CourseDetail = () => {
         const data = await res.json();
         setCourse(data);
       } catch {
-        setError('서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.');
+        if (!ignore) setError('서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.');
       } finally {
-        setLoading(false);
+        if (!ignore) setLoading(false);
       }
     };
     fetchCourse();
+
+    return () => {
+      ignore = true;
+    };
   }, [courseType, courseId]);
 
   if (loading) {

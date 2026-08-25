@@ -206,7 +206,8 @@ async def _maybe_update_summary(course_id: int) -> None:
         logger.exception("리뷰 AI 요약 생성 실패: course_id=%s", course_id)
         return
 
-    if not summary_text or not summary_text.strip():
+    summary_text = summary_text.strip() if summary_text else ""
+    if not summary_text:
         logger.warning("Gemini가 빈 요약을 반환해 저장하지 않음: course_id=%s", course_id)
         return
 

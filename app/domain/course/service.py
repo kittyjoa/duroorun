@@ -286,6 +286,9 @@ async def update_course(
 
     await session.commit()
     course = await _get_custom_course(session, course_id)
+    # Course 모델의 실제 컬럼이 아니라 이 응답 한정으로만 붙이는 값 - DB에는 저장되지 않는다.
+    course.average_difficulty = await get_average_difficulty(session, course_id)
+    course.review_summary = await get_review_summary(session, course_id)
     return CustomCourseDetailResponse.model_validate(course)
 
 
@@ -387,6 +390,9 @@ async def upload_course_image(
         raise
 
     course = await _get_custom_course(session, course_id)
+    # Course 모델의 실제 컬럼이 아니라 이 응답 한정으로만 붙이는 값 - DB에는 저장되지 않는다.
+    course.average_difficulty = await get_average_difficulty(session, course_id)
+    course.review_summary = await get_review_summary(session, course_id)
     return CustomCourseDetailResponse.model_validate(course)
 
 

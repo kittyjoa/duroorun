@@ -9,6 +9,7 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.core.rate_limit import check_rate_limit, rate_limit_per_request, record_rate_limit_hit
 from app.core.security import bearer_scheme, get_current_user
 from app.database import get_db
 from app.domain.user.models import User
@@ -39,6 +40,10 @@ router = APIRouter(tags=["auth"])
 
 _REFRESH_COOKIE_PATH = "/api/v1/auth/refresh"
 _OAUTH_STATE_COOKIE_PATH = "/api/v1/auth"
+
+# 유저당 10분에 5번까지
+_RATE_LIMIT_MAX_REQUESTS = 5
+_RATE_LIMIT_WINDOW_SECONDS = 600
 
 
 def _oauth_redirect_start(url: str, state: str) -> RedirectResponse:
@@ -243,14 +248,35 @@ async def complete_onboarding(
 async def update_my_profile(
     body: UserProfileUpdate,
     db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
     user: User = Depends(get_current_user),
 ) -> UserResponse:
-    """마이페이지에서 닉네임/거주지를 수정합니다."""
+    """마이페이지에서 닉네임/거주지를 수정합니다.
+
+    닉네임 중복 등으로 실패한 시도는 요청 횟수 제한에 포함하지 않는다 —
+    성공했을 때만 카운트해서, 마음에 드는 닉네임을 찾는 정상적인 시행착오까지 막지 않기 위함.
+    """
+    rate_limit_key = f"ratelimit:profile_update:{user.user_id}"
+    await check_rate_limit(redis, rate_limit_key, _RATE_LIMIT_MAX_REQUESTS)
+
     updated = await update_profile(user, body.nickname, body.location, db)
+
+    await record_rate_limit_hit(redis, rate_limit_key, _RATE_LIMIT_WINDOW_SECONDS)
     return UserResponse.model_validate(updated)
 
 
-@router.post("/users/me/image", response_model=ProfileImageResponse, summary="프로필 이미지 업로드")
+@router.post(
+    "/users/me/image",
+    response_model=ProfileImageResponse,
+    summary="프로필 이미지 업로드",
+    dependencies=[
+        Depends(
+            rate_limit_per_request(
+                "image_upload", _RATE_LIMIT_MAX_REQUESTS, _RATE_LIMIT_WINDOW_SECONDS
+            )
+        )
+    ],
+)
 async def upload_my_image(
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),

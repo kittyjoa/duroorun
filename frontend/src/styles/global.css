@@ -123,6 +123,45 @@ h2 { font-size:36px; letter-spacing:-1.5px; margin:8px 0 0; line-height:1.25; }
 .onboarding-error { color:var(--red); font-size:13px; margin:14px 0 0; }
 .oauth-callback { min-height:100vh; display:flex; align-items:center; justify-content:center; color:var(--ink); font-family:'Apple SD Gothic Neo',sans-serif; }
 
+/* 헤더 — 로그인 상태 프로필 메뉴 */
+.profile-menu { position:relative; display:flex; align-items:center; gap:8px; }
+.profile-avatar { width:32px; height:32px; border-radius:50%; overflow:hidden; background:var(--green); color:#fff; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:600; flex:none; }
+.profile-avatar img { width:100%; height:100%; object-fit:cover; }
+.profile-avatar.large { width:64px; height:64px; font-size:24px; }
+.profile-nickname { border:0; background:transparent; color:var(--ink); font-size:14px; cursor:pointer; padding:0; }
+.profile-dropdown { position:absolute; top:calc(100% + 10px); right:0; background:#fff; border-radius:10px; box-shadow:0 10px 30px rgba(20,50,50,.15); overflow:hidden; min-width:130px; z-index:20; }
+.profile-dropdown button { display:block; width:100%; text-align:left; padding:12px 16px; border:0; background:#fff; color:var(--ink); font-size:13px; cursor:pointer; }
+.profile-dropdown button:hover { background:#f6f4ec; }
+
+/* 마이페이지 */
+.mypage-page { max-width:600px; margin:0 auto; padding:124px 24px 60px; }
+.mypage-page h1 { font-size:28px; letter-spacing:-1px; margin:0 0 32px; }
+.mypage-profile { display:flex; align-items:center; gap:20px; }
+.mypage-image-upload { display:inline-block; color:var(--blue); font-size:13px; cursor:pointer; border-bottom:1px solid #88a9bd; padding-bottom:2px; }
+.mypage-form { max-width:360px; margin-top:32px; }
+.mypage-form label { display:block; font-size:13px; color:#5c706c; margin:16px 0 6px; }
+.mypage-form label:first-child { margin-top:0; }
+.mypage-form input { width:100%; padding:12px 14px; border:1px solid #dadce0; border-radius:8px; font-size:14px; }
+.mypage-form .primary-button { margin-top:26px; border:0; border-radius:8px; cursor:pointer; padding:9px 18px; font-size:13px; box-shadow:none; }
+.mypage-form .primary-button:disabled { opacity:.6; cursor:not-allowed; }
+.mypage-success { color:var(--green); font-size:13px; margin:14px 0 0; }
+.mypage-review-button { display:flex; justify-content:space-between; align-items:center; width:100%; max-width:360px; margin-top:32px; padding:16px 4px; border:0; border-top:1px solid #e1e7e2; background:transparent; color:var(--ink); font-size:14px; cursor:pointer; }
+.mypage-review-button span { color:#9aa9a5; }
+button.profile-avatar { border:0; padding:0; font:inherit; cursor:pointer; }
+
+/* 공용 모달 오버레이 (프로필 사진 원본 보기, 내 리뷰 관리 등) */
+.modal-overlay { position:fixed; inset:0; background:rgba(16,42,43,.85); display:flex; align-items:center; justify-content:center; z-index:100; padding:24px; }
+.modal-image { max-width:min(90vw,480px); max-height:80vh; border-radius:12px; object-fit:contain; }
+.modal-close { position:absolute; top:24px; right:24px; width:40px; height:40px; border-radius:50%; border:0; background:rgba(255,255,255,.15); color:#fff; font-size:22px; cursor:pointer; }
+.review-modal-card { position:relative; width:100%; max-width:360px; background:#fff; border-radius:16px; padding:32px; text-align:center; }
+.review-modal-card h2 { font-size:18px; margin:0 0 10px; }
+.review-modal-card p { color:#5c706c; font-size:14px; margin:0; }
+.review-modal-close { position:static; margin:0 0 12px auto; display:block; background:#f1f1ee; color:var(--ink); }
+
+@media (max-width:560px) {
+  .mypage-page { padding:100px 20px 40px; }
+}
+
 
 /* 코스 목록 / 상세 */
 .course-list-page { padding:60px clamp(24px,5vw,76px) 80px; min-height:100vh; }

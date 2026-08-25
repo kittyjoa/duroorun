@@ -43,7 +43,7 @@ _SUMMARY_MAX_REVIEWS = 50
 # 짧은 시간에 같은 코스의 재생성이 여러 번 트리거돼도(예: 리뷰 연속 삭제) Gemini는 한 번만
 # 호출하도록 잡는 락의 TTL(초). Gemini 호출+저장이 끝나면 즉시 해제하며, 이 값은 프로세스가
 # 죽는 등 비정상 종료로 해제가 안 됐을 때를 위한 안전장치일 뿐이다.
-_SUMMARY_LOCK_TTL_SECONDS = 30
+_SUMMARY_LOCK_TTL_SECONDS = 60
 
 _IMAGE_EXTENSIONS = {
     "image/jpeg": "jpg",

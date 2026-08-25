@@ -37,6 +37,8 @@ logger = logging.getLogger(__name__)
 # AI 리뷰 요약 생성/재생성 임계값 (FEATURES.md: 3개 도달 시 첫 생성, 이후 5개마다 재생성)
 _SUMMARY_FIRST_THRESHOLD = 3
 _SUMMARY_REGENERATE_INTERVAL = 5
+# 리뷰가 많아져도 프롬프트가 무한정 커지지 않도록 최신 리뷰만 골라서 요약에 사용
+_SUMMARY_MAX_REVIEWS = 50
 
 _IMAGE_EXTENSIONS = {
     "image/jpeg": "jpg",
@@ -177,7 +179,10 @@ async def _maybe_update_summary(course_id: int) -> None:
                 return
 
         contents_result = await session.execute(
-            select(Review.content).where(Review.course_id == course_id)
+            select(Review.content)
+            .where(Review.course_id == course_id)
+            .order_by(Review.created_at.desc())
+            .limit(_SUMMARY_MAX_REVIEWS)
         )
         review_contents = contents_result.scalars().all()
 

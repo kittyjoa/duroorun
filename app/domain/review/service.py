@@ -86,6 +86,16 @@ def _get_r2_client() -> BaseClient:
     )
 
 
+def _validate_content(content: str) -> str:
+    """리뷰 내용의 앞뒤 공백을 제거하고 빈 값이 아닌지 확인한다."""
+    content = content.strip()
+    if not content:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="리뷰 내용을 입력해주세요."
+        )
+    return content
+
+
 async def create_review(
     session: AsyncSession,
     user_id: int,
@@ -129,7 +139,7 @@ async def create_review(
     review = Review(
         user_id=user_id,
         course_id=course_id,
-        content=body.content,
+        content=_validate_content(body.content),
         difficulty=body.difficulty,
     )
     try:
@@ -265,9 +275,10 @@ async def update_review(
             status_code=status.HTTP_403_FORBIDDEN, detail="본인의 리뷰만 수정할 수 있습니다."
         )
 
-    content_changed = body.content is not None and body.content != review.content
-    if body.content is not None:
-        review.content = body.content
+    new_content = _validate_content(body.content) if body.content is not None else None
+    content_changed = new_content is not None and new_content != review.content
+    if new_content is not None:
+        review.content = new_content
     if body.difficulty is not None:
         review.difficulty = body.difficulty
 

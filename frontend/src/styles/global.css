@@ -122,3 +122,19 @@ h2 { font-size:36px; letter-spacing:-1.5px; margin:8px 0 0; line-height:1.25; }
 .onboarding-card .primary-button:disabled { opacity:.6; cursor:not-allowed; }
 .onboarding-error { color:var(--red); font-size:13px; margin:14px 0 0; }
 .oauth-callback { min-height:100vh; display:flex; align-items:center; justify-content:center; color:var(--ink); font-family:'Apple SD Gothic Neo',sans-serif; }
+
+
+/* 코스 목록 / 상세 */
+.course-list-page { padding:60px clamp(24px,5vw,76px) 80px; min-height:100vh; }
+.course-list-page .course-card { display:block; }
+.course-list-status { color:#5c706c; font-family:'Apple SD Gothic Neo',sans-serif; font-size:14px; padding:40px 0; text-align:center; }
+.course-list-status.error { color:var(--red); }
+.course-detail-page { max-width:720px; margin:0 auto; padding:60px 24px 80px; min-height:100vh; }
+.course-detail-heading { margin:18px 0 28px; }
+.course-detail-heading h1 { font-size:32px; letter-spacing:-1.5px; margin:8px 0 0; }
+.course-detail-info { display:grid; grid-template-columns:repeat(2,1fr); gap:18px; margin:0 0 28px; padding:20px; border:1px solid #e1e7e2; border-radius:10px; }
+.course-detail-info div { display:flex; flex-direction:column; gap:4px; }
+.course-detail-info dt { color:#82928e; font-family:'Apple SD Gothic Neo',sans-serif; font-size:12px; }
+.course-detail-info dd { margin:0; font-size:16px; color:var(--ink); }
+.course-detail-desc { color:#5c706c; font-family:'Apple SD Gothic Neo',sans-serif; font-size:14px; line-height:1.8; }
+@media (max-width:560px) { .course-detail-info { grid-template-columns:1fr; } }

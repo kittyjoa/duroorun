@@ -12,12 +12,14 @@ export const UserProvider = ({ children }) => {
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
 
+  // 반환값에 hasError를 같이 실어 보낸다 — 호출 직후 Context의 hasError를 읽으면
+  // 리렌더 전이라 값이 갱신 안 된 상태를 볼 수 있어서, 호출부가 그 자리에서 바로 분기할 수 있게 함.
   const refreshUser = async () => {
     if (!getAccessToken()) {
       setUser(null);
       setHasError(false);
       setIsLoading(false);
-      return null;
+      return { user: null, hasError: false };
     }
 
     try {
@@ -26,21 +28,21 @@ export const UserProvider = ({ children }) => {
         const data = await res.json();
         setUser(data);
         setHasError(false);
-        return data;
+        return { user: data, hasError: false };
       }
       // apiFetch가 401은 이미 내부에서 재발급 재시도까지 해봤으므로, 그래도 401이면 진짜 로그아웃 상태.
       // 5xx 등 다른 실패는 일시적 오류로 보고 user를 그대로 둔다 (로그인 상태를 함부로 지우지 않음).
       if (res.status === 401) {
         setUser(null);
         setHasError(false);
-      } else {
-        setHasError(true);
+        return { user: null, hasError: false };
       }
-      return null;
+      setHasError(true);
+      return { user: null, hasError: true };
     } catch {
       // 네트워크 오류도 인증 실패로 단정하지 않음
       setHasError(true);
-      return null;
+      return { user: null, hasError: true };
     } finally {
       setIsLoading(false);
     }

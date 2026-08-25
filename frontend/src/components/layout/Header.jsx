@@ -17,13 +17,23 @@ const Header = () => {
         setMenuOpen(false);
       }
     };
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') setMenuOpen(false);
+    };
     document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
   }, [menuOpen]);
 
   const handleLogout = async () => {
     try {
       await apiFetch('/v1/auth/logout', { method: 'POST' });
+    } catch {
+      // 로그아웃 API 실패해도 클라이언트 쪽 정리는 finally에서 계속 진행 — 콘솔에만 남겨둠
+      console.error('로그아웃 요청이 실패했어요');
     } finally {
       clearAccessToken();
       setUser(null);

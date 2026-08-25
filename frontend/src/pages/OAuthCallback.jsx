@@ -31,10 +31,15 @@ const OAuthCallback = () => {
         // is_new_user 대신 실제 프로필(닉네임/거주지) 값 기준으로 온보딩 필요 여부를 판단한다.
         // 온보딩을 중간에 그만둔 유저도 다음 로그인 때 다시 온보딩으로 보내기 위함.
         // refreshUser()가 전역 상태(Context)도 같이 채워서 헤더가 바로 반영된다.
-        const user = await refreshUser();
+        const { user, hasError } = await refreshUser();
         if (!user) {
-          // 서버 오류/인증 문제까지 "온보딩 미완료"로 오판하지 않도록 여기서 바로 실패 처리
-          throw new Error('프로필 조회 실패');
+          // 로그인 자체(access_token 발급)는 이미 성공했으므로, 일시적 서버 오류와
+          // 진짜 인증 실패를 구분해 메시지를 다르게 보여준다.
+          const message = hasError
+            ? '일시적인 오류가 발생했어요. 잠시 후 다시 로그인해주세요.'
+            : '로그인 처리 중 오류가 발생했어요. 다시 시도해주세요.';
+          goToLoginWithError(navigate, message);
+          return;
         }
         const needsOnboarding = !user.nickname || !user.location;
 

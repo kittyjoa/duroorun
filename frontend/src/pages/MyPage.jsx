@@ -10,12 +10,13 @@ import useFocusTrap from '../hooks/useFocusTrap';
 const NICKNAME_PATTERN = '[가-힣a-zA-Z0-9]{2,10}';
 const LOCATION_PATTERN = '[가-힣a-zA-Z0-9\\s]{1,50}';
 const PROFILE_IMAGE_MAX_SIZE_MB = 2;
+const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 
 const MyPage = () => {
   const navigate = useNavigate();
   const imageModalRef = useRef(null);
   const reviewModalRef = useRef(null);
-  const { user, setUser, isLoading, hasError } = useUser();
+  const { user, setUser, isLoading, hasError, refreshUser } = useUser();
 
   const [nickname, setNickname] = useState('');
   const [location, setLocation] = useState('');
@@ -96,6 +97,12 @@ const MyPage = () => {
 
     setError('');
 
+    if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
+      setError('지원하지 않는 이미지 형식입니다 (jpg, png, webp만 가능)');
+      event.target.value = '';
+      return;
+    }
+
     if (file.size > PROFILE_IMAGE_MAX_SIZE_MB * 1024 * 1024) {
       setError(`이미지 크기는 최대 ${PROFILE_IMAGE_MAX_SIZE_MB}MB까지 업로드 가능합니다`);
       event.target.value = '';
@@ -137,7 +144,12 @@ const MyPage = () => {
 
         {isLoading && <p>불러오는 중...</p>}
         {!isLoading && !user && hasError && (
-          <p>일시적인 오류로 정보를 불러오지 못했어요. 잠시 후 다시 시도해주세요.</p>
+          <p>
+            일시적인 오류로 정보를 불러오지 못했어요.{' '}
+            <button type="button" className="text-button" onClick={() => refreshUser()}>
+              다시 시도
+            </button>
+          </p>
         )}
         {!isLoading && !user && !hasError && <p>정보를 불러오지 못했어요.</p>}
 

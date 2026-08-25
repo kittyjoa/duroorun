@@ -3,6 +3,7 @@
 from fastapi import APIRouter, BackgroundTasks, Depends, Query, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.rate_limit import rate_limit_per_request
 from app.core.security import get_current_user
 from app.database import get_db
 from app.domain.review import service as review_service
@@ -15,6 +16,11 @@ from app.domain.review.schemas import (
 from app.domain.user.models import User
 
 router = APIRouter(prefix="/reviews", tags=["reviews"])
+
+# 내용이 바뀔 때마다 AI 요약 재생성(Gemini 호출)이 예약되므로, 프로필 수정보다
+# 더 타이트하게 잡는다 (user/router.py의 프로필 수정은 10분당 5회).
+_UPDATE_RATE_LIMIT_MAX_REQUESTS = 5
+_UPDATE_RATE_LIMIT_WINDOW_SECONDS = 3600
 
 
 @router.post(
@@ -37,7 +43,17 @@ async def create_review(
     )
 
 
-@router.patch("/{review_id}", response_model=ReviewResponse)
+@router.patch(
+    "/{review_id}",
+    response_model=ReviewResponse,
+    dependencies=[
+        Depends(
+            rate_limit_per_request(
+                "review_update", _UPDATE_RATE_LIMIT_MAX_REQUESTS, _UPDATE_RATE_LIMIT_WINDOW_SECONDS
+            )
+        )
+    ],
+)
 async def update_review(
     review_id: int,
     body: ReviewUpdateRequest,

@@ -31,6 +31,7 @@ from app.domain.review.schemas import (
     ReviewUpdateRequest,
 )
 from app.domain.user.models import UserRole
+from app.redis import get_redis
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,10 @@ _SUMMARY_FIRST_THRESHOLD = 3
 _SUMMARY_REGENERATE_INTERVAL = 5
 # 리뷰가 많아져도 프롬프트가 무한정 커지지 않도록 최신 리뷰만 골라서 요약에 사용
 _SUMMARY_MAX_REVIEWS = 50
+# 짧은 시간에 같은 코스의 재생성이 여러 번 트리거돼도(예: 리뷰 연속 삭제) Gemini는 한 번만
+# 호출하도록 잡는 락의 TTL(초). Gemini 호출+저장이 끝나면 즉시 해제하며, 이 값은 프로세스가
+# 죽는 등 비정상 종료로 해제가 안 됐을 때를 위한 안전장치일 뿐이다.
+_SUMMARY_LOCK_TTL_SECONDS = 30
 
 _IMAGE_EXTENSIONS = {
     "image/jpeg": "jpg",
@@ -205,57 +210,79 @@ async def _maybe_update_summary(course_id: int) -> None:
         # Gemini 호출 중 그중 하나라도 수정/삭제됐으면 이미 낡은 결과이므로 버린다.
         snapshot = {row.review_id: row.updated_at for row in rows}
 
+    # 짧은 시간에 같은 코스의 재생성이 여러 번 트리거될 수 있어(예: 리뷰 연속 삭제),
+    # Gemini를 호출하기 전에 락을 잡아 실제 호출은 한 번만 일어나게 한다. 락을 못 잡으면
+    # 이미 다른 실행이 처리 중이라는 뜻이므로 조용히 종료한다 - 그 실행이 최신 데이터를
+    # 반영해 저장한다. Redis 연결 자체가 실패하면(락 도입 전 상태와 동일하게) 잠금 없이
+    # 진행한다 - 중복 호출 가능성만 남을 뿐, 정확성에는 영향 없다.
+    lock_key = f"review_summary_lock:{course_id}"
     try:
-        summary_text = await summarize_reviews(review_contents)
+        redis = await get_redis()
+        acquired = await redis.set(lock_key, "1", nx=True, ex=_SUMMARY_LOCK_TTL_SECONDS)
     except Exception:  # noqa: BLE001
-        # Gemini API 실패(APIError)뿐 아니라 클라이언트 생성 실패(ValueError, 키 누락 등)도
-        # 포함해 광범위하게 잡는다. 백그라운드 최선 노력 작업이므로 여기서 실패해도
-        # 다음 리뷰 작성 시 이 함수가 다시 호출되며 자연스럽게 재시도된다. 원인 파악을
-        # 위해 로그는 남긴다.
-        logger.exception("리뷰 AI 요약 생성 실패: course_id=%s", course_id)
+        logger.exception("리뷰 AI 요약 락 획득 실패, 잠금 없이 진행: course_id=%s", course_id)
+        redis = None
+        acquired = True
+    if not acquired:
         return
 
-    summary_text = summary_text.strip() if summary_text else ""
-    if not summary_text:
-        logger.warning("Gemini가 빈 요약을 반환해 저장하지 않음: course_id=%s", course_id)
-        return
-
-    async with AsyncSessionLocal() as session:
-        recheck_result = await session.execute(
-            select(Review.review_id, Review.updated_at).where(Review.review_id.in_(snapshot))
-        )
-        current = {row.review_id: row.updated_at for row in recheck_result.all()}
-        if current != snapshot:
-            # Gemini 호출 중 요약에 쓴 리뷰가 수정되거나 삭제됨 - 저장하지 않고 버린다.
-            # (다음 리뷰 작성/수정/삭제 시 이 함수가 다시 호출되며 최신 데이터로 재시도된다)
+    try:
+        try:
+            summary_text = await summarize_reviews(review_contents)
+        except Exception:  # noqa: BLE001
+            # Gemini API 실패(APIError)뿐 아니라 클라이언트 생성 실패(ValueError, 키 누락 등)도
+            # 포함해 광범위하게 잡는다. 백그라운드 최선 노력 작업이므로 여기서 실패해도
+            # 다음 리뷰 작성 시 이 함수가 다시 호출되며 자연스럽게 재시도된다. 원인 파악을
+            # 위해 로그는 남긴다.
+            logger.exception("리뷰 AI 요약 생성 실패: course_id=%s", course_id)
             return
 
-        summary_result = await session.execute(
-            select(ReviewSummary).where(ReviewSummary.course_id == course_id).with_for_update()
-        )
-        summary = summary_result.scalar_one_or_none()
-        if summary is None:
-            session.add(
-                ReviewSummary(course_id=course_id, summary=summary_text, review_count=review_count)
-            )
-        else:
-            summary.summary = summary_text
-            summary.review_count = review_count
+        summary_text = summary_text.strip() if summary_text else ""
+        if not summary_text:
+            logger.warning("Gemini가 빈 요약을 반환해 저장하지 않음: course_id=%s", course_id)
+            return
 
-        try:
-            await session.commit()
-        except IntegrityError as err:
-            await session.rollback()
-            if not isinstance(err.orig, UniqueViolation):
-                logger.exception(
-                    "리뷰 AI 요약 저장 중 예상치 못한 DB 오류: course_id=%s", course_id
+        async with AsyncSessionLocal() as session:
+            recheck_result = await session.execute(
+                select(Review.review_id, Review.updated_at).where(Review.review_id.in_(snapshot))
+            )
+            current = {row.review_id: row.updated_at for row in recheck_result.all()}
+            if current != snapshot:
+                # Gemini 호출 중 요약에 쓴 리뷰가 수정되거나 삭제됨 - 저장하지 않고 버린다.
+                # (다음 리뷰 작성/수정/삭제 시 이 함수가 다시 호출되며 최신 데이터로 재시도된다)
+                return
+
+            summary_result = await session.execute(
+                select(ReviewSummary).where(ReviewSummary.course_id == course_id).with_for_update()
+            )
+            summary = summary_result.scalar_one_or_none()
+            if summary is None:
+                session.add(
+                    ReviewSummary(
+                        course_id=course_id, summary=summary_text, review_count=review_count
+                    )
                 )
-                raise
-            # 두 리뷰가 거의 동시에 작성되면 백그라운드 작업도 거의 동시에 두 번 실행될 수
-            # 있음. 둘 다 "요약이 아직 없다"고 판단해서 각자 Gemini를 호출하지만,
-            # 코스당 요약은 1개만 허용되므로(UNIQUE 제약) 먼저 저장한 쪽만 성공하고
-            # 나머지는 여기서 UNIQUE 제약 위반으로 남는다. 이미 요약이 만들어졌다는
-            # 뜻이므로 에러 없이 조용히 무시하고 끝낸다.
+            else:
+                summary.summary = summary_text
+                summary.review_count = review_count
+
+            try:
+                await session.commit()
+            except IntegrityError as err:
+                await session.rollback()
+                if not isinstance(err.orig, UniqueViolation):
+                    logger.exception(
+                        "리뷰 AI 요약 저장 중 예상치 못한 DB 오류: course_id=%s", course_id
+                    )
+                    raise
+                # 위 Redis 락으로 대부분 걸러지지만, 락 자체가 실패했거나 TTL이 지난 경우를
+                # 대비한 마지막 안전장치. 코스당 요약은 1개만 허용되므로(UNIQUE 제약) 먼저
+                # 저장한 쪽만 성공하고 나머지는 여기서 UNIQUE 제약 위반으로 남는다. 이미
+                # 요약이 만들어졌다는 뜻이므로 에러 없이 조용히 무시하고 끝낸다.
+    finally:
+        if redis is not None:
+            with contextlib.suppress(Exception):
+                await redis.delete(lock_key)
 
 
 async def get_review_summary(session: AsyncSession, course_id: int) -> ReviewSummaryResponse | None:

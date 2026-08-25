@@ -74,5 +74,5 @@ class ReviewSummary(Base):
         Integer, nullable=False, default=0, server_default="0"
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )

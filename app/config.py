@@ -22,7 +22,7 @@ class Settings(BaseSettings):
 
     # OAuth
     OAUTH_STATE_EXPIRE_SECONDS: int = 300  # state TTL 5분 (CSRF 방지용 1회성 값)
-    OAUTH_API_TIMEOUT: float = 5.0         # 소셜 API 호출 타임아웃 (초)
+    OAUTH_API_TIMEOUT: float = 5.0  # 소셜 API 호출 타임아웃 (초)
 
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
@@ -68,6 +68,9 @@ class Settings(BaseSettings):
     NICKNAME_MIN_LENGTH: int = 2
     NICKNAME_MAX_LENGTH: int = 10
     LOCATION_MAX_LENGTH: int = 50
+
+    # 리뷰 입력 정책 (Gemini 프롬프트 크기 제한 목적도 겸함)
+    REVIEW_CONTENT_MAX_LENGTH: int = 2000
 
     # 앱 스케줄러 (기본 false — 로컬 서버 켤때마다 두루누비 API 호출되는거 방지.
     # 배포 환경에서는 docker-compose.yml의 backend 서비스에서 true로)

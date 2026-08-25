@@ -41,12 +41,17 @@ async def create_review(
 async def update_review(
     review_id: int,
     body: ReviewUpdateRequest,
+    background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """리뷰 수정"""
     return await review_service.update_review(
-        session=session, user_id=current_user.user_id, review_id=review_id, body=body
+        session=session,
+        user_id=current_user.user_id,
+        review_id=review_id,
+        body=body,
+        background_tasks=background_tasks,
     )
 
 

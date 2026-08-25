@@ -87,11 +87,16 @@ def _get_r2_client() -> BaseClient:
 
 
 def _validate_content(content: str) -> str:
-    """리뷰 내용의 앞뒤 공백을 제거하고 빈 값이 아닌지 확인한다."""
+    """리뷰 내용의 앞뒤 공백을 제거하고 길이가 유효한지 확인한다."""
     content = content.strip()
     if not content:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="리뷰 내용을 입력해주세요."
+        )
+    if len(content) > settings.REVIEW_CONTENT_MAX_LENGTH:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"리뷰 내용은 {settings.REVIEW_CONTENT_MAX_LENGTH}자 이하로 입력해주세요.",
         )
     return content
 
@@ -189,12 +194,16 @@ async def _maybe_update_summary(course_id: int) -> None:
                 return
 
         contents_result = await session.execute(
-            select(Review.content)
+            select(Review.review_id, Review.content, Review.updated_at)
             .where(Review.course_id == course_id)
             .order_by(Review.created_at.desc())
             .limit(_SUMMARY_MAX_REVIEWS)
         )
-        review_contents = contents_result.scalars().all()
+        rows = contents_result.all()
+        review_contents = [row.content for row in rows]
+        # 요약에 실제로 쓴 리뷰들의 스냅샷(id -> updated_at). 저장 직전에 다시 대조해서
+        # Gemini 호출 중 그중 하나라도 수정/삭제됐으면 이미 낡은 결과이므로 버린다.
+        snapshot = {row.review_id: row.updated_at for row in rows}
 
     try:
         summary_text = await summarize_reviews(review_contents)
@@ -212,9 +221,13 @@ async def _maybe_update_summary(course_id: int) -> None:
         return
 
     async with AsyncSessionLocal() as session:
-        # Gemini 호출 사이에 리뷰가 삭제되어 3개 미만이 됐을 수 있으므로 재확인
-        review_count = await _count_reviews(session, course_id)
-        if review_count < _SUMMARY_FIRST_THRESHOLD:
+        recheck_result = await session.execute(
+            select(Review.review_id, Review.updated_at).where(Review.review_id.in_(snapshot))
+        )
+        current = {row.review_id: row.updated_at for row in recheck_result.all()}
+        if current != snapshot:
+            # Gemini 호출 중 요약에 쓴 리뷰가 수정되거나 삭제됨 - 저장하지 않고 버린다.
+            # (다음 리뷰 작성/수정/삭제 시 이 함수가 다시 호출되며 최신 데이터로 재시도된다)
             return
 
         summary_result = await session.execute(
@@ -261,6 +274,7 @@ async def update_review(
     user_id: int,
     review_id: int,
     body: ReviewUpdateRequest,
+    background_tasks: BackgroundTasks,
 ) -> ReviewResponse:
     """리뷰 수정"""
     result = await session.execute(
@@ -287,16 +301,18 @@ async def update_review(
     await session.refresh(review)
 
     if content_changed:
-        # 리뷰 내용이 바뀌면 기존 AI 요약이 옛 내용을 반영한 채로 남아있게 되므로 무효화한다.
-        # Gemini를 다시 호출하지는 않고(비용), 이후 리뷰 개수가 재생성 기준을 충족하면
-        # 자연스럽게 다시 생성된다 - 그 전까지는 "요약 없음"으로 리뷰 원문만 표시된다.
+        # 리뷰 내용이 바뀌면 기존 AI 요약이 옛 내용을 반영한 채로 남아있게 되므로 무효화하고,
+        # 현재 리뷰 기준으로 재생성을 예약한다 (무효화만 하고 끝내면, 이후 새 리뷰가 작성되지
+        # 않는 한 요약이 계속 없는 상태로 남을 수 있음).
+        course_id = review.course_id
         summary_result = await session.execute(
-            select(ReviewSummary).where(ReviewSummary.course_id == review.course_id)
+            select(ReviewSummary).where(ReviewSummary.course_id == course_id)
         )
         summary = summary_result.scalar_one_or_none()
         if summary is not None:
             await session.delete(summary)
             await session.commit()
+        background_tasks.add_task(_maybe_update_summary, course_id)
 
     return ReviewResponse.model_validate(review)
 
@@ -336,30 +352,21 @@ async def delete_review(
                 _get_r2_client().delete_object, Bucket=settings.R2_BUCKET_NAME, Key=key
             )
 
+    # 삭제된 리뷰가 기존 요약에 반영돼 있었을 수 있으므로 무효화한다 (update_review와 동일한
+    # 정책 - 어떤 리뷰가 요약에 쓰였는지 추적하지 않으므로 보수적으로 항상 무효화한다).
+    # review_count만 보정하고 텍스트는 남겨두면, 다음 재생성 판단이 "이미 반영됨(차이 0)"으로
+    # 계산되어 정작 삭제된 리뷰가 포함된 옛 요약이 갱신 없이 계속 노출되는 문제가 있었다.
+    summary_result = await session.execute(
+        select(ReviewSummary).where(ReviewSummary.course_id == course_id)
+    )
+    summary = summary_result.scalar_one_or_none()
+    if summary is not None:
+        await session.delete(summary)
+        await session.commit()
+
     remaining = await _count_reviews(session, course_id)
-    if remaining < _SUMMARY_FIRST_THRESHOLD:
-        # 리뷰가 3개 미만으로 줄면 기존 AI 요약은 더 이상 유효하지 않음
-        # (FEATURES.md: 3개 미만이면 요약 없이 리뷰 원문만 표시)
-        summary_result = await session.execute(
-            select(ReviewSummary).where(ReviewSummary.course_id == course_id)
-        )
-        summary = summary_result.scalar_one_or_none()
-        if summary is not None:
-            await session.delete(summary)
-            await session.commit()
-    else:
-        summary_result = await session.execute(
-            select(ReviewSummary).where(ReviewSummary.course_id == course_id).with_for_update()
-        )
-        summary = summary_result.scalar_one_or_none()
-        if summary is not None and summary.review_count > remaining:
-            # 삭제로 실제 리뷰 수가 줄었는데 review_count 기준값이 그대로면, 다음
-            # 재생성까지 필요한 "+5"가 실제보다 더 많이 쌓여야 하는 것처럼 계산되어
-            # 재생성 시점이 불필요하게 늦어진다. 기준값을 현재 개수로 맞춰 방지한다.
-            summary.review_count = remaining
-            await session.commit()
-        # 리뷰 삭제도 재생성 여부를 다시 판단할 계기이므로 백그라운드로 재평가한다
-        # (요약이 아직 한 번도 생성되지 않은 경우를 포함).
+    if remaining >= _SUMMARY_FIRST_THRESHOLD:
+        # 무효화됐으니 요약이 없는 상태 - 다음 트리거에서 임계값 게이트 없이 바로 재생성된다
         background_tasks.add_task(_maybe_update_summary, course_id)
 
 

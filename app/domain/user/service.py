@@ -628,6 +628,30 @@ async def upload_profile_image(user: User, file: UploadFile, db: AsyncSession) -
     return new_url
 
 
+async def delete_profile_image(user: User, db: AsyncSession) -> None:
+    """프로필 이미지를 기본 이미지로 되돌립니다 (DB를 NULL로 먼저 커밋한 뒤 R2 파일 삭제)."""
+    old_url = user.profile_image_url
+    if not old_url:
+        return
+
+    user.profile_image_url = None
+    try:
+        await db.commit()
+    except SQLAlchemyError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="이미지 삭제에 실패했습니다. 잠시 후 다시 시도해주세요",
+        ) from None
+
+    # DB 반영 확정 후에만 R2에서 삭제 — 순서가 반대면 R2는 지워졌는데 DB엔 깨진 URL이 남는
+    # 상황이 생길 수 있음. 이 쪽은 실패해도 응답엔 영향 없음(고아 파일로만 남음).
+    try:
+        await delete_file(old_url)
+    except ClientError:
+        pass
+
+
 async def withdraw_user(user: User, access_token: str, db: AsyncSession, redis: Redis) -> None:
     """회원 탈퇴: 개인정보 익명화 + 소셜 계정 삭제 + 연관 데이터 익명화 (단일 트랜잭션)."""
     now = datetime.now(tz=UTC)

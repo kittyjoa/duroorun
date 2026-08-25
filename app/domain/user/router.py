@@ -22,6 +22,7 @@ from app.domain.user.schemas import (
     UserResponse,
 )
 from app.domain.user.service import (
+    delete_profile_image,
     get_google_auth_url,
     get_kakao_auth_url,
     get_naver_auth_url,
@@ -285,6 +286,16 @@ async def upload_my_image(
     """프로필 이미지를 R2에 업로드하고 URL을 저장합니다."""
     url = await upload_profile_image(user, file, db)
     return ProfileImageResponse(profile_image_url=url)
+
+
+@router.delete("/users/me/image", response_model=MessageResponse, summary="프로필 이미지 삭제")
+async def delete_my_image(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> MessageResponse:
+    """프로필 이미지를 삭제하고 기본 이미지로 되돌립니다."""
+    await delete_profile_image(user, db)
+    return MessageResponse(message="프로필 이미지가 삭제되었습니다")
 
 
 @router.delete("/users/me", response_model=MessageResponse, summary="회원 탈퇴")

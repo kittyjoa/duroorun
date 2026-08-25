@@ -57,11 +57,7 @@ const Header = () => {
         {user ? (
           <div className="profile-menu" ref={profileMenuRef}>
             <div className="profile-avatar" aria-hidden="true">
-              {user.profile_image_url ? (
-                <img src={user.profile_image_url} alt="" />
-              ) : (
-                <span>{(user.nickname || '두').charAt(0)}</span>
-              )}
+              <img src={user.profile_image_url || '/assets/default-avatar.png'} alt="" />
             </div>
             <button
               type="button"

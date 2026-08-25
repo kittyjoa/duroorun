@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 
 import { apiFetch } from '../api';
+import { useDebouncedValue } from '../hooks/useDebouncedValue';
 
 const DIFFICULTY_LABEL = { EASY: '쉬움', NORMAL: '보통', HARD: '어려움' };
 const DIFFICULTY_COLOR = { EASY: 'green', NORMAL: 'blue', HARD: 'red' };
@@ -55,15 +56,25 @@ const CourseList = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
+  // 입력창에는 즉시 반영하되, 실제 API 호출은 타이핑이 멈춘 뒤에만 나가도록 지연
+  const debouncedDrnbFilters = useDebouncedValue(drnbFilters);
+  const debouncedCustomFilters = useDebouncedValue(customFilters);
+
   useEffect(() => {
+    // 이 effect가 재실행된 뒤(= 더 최신 요청이 시작된 뒤) 도착하는 이전 응답은 무시
+    let ignore = false;
+
     const fetchCourses = async () => {
       setLoading(true);
       setError('');
       try {
         const query =
-          courseType === 'drnb' ? buildDrnbQuery(drnbFilters) : buildCustomQuery(customFilters);
+          courseType === 'drnb'
+            ? buildDrnbQuery(debouncedDrnbFilters)
+            : buildCustomQuery(debouncedCustomFilters);
         const path = courseType === 'drnb' ? '/v1/courses/drnb' : '/v1/courses/custom';
         const res = await apiFetch(query ? `${path}?${query}` : path);
+        if (ignore) return;
         if (!res.ok) {
           setError('코스 목록을 불러오지 못했어요.');
           return;
@@ -71,13 +82,17 @@ const CourseList = () => {
         const data = await res.json();
         setCourses(data.items);
       } catch {
-        setError('서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.');
+        if (!ignore) setError('서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.');
       } finally {
-        setLoading(false);
+        if (!ignore) setLoading(false);
       }
     };
     fetchCourses();
-  }, [courseType, drnbFilters, customFilters]);
+
+    return () => {
+      ignore = true;
+    };
+  }, [courseType, debouncedDrnbFilters, debouncedCustomFilters]);
 
   return (
     <main className="course-list-page">

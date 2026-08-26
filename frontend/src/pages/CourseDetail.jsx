@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 
 import { apiFetch } from '../api';
+import Header from '../components/layout/Header';
 
 const DIFFICULTY_LABEL = { EASY: '쉬움', NORMAL: '보통', HARD: '어려움' };
 
@@ -22,7 +23,15 @@ const CourseDetail = () => {
         const res = await apiFetch(`/v1/courses/${courseType}/${courseId}`);
         if (ignore) return;
         if (!res.ok) {
-          setError('코스 정보를 찾을 수 없어요.');
+          if (res.status === 404) {
+            setError('코스 정보를 찾을 수 없어요.');
+          } else if (res.status === 401 || res.status === 403) {
+            setError('이 코스를 볼 권한이 없어요.');
+          } else if (res.status >= 500) {
+            setError('서버에 문제가 발생했어요. 잠시 후 다시 시도해주세요.');
+          } else {
+            setError('코스 정보를 불러오지 못했어요.');
+          }
           return;
         }
         const data = await res.json();
@@ -42,76 +51,87 @@ const CourseDetail = () => {
 
   if (loading) {
     return (
-      <main className="course-detail-page">
-        <p className="course-list-status">불러오는 중...</p>
-      </main>
+      <>
+        <Header />
+        <main className="course-detail-page">
+          <p className="course-list-status">불러오는 중...</p>
+        </main>
+      </>
     );
   }
 
   if (error || !course) {
     return (
-      <main className="course-detail-page">
-        <p className="course-list-status error">{error || '코스 정보를 찾을 수 없어요.'}</p>
-      </main>
+      <>
+        <Header />
+        <main className="course-detail-page">
+          <p className="course-list-status error">{error || '코스 정보를 찾을 수 없어요.'}</p>
+        </main>
+      </>
     );
   }
 
   return (
-    <main className="course-detail-page">
-      <Link to="/courses" className="text-button">
-        ← 목록으로
-      </Link>
+    <>
+      <Header />
+      <main className="course-detail-page">
+        <Link to="/courses" className="text-button">
+          ← 목록으로
+        </Link>
 
-      <div className="course-detail-heading">
-        <span className="section-kicker">
-          {courseType === 'drnb' ? (course.sigun ?? course.brd_div) : '커스텀 코스'}
-        </span>
-        <h1>{course.course_name}</h1>
-      </div>
+        <div className="course-detail-heading">
+          <span className="section-kicker">
+            {courseType === 'drnb' ? (course.sigun ?? course.brd_div) : '커스텀 코스'}
+          </span>
+          <h1>{course.course_name}</h1>
+        </div>
 
-      <dl className="course-detail-info">
-        <div>
-          <dt>난이도</dt>
-          <dd>{DIFFICULTY_LABEL[course.difficulty] ?? '정보 없음'}</dd>
-        </div>
-        <div>
-          <dt>평균 체감 난이도</dt>
-          <dd>{DIFFICULTY_LABEL[course.average_difficulty] ?? '리뷰 없음'}</dd>
-        </div>
-        <div>
-          <dt>거리</dt>
-          <dd>{course.distance != null ? `${course.distance}km` : '정보 없음'}</dd>
-        </div>
-        <div>
-          <dt>예상 소요시간</dt>
-          <dd>
-            {course.estimated_time != null ? `약 ${course.estimated_time}분` : '정보 없음'}
-          </dd>
-        </div>
-        {courseType === 'drnb' && (
+        <dl className="course-detail-info">
           <div>
-            <dt>완주 인증</dt>
-            <dd>{course.has_verification_coords ? '가능' : '불가 (좌표 정보 없음)'}</dd>
+            <dt>난이도</dt>
+            <dd>{DIFFICULTY_LABEL[course.difficulty] ?? '정보 없음'}</dd>
+          </div>
+          <div>
+            <dt>평균 체감 난이도</dt>
+            <dd>{DIFFICULTY_LABEL[course.average_difficulty] ?? '리뷰 없음'}</dd>
+          </div>
+          <div>
+            <dt>거리</dt>
+            <dd>{course.distance != null ? `${course.distance}km` : '정보 없음'}</dd>
+          </div>
+          <div>
+            <dt>예상 소요시간</dt>
+            <dd>
+              {course.estimated_time != null ? `약 ${course.estimated_time}분` : '정보 없음'}
+            </dd>
+          </div>
+          {courseType === 'drnb' && (
+            <div>
+              <dt>완주 인증</dt>
+              <dd>{course.has_verification_coords ? '가능' : '불가 (좌표 정보 없음)'}</dd>
+            </div>
+          )}
+          {courseType === 'custom' && (
+            <div>
+              <dt>경유지 수</dt>
+              <dd>{course.waypoints?.length ?? 0}개</dd>
+            </div>
+          )}
+        </dl>
+
+        {course.course_description && (
+          <p className="course-detail-desc">{course.course_description}</p>
+        )}
+
+        {courseType === 'custom' && course.images?.length > 0 && (
+          <div className="course-detail-images">
+            {course.images.map((image) => (
+              <img key={image.image_id} src={image.image_url} alt={course.course_name} />
+            ))}
           </div>
         )}
-        {courseType === 'custom' && (
-          <div>
-            <dt>경유지 수</dt>
-            <dd>{course.waypoints?.length ?? 0}개</dd>
-          </div>
-        )}
-      </dl>
-
-      {course.course_description && <p className="course-detail-desc">{course.course_description}</p>}
-
-      {courseType === 'custom' && course.images?.length > 0 && (
-        <div className="course-detail-images">
-          {course.images.map((image) => (
-            <img key={image.image_id} src={image.image_url} alt={course.course_name} />
-          ))}
-        </div>
-      )}
-    </main>
+      </main>
+    </>
   );
 };
 

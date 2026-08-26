@@ -183,6 +183,10 @@ async def create_course(
     session.add(course)
     await session.commit()
     course = await _get_custom_course(session, course.course_id)
+    # Course 모델의 실제 컬럼이 아니라 이 응답 한정으로만 붙이는 값 - DB에는 저장되지 않는다.
+    # (방금 생성된 코스라 리뷰가 없어 항상 None이지만, 나머지 3곳과 패턴을 맞춰둔다)
+    course.average_difficulty = await get_average_difficulty(session, course.course_id)
+    course.review_summary = await get_review_summary(session, course.course_id)
     return CustomCourseDetailResponse.model_validate(course)
 
 

@@ -193,7 +193,7 @@ def _merge_manual_courses(
 
     ㅡ API가 나중에 이 코스를 정상 반환하기 시작하면, seen_ids에 이미 포함되므로
       여기서 자동으로 걸러져서 수동 데이터는 안 쓰임.
-    ㅡ 인자를 대체하지 않고, return 값으로만 이루어진 결과를 새로 준다?
+    ㅡ 인자를 대체하지 않고, return 값으로만 이루어진 새 리스트/딕셔너리를 반환
     """
     seen_ids = {item["crsIdx"] for item in all_items}
     missing_manual = [m for m in MANUAL_COURSES if m["crsIdx"] not in seen_ids]
@@ -335,6 +335,16 @@ async def seed_courses() -> None:
                     )
 
                 await _sync_coordinates(session, gpx_sources)
+
+                if not complete:
+                    # 여기까지 upsert/좌표 동기화된 부분 데이터는 그대로 유지하되,
+                    # 이번 실행 자체는 실패로 기록하고 DurunubiAPIError로 재던져서
+                    # scheduler._run_seed_courses_with_retry의 재시도(+디스코드 알림) 경로를 태움
+                    raise DurunubiAPIError(
+                        f"코스 목록을 끝까지 수집하지 못해 부분 동기화로 중단합니다 "
+                        f"(수집 {len(all_items)}건, 비활성화 처리 스킵됨)."
+                    )
+
                 await _record_sync_log(session, SyncStatus.SUCCESS, fetched_count=len(all_items))
                 logger.info("시드 완료")
             except Exception as e:

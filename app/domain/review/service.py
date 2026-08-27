@@ -23,6 +23,8 @@ from app.domain.course.models import Course, Difficulty
 from app.domain.record.models import Record
 from app.domain.review.models import Review, ReviewImage, ReviewSummary
 from app.domain.review.schemas import (
+    MyReviewListResponse,
+    MyReviewResponse,
     ReviewCreateRequest,
     ReviewImageResponse,
     ReviewListResponse,
@@ -49,7 +51,11 @@ _SUMMARY_LOCK_TTL_SECONDS = 60
 # rate limit과 무관하게(여러 유저가 나눠서 트리거해도) 코스 단위로 막기 위함.
 _SUMMARY_COOLDOWN_SECONDS = 60
 # 락 경쟁에서 지거나 Gemini 호출 도중 상태가 바뀌어 저장을 포기했을 때, 그 트리거를
-# 그냥 버리지 않고 재시도하는 최대 횟수/간격. 너무 오래 매달리지 않도록 짧게 제한한다.
+# 그냥 버리지 않고 재시도하는 최대 횟수/간격. 단, 재시도 사이 간격은 이 값이지만 각
+# attempt 자체는 쿨다운이 끝날 때까지(최대 _SUMMARY_COOLDOWN_SECONDS) 대기할 수 있어
+# 전체 소요 시간은 이 값들만으로 정해지지 않는다 - 쿨다운 중에 그냥 포기하면 다음 리뷰
+# 변경이 생기기 전까지 요약이 계속 무효 상태로 남을 수 있어(과거에 겪은 버그) 의도적으로
+# 감수하는 트레이드오프다.
 _SUMMARY_MAX_RETRIES = 3
 _SUMMARY_RETRY_DELAY_SECONDS = 3
 
@@ -306,6 +312,15 @@ async def _attempt_update_summary(course_id: int) -> bool:
             return False
 
         async with AsyncSessionLocal() as session:
+            # 코스 행을 잠근다 - update_review/delete_review가 요약을 무효화할 때도 동일한
+            # 순서로 이 락을 잡으므로, 아래 재검증 시점에 그쪽 트랜잭션이 이미 커밋했다면
+            # 최신 상태를(그리고 아직 커밋 전이라면 그게 끝날 때까지 기다렸다가 최신 상태를)
+            # 보게 된다. 이 락 없이 재검증만 하면, 재검증 직후~커밋 사이에 리뷰가 수정/삭제되고
+            # 요약이 무효화돼도 알아채지 못하고 그 전 내용으로 만든(이미 낡은) 요약을 그대로
+            # 써버릴 수 있었다.
+            await session.execute(
+                select(Course.course_id).where(Course.course_id == course_id).with_for_update()
+            )
             # 스냅샷(요약에 쓴 최대 50개)에 없는 리뷰가 그 사이 추가/삭제돼도 review_count가
             # 실제 전체 개수와 어긋날 수 있으므로, 전체 개수도 그대로인지 함께 확인한다.
             if await _count_reviews(session, course_id) != review_count:
@@ -417,6 +432,12 @@ async def update_review(
 
     course_id = review.course_id
     if content_changed:
+        # 요약 쓰기(_attempt_update_summary)와 동일한 순서로 코스 행을 잠근다 - 저장 직전
+        # 재검증 이후~커밋 사이에 이 수정이 끼어들어도 알아채지 못하고 옛 내용으로 만든
+        # 요약이 그대로 저장되는 경쟁 상태를 막기 위함.
+        await session.execute(
+            select(Course.course_id).where(Course.course_id == course_id).with_for_update()
+        )
         # 리뷰 내용이 바뀌면 기존 AI 요약이 옛 내용을 반영한 채로 남아있게 되므로 무효화한다.
         # 리뷰 수정과 같은 트랜잭션(커밋 1번)으로 묶어서, 수정된 리뷰와 무효화 전 요약이
         # 함께 노출되는 순간이나 "리뷰는 저장됐는데 요약 삭제만 실패" 하는 상황을 막는다.
@@ -459,6 +480,11 @@ async def delete_review(
         for image in review.images
     ]
     await session.delete(review)
+    # 요약 쓰기(_attempt_update_summary)와 동일한 순서로 코스 행을 잠근다 - update_review와
+    # 동일한 이유(저장 직전 재검증 이후~커밋 사이의 경쟁 상태 방지).
+    await session.execute(
+        select(Course.course_id).where(Course.course_id == course_id).with_for_update()
+    )
     # 삭제된 리뷰가 기존 요약에 반영돼 있었을 수 있으므로 무효화한다 (update_review와 동일한
     # 정책). 리뷰 삭제와 같은 트랜잭션(커밋 1번)으로 묶는다.
     await _invalidate_summary(session, course_id)
@@ -527,6 +553,34 @@ async def get_reviews(
         page=page,
         size=size,
     )
+
+
+async def get_my_reviews(
+    session: AsyncSession,
+    user_id: int,
+    page: int,
+    size: int,
+) -> MyReviewListResponse:
+    """마이페이지 - 내가 작성한 리뷰 목록 조회 (최신순, 코스명 포함)"""
+    offset = (page - 1) * size
+    total_result = await session.execute(
+        select(func.count()).select_from(Review).where(Review.user_id == user_id)
+    )
+    total = total_result.scalar_one()
+    result = await session.execute(
+        select(Review, Course.course_name)
+        .join(Course, Course.course_id == Review.course_id)
+        .where(Review.user_id == user_id)
+        .order_by(Review.created_at.desc())
+        .offset(offset)
+        .limit(size)
+    )
+    items = []
+    for review, course_name in result.all():
+        # Review 모델의 실제 컬럼이 아니라 이 응답 한정으로만 붙이는 값 - DB에는 저장되지 않는다.
+        review.course_name = course_name
+        items.append(MyReviewResponse.model_validate(review))
+    return MyReviewListResponse(items=items, total=total, page=page, size=size)
 
 
 async def upload_review_image(

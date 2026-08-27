@@ -9,6 +9,7 @@ from app.core.security import get_current_user
 from app.database import get_db
 from app.domain.review import service as review_service
 from app.domain.review.schemas import (
+    MyReviewListResponse,
     ReviewCreateRequest,
     ReviewListResponse,
     ReviewResponse,
@@ -103,6 +104,19 @@ async def delete_review(
         review_id=review_id,
         user_role=current_user.user_role,
         background_tasks=background_tasks,
+    )
+
+
+@router.get("/mine", response_model=MyReviewListResponse)
+async def get_my_reviews(
+    page: int = Query(default=1, ge=1),
+    size: int = Query(default=20, ge=1, le=100),
+    session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """마이페이지 - 내가 작성한 리뷰 목록 조회"""
+    return await review_service.get_my_reviews(
+        session=session, user_id=current_user.user_id, page=page, size=size
     )
 
 

@@ -63,3 +63,27 @@ class ReviewSummaryResponse(BaseModel):
     summary: str
     review_count: int
     updated_at: datetime
+
+
+class MyReviewResponse(BaseModel):
+    """마이페이지 - 내가 쓴 리뷰 응답 (어떤 코스 리뷰인지 알 수 있도록 코스명 포함)"""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    review_id: int
+    course_id: int
+    course_name: str
+    content: str
+    difficulty: Difficulty
+    created_at: datetime
+    updated_at: datetime | None
+    images: list[ReviewImageResponse] = []
+
+
+class MyReviewListResponse(BaseModel):
+    """마이페이지 - 내가 쓴 리뷰 목록 응답"""
+
+    items: list[MyReviewResponse]
+    total: int
+    page: int
+    size: int

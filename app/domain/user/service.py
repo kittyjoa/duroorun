@@ -611,7 +611,7 @@ async def upload_profile_image(user: User, file: UploadFile, db: AsyncSession) -
         # DB 저장 실패 시 방금 올린 새 파일이 고아로 남지 않도록 R2에서도 제거
         try:
             await delete_file(new_url)
-        except ClientError:
+        except (ClientError, BotoCoreError):
             pass
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -622,10 +622,34 @@ async def upload_profile_image(user: User, file: UploadFile, db: AsyncSession) -
     if old_url:
         try:
             await delete_file(old_url)
-        except ClientError:
+        except (ClientError, BotoCoreError):
             pass
 
     return new_url
+
+
+async def delete_profile_image(user: User, db: AsyncSession) -> None:
+    """프로필 이미지를 기본 이미지로 되돌립니다 (DB를 NULL로 먼저 커밋한 뒤 R2 파일 삭제)."""
+    old_url = user.profile_image_url
+    if not old_url:
+        return
+
+    user.profile_image_url = None
+    try:
+        await db.commit()
+    except SQLAlchemyError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="이미지 삭제에 실패했습니다. 잠시 후 다시 시도해주세요",
+        ) from None
+
+    # DB 반영 확정 후에만 R2에서 삭제 — 순서가 반대면 R2는 지워졌는데 DB엔 깨진 URL이 남는
+    # 상황이 생길 수 있음. 이 쪽은 실패해도 응답엔 영향 없음(고아 파일로만 남음).
+    try:
+        await delete_file(old_url)
+    except (ClientError, BotoCoreError):
+        pass
 
 
 async def withdraw_user(user: User, access_token: str, db: AsyncSession, redis: Redis) -> None:
@@ -669,5 +693,5 @@ async def withdraw_user(user: User, access_token: str, db: AsyncSession, redis: 
     if old_profile_image_url:
         try:
             await delete_file(old_profile_image_url)
-        except ClientError:
+        except (ClientError, BotoCoreError):
             pass

@@ -611,7 +611,7 @@ async def upload_profile_image(user: User, file: UploadFile, db: AsyncSession) -
         # DB 저장 실패 시 방금 올린 새 파일이 고아로 남지 않도록 R2에서도 제거
         try:
             await delete_file(new_url)
-        except ClientError:
+        except (ClientError, BotoCoreError):
             pass
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -622,7 +622,7 @@ async def upload_profile_image(user: User, file: UploadFile, db: AsyncSession) -
     if old_url:
         try:
             await delete_file(old_url)
-        except ClientError:
+        except (ClientError, BotoCoreError):
             pass
 
     return new_url
@@ -648,7 +648,7 @@ async def delete_profile_image(user: User, db: AsyncSession) -> None:
     # 상황이 생길 수 있음. 이 쪽은 실패해도 응답엔 영향 없음(고아 파일로만 남음).
     try:
         await delete_file(old_url)
-    except ClientError:
+    except (ClientError, BotoCoreError):
         pass
 
 
@@ -693,5 +693,5 @@ async def withdraw_user(user: User, access_token: str, db: AsyncSession, redis: 
     if old_profile_image_url:
         try:
             await delete_file(old_profile_image_url)
-        except ClientError:
+        except (ClientError, BotoCoreError):
             pass

@@ -1,6 +1,7 @@
 """리뷰 + 이미지 - API 엔드포인트 (APIRouter)."""
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Query, UploadFile, status
+from fastapi.params import Depends as DependsParam
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.rate_limit import rate_limit_per_request
@@ -24,7 +25,7 @@ _MUTATION_RATE_LIMIT_MAX_REQUESTS = 5
 _MUTATION_RATE_LIMIT_WINDOW_SECONDS = 3600
 
 
-def _mutation_rate_limit(action: str) -> Depends:
+def _mutation_rate_limit(action: str) -> DependsParam:
     """리뷰 작성/수정/삭제 엔드포인트에 공통으로 거는 유저 단위 rate limit 의존성.
 
     action만 다르고("create"/"update"/"delete") 나머지 정책은 동일하므로, 나중에

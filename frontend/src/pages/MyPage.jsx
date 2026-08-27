@@ -22,6 +22,7 @@ const MyPage = () => {
   const [location, setLocation] = useState('');
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [deletingImage, setDeletingImage] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [isImageOpen, setIsImageOpen] = useState(false);
@@ -136,6 +137,27 @@ const MyPage = () => {
     }
   };
 
+  const handleImageDelete = async () => {
+    setError('');
+    setDeletingImage(true);
+
+    try {
+      const res = await apiFetch('/v1/users/me/image', { method: 'DELETE' });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        setError(data?.detail ?? '이미지 삭제에 실패했어요');
+        return;
+      }
+
+      setUser((prev) => ({ ...prev, profile_image_url: null }));
+    } catch {
+      setError('서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.');
+    } finally {
+      setDeletingImage(false);
+    }
+  };
+
   return (
     <>
       <Header />
@@ -167,19 +189,31 @@ const MyPage = () => {
                 </button>
               ) : (
                 <div className="profile-avatar large" aria-hidden="true">
-                  <span>{(user.nickname || '두').charAt(0)}</span>
+                  <img src="/assets/default-avatar.png" alt="" />
                 </div>
               )}
-              <label className="mypage-image-upload">
-                {uploading ? '업로드 중...' : '프로필 사진 변경'}
-                <input
-                  type="file"
-                  accept="image/jpeg,image/png,image/webp"
-                  onChange={handleImageChange}
-                  disabled={uploading}
-                  hidden
-                />
-              </label>
+              <div className="mypage-image-actions">
+                <label className="mypage-image-upload">
+                  {uploading ? '업로드 중...' : '프로필 사진 변경'}
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    onChange={handleImageChange}
+                    disabled={uploading || deletingImage}
+                    hidden
+                  />
+                </label>
+                {user.profile_image_url && (
+                  <button
+                    type="button"
+                    className="mypage-image-upload"
+                    onClick={handleImageDelete}
+                    disabled={uploading || deletingImage}
+                  >
+                    {deletingImage ? '삭제 중...' : '기본 이미지로 변경'}
+                  </button>
+                )}
+              </div>
             </div>
 
             <form className="mypage-form" onSubmit={handleSubmit}>

@@ -4,6 +4,10 @@ version = "0.1.0"
 description = "두루런 - 한국 해안 트레일 러닝 서비스"
 requires-python = ">=3.11"
 
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
 [tool.ruff]
 # 한 줄 최대 100자 (CONTRIBUTING.md 규칙)
 line-length = 100

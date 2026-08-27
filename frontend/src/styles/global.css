@@ -137,7 +137,10 @@ h2 { font-size:36px; letter-spacing:-1.5px; margin:8px 0 0; line-height:1.25; }
 .mypage-page { max-width:600px; margin:0 auto; padding:124px 24px 60px; }
 .mypage-page h1 { font-size:28px; letter-spacing:-1px; margin:0 0 32px; }
 .mypage-profile { display:flex; align-items:center; gap:20px; }
+.mypage-image-actions { display:flex; flex-direction:column; align-items:flex-start; gap:8px; }
 .mypage-image-upload { display:inline-block; color:var(--blue); font-size:13px; cursor:pointer; border-bottom:1px solid #88a9bd; padding-bottom:2px; }
+button.mypage-image-upload { border:0; border-bottom:1px solid #88a9bd; background:transparent; font-family:inherit; padding:0 0 2px; margin:0; }
+button.mypage-image-upload:disabled { opacity:.6; cursor:not-allowed; }
 .mypage-form { max-width:360px; margin-top:32px; }
 .mypage-form label { display:block; font-size:13px; color:#5c706c; margin:16px 0 6px; }
 .mypage-form label:first-child { margin-top:0; }

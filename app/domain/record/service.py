@@ -167,7 +167,9 @@ async def end_record(
     )
     # 러닝 도중 코스가 비활성화됐다면 완주 인증 기준점으로 신뢰하지 않는다
     # (기록 자체는 정상 저장, 완주 인증만 보류 — 좌표 None 케이스와 동일한 처리)
-    course_verifiable = course is not None and course.is_active
+    course_active = course is not None and course.is_active
+    course_has_coords = course is not None and course.has_verification_coords
+    course_verifiable = course_active and course_has_coords
     record.is_completed = _check_completion(
         user_start_lat=record.user_start_lat,
         user_start_lng=record.user_start_lng,
@@ -178,6 +180,20 @@ async def end_record(
         course_end_lat=course.end_lat if course_verifiable else None,
         course_end_lng=course.end_lng if course_verifiable else None,
     )
+    # 완주 인증이 안 된 이유가 유저 잘못이 아니라 코스 쪽 문제(비활성화/좌표 없음)일 때만
+    # 안내 문구를 채운다. Record 모델의 실제 컬럼이 아니라 이 응답 한정으로만 붙이는 값 -
+    # DB에는 저장되지 않는다.
+    if not course_active:
+        record.verification_message = (
+            "러닝 도중 코스가 비활성화되어 완주 인증이 처리되지 않았어요. "
+            "다만 러닝 기록은 기록할 수 있어요."
+        )
+    elif not course_has_coords:
+        record.verification_message = (
+            "이 코스는 완주 인증을 지원하지 않아요. 다만 러닝 기록은 기록할 수 있어요."
+        )
+    else:
+        record.verification_message = None
     await session.commit()
     await session.refresh(record)
     return RecordResponse.model_validate(record)

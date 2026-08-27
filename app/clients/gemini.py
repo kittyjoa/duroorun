@@ -52,6 +52,7 @@ _SUMMARY_PROMPT = """당신은 러닝 코스 리뷰를 요약하는 도우미입
 
 @lru_cache
 def _get_client() -> Client:
+    """Gemini API 클라이언트를 생성한다 (lru_cache로 프로세스당 한 번만 생성해 재사용)."""
     return genai.Client(api_key=settings.GEMINI_API_KEY)
 
 

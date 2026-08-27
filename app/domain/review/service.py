@@ -188,6 +188,7 @@ async def create_review(
 
 
 async def _count_reviews(session: AsyncSession, course_id: int) -> int:
+    """코스의 전체 리뷰 개수를 센다."""
     result = await session.execute(
         select(func.count()).select_from(Review).where(Review.course_id == course_id)
     )

@@ -24,19 +24,26 @@ _MUTATION_RATE_LIMIT_MAX_REQUESTS = 5
 _MUTATION_RATE_LIMIT_WINDOW_SECONDS = 3600
 
 
+def _mutation_rate_limit(action: str) -> Depends:
+    """리뷰 작성/수정/삭제 엔드포인트에 공통으로 거는 유저 단위 rate limit 의존성.
+
+    action만 다르고("create"/"update"/"delete") 나머지 정책은 동일하므로, 나중에
+    제한값을 조정할 때 한 곳만 고치면 되도록 헬퍼로 뽑는다.
+    """
+    return Depends(
+        rate_limit_per_request(
+            f"review_{action}",
+            _MUTATION_RATE_LIMIT_MAX_REQUESTS,
+            _MUTATION_RATE_LIMIT_WINDOW_SECONDS,
+        )
+    )
+
+
 @router.post(
     "/courses/{course_id}",
     response_model=ReviewResponse,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[
-        Depends(
-            rate_limit_per_request(
-                "review_create",
-                _MUTATION_RATE_LIMIT_MAX_REQUESTS,
-                _MUTATION_RATE_LIMIT_WINDOW_SECONDS,
-            )
-        )
-    ],
+    dependencies=[_mutation_rate_limit("create")],
 )
 async def create_review(
     course_id: int,
@@ -58,15 +65,7 @@ async def create_review(
 @router.patch(
     "/{review_id}",
     response_model=ReviewResponse,
-    dependencies=[
-        Depends(
-            rate_limit_per_request(
-                "review_update",
-                _MUTATION_RATE_LIMIT_MAX_REQUESTS,
-                _MUTATION_RATE_LIMIT_WINDOW_SECONDS,
-            )
-        )
-    ],
+    dependencies=[_mutation_rate_limit("update")],
 )
 async def update_review(
     review_id: int,
@@ -88,15 +87,7 @@ async def update_review(
 @router.delete(
     "/{review_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[
-        Depends(
-            rate_limit_per_request(
-                "review_delete",
-                _MUTATION_RATE_LIMIT_MAX_REQUESTS,
-                _MUTATION_RATE_LIMIT_WINDOW_SECONDS,
-            )
-        )
-    ],
+    dependencies=[_mutation_rate_limit("delete")],
 )
 async def delete_review(
     review_id: int,

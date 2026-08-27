@@ -199,7 +199,7 @@ const MyPage = () => {
                     type="file"
                     accept="image/jpeg,image/png,image/webp"
                     onChange={handleImageChange}
-                    disabled={uploading}
+                    disabled={uploading || deletingImage}
                     hidden
                   />
                 </label>
@@ -208,7 +208,7 @@ const MyPage = () => {
                     type="button"
                     className="mypage-image-upload"
                     onClick={handleImageDelete}
-                    disabled={deletingImage}
+                    disabled={uploading || deletingImage}
                   >
                     {deletingImage ? '삭제 중...' : '기본 이미지로 변경'}
                   </button>

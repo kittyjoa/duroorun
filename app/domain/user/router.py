@@ -288,7 +288,19 @@ async def upload_my_image(
     return ProfileImageResponse(profile_image_url=url)
 
 
-@router.delete("/users/me/image", response_model=MessageResponse, summary="프로필 이미지 삭제")
+@router.delete(
+    "/users/me/image",
+    response_model=MessageResponse,
+    summary="프로필 이미지 삭제",
+    dependencies=[
+        Depends(
+            # 업로드와 key_prefix 공유 — 업로드/삭제 번갈아 반복하는 남용도 같이 막기 위함
+            rate_limit_per_request(
+                "image_upload", _RATE_LIMIT_MAX_REQUESTS, _RATE_LIMIT_WINDOW_SECONDS
+            )
+        )
+    ],
+)
 async def delete_my_image(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),

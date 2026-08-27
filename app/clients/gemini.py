@@ -9,10 +9,18 @@ from google.genai.types import (
     GenerateContentConfig,
     HarmBlockThreshold,
     HarmCategory,
+    HttpOptions,
     SafetySetting,
 )
 
 from app.config import settings
+
+# 프롬프트가 "2~3문장"만 요청하므로 이 정도면 충분히 넉넉함. 모델이 지시를 무시하고
+# 과도하게 길게 답하는 경우를 대비한 상한선.
+_MAX_OUTPUT_TOKENS = 500
+# max_output_tokens로도 걸러지지 않는 경우를 대비한 마지막 방어선 - 저장 전 글자 수 기준으로
+# 한 번 더 자른다. 정상적인 2~3문장 요약이라면 절대 도달하지 않을 넉넉한 길이.
+_MAX_SUMMARY_LENGTH = 1000
 
 # 리뷰 원문에 욕설/혐오표현이 섞여 있어도, 코스 상세 상단에 "공식 AI 요약"처럼 노출되는
 # 요약문에는 최대한 반영되지 않도록 안전 설정을 강하게 건다(BLOCK_LOW_AND_ABOVE = 조금이라도
@@ -60,14 +68,25 @@ def _sanitize_for_prompt(content: str) -> str:
 async def summarize_reviews(review_contents: list[str]) -> str | None:
     """리뷰 내용 목록을 Gemini로 요약합니다.
 
-    API 실패 시 google.genai.errors.APIError가 발생합니다. 안전 설정에 걸려 응답이
-    통째로 차단되면 예외 없이 None을 반환합니다(호출부에서 빈 응답과 동일하게 처리).
+    API 실패 시 google.genai.errors.APIError가, 타임아웃 시에는 httpx 계열 타임아웃
+    예외(예: ConnectTimeout)가 발생합니다 - 호출부에서 둘 다 광범위한 except Exception으로
+    잡아 처리하므로 호출자가 타입을 구분할 필요는 없습니다. 안전 설정에 걸려 응답이 통째로
+    차단되면 예외 없이 None을 반환합니다(호출부에서 빈 응답과 동일하게 처리). 응답이 너무
+    오래 걸리면 Redis 락 TTL(60초)이 먼저 만료돼 같은 코스에 대한 다른 작업이 끼어들 수
+    있으므로, 그보다 짧게 타임아웃을 건다.
     """
     reviews_text = "\n".join(f"- {_sanitize_for_prompt(content)}" for content in review_contents)
     prompt = _SUMMARY_PROMPT.format(reviews=reviews_text)
     response = await _get_client().aio.models.generate_content(
         model=settings.GEMINI_MODEL,
         contents=prompt,
-        config=GenerateContentConfig(safety_settings=_SAFETY_SETTINGS),
+        config=GenerateContentConfig(
+            safety_settings=_SAFETY_SETTINGS,
+            max_output_tokens=_MAX_OUTPUT_TOKENS,
+            http_options=HttpOptions(timeout=settings.GEMINI_TIMEOUT_SECONDS * 1000),
+        ),
     )
-    return response.text
+    text = response.text
+    if text and len(text) > _MAX_SUMMARY_LENGTH:
+        text = text[:_MAX_SUMMARY_LENGTH]
+    return text

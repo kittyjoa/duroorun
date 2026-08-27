@@ -22,6 +22,10 @@ COPY ./app ./app
 COPY alembic.ini .
 COPY ./alembic ./alembic
 
+# 테스트 (pytest 설정 + 테스트 코드)
+COPY pyproject.toml .
+COPY ./tests ./tests
+
 # FastAPI 실행 (8000 포트)
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

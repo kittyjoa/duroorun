@@ -46,6 +46,9 @@ class Settings(BaseSettings):
     # Gemini
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-2.5-flash-lite"
+    # Redis 락 TTL(60초)보다 확실히 짧게 - 응답이 너무 오래 걸려서 락이 먼저 만료되고
+    # 같은 코스에 대한 다른 작업이 끼어드는 걸 막기 위함
+    GEMINI_TIMEOUT_SECONDS: int = 30
 
     # Cloudflare R2
     R2_ACCOUNT_ID: str = ""

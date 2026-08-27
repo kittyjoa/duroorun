@@ -17,14 +17,26 @@ from app.domain.user.models import User
 
 router = APIRouter(prefix="/reviews", tags=["reviews"])
 
-# 내용이 바뀔 때마다 AI 요약 재생성(Gemini 호출)이 예약되므로, 프로필 수정보다
-# 더 타이트하게 잡는다 (user/router.py의 프로필 수정은 10분당 5회).
-_UPDATE_RATE_LIMIT_MAX_REQUESTS = 5
-_UPDATE_RATE_LIMIT_WINDOW_SECONDS = 3600
+# 작성/수정/삭제 모두 AI 요약 재생성(Gemini 호출)을 유발할 수 있으므로, 프로필 수정보다
+# 더 타이트하게 잡는다 (user/router.py의 프로필 수정은 10분당 5회). 코스 단위 쿨다운과는
+# 별개로, 한 유저가 작성→삭제를 반복하는 식의 남용을 막기 위한 유저 단위 제한.
+_MUTATION_RATE_LIMIT_MAX_REQUESTS = 5
+_MUTATION_RATE_LIMIT_WINDOW_SECONDS = 3600
 
 
 @router.post(
-    "/courses/{course_id}", response_model=ReviewResponse, status_code=status.HTTP_201_CREATED
+    "/courses/{course_id}",
+    response_model=ReviewResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[
+        Depends(
+            rate_limit_per_request(
+                "review_create",
+                _MUTATION_RATE_LIMIT_MAX_REQUESTS,
+                _MUTATION_RATE_LIMIT_WINDOW_SECONDS,
+            )
+        )
+    ],
 )
 async def create_review(
     course_id: int,
@@ -49,7 +61,9 @@ async def create_review(
     dependencies=[
         Depends(
             rate_limit_per_request(
-                "review_update", _UPDATE_RATE_LIMIT_MAX_REQUESTS, _UPDATE_RATE_LIMIT_WINDOW_SECONDS
+                "review_update",
+                _MUTATION_RATE_LIMIT_MAX_REQUESTS,
+                _MUTATION_RATE_LIMIT_WINDOW_SECONDS,
             )
         )
     ],
@@ -71,7 +85,19 @@ async def update_review(
     )
 
 
-@router.delete("/{review_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{review_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[
+        Depends(
+            rate_limit_per_request(
+                "review_delete",
+                _MUTATION_RATE_LIMIT_MAX_REQUESTS,
+                _MUTATION_RATE_LIMIT_WINDOW_SECONDS,
+            )
+        )
+    ],
+)
 async def delete_review(
     review_id: int,
     background_tasks: BackgroundTasks,

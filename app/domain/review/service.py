@@ -48,6 +48,10 @@ _SUMMARY_LOCK_TTL_SECONDS = 60
 # 않는다. 리뷰 작성/수정/삭제를 반복해 짧은 시간에 재생성을 계속 트리거하는 것을 엔드포인트별
 # rate limit과 무관하게(여러 유저가 나눠서 트리거해도) 코스 단위로 막기 위함.
 _SUMMARY_COOLDOWN_SECONDS = 60
+# 락 경쟁에서 지거나 Gemini 호출 도중 상태가 바뀌어 저장을 포기했을 때, 그 트리거를
+# 그냥 버리지 않고 재시도하는 최대 횟수/간격. 너무 오래 매달리지 않도록 짧게 제한한다.
+_SUMMARY_MAX_RETRIES = 3
+_SUMMARY_RETRY_DELAY_SECONDS = 3
 
 # 락을 잡은 작업만 자기 락을 해제하도록, 저장된 값이 내가 넣은 토큰과 같을 때만 지운다
 # (TTL 만료 후 다른 작업이 잡은 새 락을 실수로 지워버리는 것을 방지 - security.py의
@@ -193,9 +197,35 @@ async def _count_reviews(session: AsyncSession, course_id: int) -> int:
 async def _maybe_update_summary(course_id: int) -> None:
     """리뷰 개수가 임계값에 도달했으면 AI 요약을 생성/재생성한다.
 
+    락 경쟁에서 지거나(다른 실행이 이미 처리 중) Gemini 호출 도중 상태가 바뀌어 결과를
+    버린 경우, 그 실행이 "알아서 최신 상태를 반영했겠지"라고 그냥 끝내지 않고 잠깐
+    기다렸다가 스스로 다시 시도한다 - 그렇지 않으면 마침 그 타이밍에 트리거된 변경
+    사항이 통째로 유실되어, 다음 리뷰 변경이 생기기 전까지 요약이 갱신되지 않을 수
+    있었다(예: A가 리뷰 3개로 Gemini 호출 중 4번째 리뷰가 등록되면, 4번째가 트리거한
+    실행은 락을 못 잡아 종료하고 A는 개수가 바뀐 걸 보고 저장을 포기 — 아무도
+    성공하지 못하고 끝나는 경우).
+    """
+    for attempt in range(_SUMMARY_MAX_RETRIES + 1):
+        should_retry = await _attempt_update_summary(course_id)
+        if not should_retry:
+            return
+        if attempt < _SUMMARY_MAX_RETRIES:
+            await asyncio.sleep(_SUMMARY_RETRY_DELAY_SECONDS)
+    # 재시도를 다 써도 안 되면 포기한다 - 이후 다른 리뷰 변경이 생기면 이 함수가 다시
+    # 호출되며 자연스럽게 재시도된다.
+
+
+async def _attempt_update_summary(course_id: int) -> bool:
+    """요약 생성/재생성을 한 번 시도한다.
+
+    반환값이 True면 "누군가와 부딪혀서 시도 자체를 못 했으니 다시 해봐야 한다"는
+    뜻이고(락 경쟁 패배, 상태 변경으로 인한 저장 포기), False면 "재시도해도 의미
+    없다"는 뜻이다(임계값/주기 미달, Gemini 실패, 정상 저장 완료 등 - Gemini 실패는
+    다음 리뷰 작성 시 이 함수가 다시 호출되며 자연스럽게 재시도되므로 여기서 즉시
+    재시도하지 않는다).
+
     요청 처리와 별도로(백그라운드 태스크로) 실행되므로 요청 세션을 재사용하지 않고
-    새 세션을 연다. Gemini 호출이 실패해도 예외를 삼키고 조용히 종료한다 — 다음
-    리뷰가 작성될 때 이 함수가 다시 호출되면서 자연스럽게 재시도된다.
+    새 세션을 연다.
 
     Redis 락을 상태를 읽기 전에 먼저 잡는다 - 락 획득 후에 읽으면, 같은 코스에 대해
     거의 동시에 트리거된 다른 실행이 "나도 재생성해야지"라고 각자 상태를 읽어놓고
@@ -204,15 +234,21 @@ async def _maybe_update_summary(course_id: int) -> None:
     막 추가/삭제됨) 저장 직전 재확인에 걸려 결과를 버리게 되는 경우가 있었다.
     """
     lock_key = f"review_summary_lock:{course_id}"
+    cooldown_key = f"review_summary_cooldown:{course_id}"
     lock_token = str(uuid.uuid4())
     try:
         redis = await get_redis()
-        if await redis.exists(f"review_summary_cooldown:{course_id}"):
-            # 코스 단위 쿨다운 - 방금 막 요약을 만들었으면, 어느 유저가 어느 API(작성/수정/
-            # 삭제)로 트리거했든 상관없이 잠깐은 다시 시도하지 않는다. 엔드포인트별 rate
-            # limit은 유저 1명의 반복 요청만 막으므로, 작성→삭제를 반복하며 우회하거나
-            # 여러 유저가 나눠 트리거하는 경우까지 이 쿨다운으로 막는다.
-            return
+        # 코스 단위 쿨다운 - 방금 막 요약을 만들었으면, 어느 유저가 어느 API(작성/수정/삭제)로
+        # 트리거했든 상관없이 잠깐은 다시 시도하지 않는다. 엔드포인트별 rate limit은 유저 1명의
+        # 반복 요청만 막으므로, 작성→삭제를 반복하며 우회하거나 여러 유저가 나눠 트리거하는
+        # 경우까지 이 쿨다운으로 막는다.
+        #
+        # 다만 쿨다운 중이라고 그냥 포기하지는 않는다 - 수정/삭제로 요약이 막 무효화된
+        # 직후일 수 있는데, 여기서 포기하면 다음 리뷰 변경이 생기기 전까지 요약이 계속
+        # 없는 상태로 남는다. 남은 시간만큼만 기다렸다가 최신 상태로 다시 판단한다.
+        cooldown_ttl = await redis.ttl(cooldown_key)
+        if cooldown_ttl and cooldown_ttl > 0:
+            await asyncio.sleep(cooldown_ttl)
         acquired = await redis.set(lock_key, lock_token, nx=True, ex=_SUMMARY_LOCK_TTL_SECONDS)
     except Exception:  # noqa: BLE001
         logger.exception("리뷰 AI 요약 락 획득 실패, 잠금 없이 진행: course_id=%s", course_id)
@@ -220,15 +256,15 @@ async def _maybe_update_summary(course_id: int) -> None:
         acquired = True
     if not acquired:
         # 짧은 시간에 같은 코스의 재생성이 여러 번 트리거될 수 있어(예: 리뷰 연속 삭제),
-        # 이미 다른 실행이 처리 중이라는 뜻이므로 조용히 종료한다 - 그 실행이 최신
-        # 데이터를 반영해 저장한다.
-        return
+        # 이미 다른 실행이 처리 중이라는 뜻이다. 그 실행이 내 트리거 사유(예: 방금 등록된
+        # 리뷰)까지 반영해 저장한다는 보장이 없으므로, 조용히 끝내지 않고 재시도를 요청한다.
+        return True
 
     try:
         async with AsyncSessionLocal() as session:
             review_count = await _count_reviews(session, course_id)
             if review_count < _SUMMARY_FIRST_THRESHOLD:
-                return
+                return False
 
             summary_result = await session.execute(
                 select(ReviewSummary).where(ReviewSummary.course_id == course_id)
@@ -237,7 +273,7 @@ async def _maybe_update_summary(course_id: int) -> None:
             if summary is not None:
                 reviews_since_last = review_count - summary.review_count
                 if reviews_since_last < _SUMMARY_REGENERATE_INTERVAL:
-                    return
+                    return False
 
             contents_result = await session.execute(
                 select(Review.review_id, Review.content, Review.updated_at)
@@ -261,27 +297,27 @@ async def _maybe_update_summary(course_id: int) -> None:
             # 다음 리뷰 작성 시 이 함수가 다시 호출되며 자연스럽게 재시도된다. 원인 파악을
             # 위해 로그는 남긴다.
             logger.exception("리뷰 AI 요약 생성 실패: course_id=%s", course_id)
-            return
+            return False
 
         summary_text = summary_text.strip() if summary_text else ""
         if not summary_text:
             logger.warning("Gemini가 빈 요약을 반환해 저장하지 않음: course_id=%s", course_id)
-            return
+            return False
 
         async with AsyncSessionLocal() as session:
             # 스냅샷(요약에 쓴 최대 50개)에 없는 리뷰가 그 사이 추가/삭제돼도 review_count가
             # 실제 전체 개수와 어긋날 수 있으므로, 전체 개수도 그대로인지 함께 확인한다.
             if await _count_reviews(session, course_id) != review_count:
-                return
+                return True
 
             recheck_result = await session.execute(
                 select(Review.review_id, Review.updated_at).where(Review.review_id.in_(snapshot))
             )
             current = {row.review_id: row.updated_at for row in recheck_result.all()}
             if current != snapshot:
-                # Gemini 호출 중 요약에 쓴 리뷰가 수정되거나 삭제됨 - 저장하지 않고 버린다.
-                # (다음 리뷰 작성/수정/삭제 시 이 함수가 다시 호출되며 최신 데이터로 재시도된다)
-                return
+                # Gemini 호출 중 요약에 쓴 리뷰가 수정되거나 삭제됨 - 저장하지 않고 버리되,
+                # 그 변경 사항이 반영되도록 재시도를 요청한다.
+                return True
 
             summary_result = await session.execute(
                 select(ReviewSummary).where(ReviewSummary.course_id == course_id).with_for_update()
@@ -310,13 +346,12 @@ async def _maybe_update_summary(course_id: int) -> None:
                 # 대비한 마지막 안전장치. 코스당 요약은 1개만 허용되므로(UNIQUE 제약) 먼저
                 # 저장한 쪽만 성공하고 나머지는 여기서 UNIQUE 제약 위반으로 남는다. 이미
                 # 요약이 만들어졌다는 뜻이므로 에러 없이 조용히 무시하고 끝낸다.
-                return
+                return False
 
         if redis is not None:
             with contextlib.suppress(Exception):
-                await redis.set(
-                    f"review_summary_cooldown:{course_id}", "1", ex=_SUMMARY_COOLDOWN_SECONDS
-                )
+                await redis.set(cooldown_key, "1", ex=_SUMMARY_COOLDOWN_SECONDS)
+        return False
     finally:
         if redis is not None:
             with contextlib.suppress(Exception):

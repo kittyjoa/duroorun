@@ -31,7 +31,8 @@ const KakaoMap = ({
   const mapRef = useRef(null);
   const overlaysRef = useRef([]); // 매 렌더마다 지우고 다시 그리는 폴리라인/마커/오버레이 전부
   const [status, setStatus] = useState('loading'); // 'loading' | 'ready' | 'error'
-  const [retryToken, setRetryToken] = useState(0); // 재시도 버튼 클릭 시 증가시켜 아래 effect를 다시 태움
+  const [retryToken, setRetryToken] = useState(0);
+  // [현재값, 값바꾸는함수]: 밑에서 버튼 누르면 n+1 시켜서 1로 바뀌고 effect 재실행
 
   // 지도 인스턴스는 마운트 시(+재시도 시) 한 번만 생성.
   // initialCenter는 이 시점 값만 씀(이후 바뀌어도 재초기화 X)
@@ -58,6 +59,7 @@ const KakaoMap = ({
       cancelled = true;
       mapRef.current = null;
     };
+    // 밑 해석: effect 안에서 쓰는 값인데 의도적으로 배열에 안 넣었으니 무시해라
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [retryToken]);
 

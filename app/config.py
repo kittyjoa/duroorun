@@ -79,6 +79,9 @@ class Settings(BaseSettings):
     # 배포 환경에서는 docker-compose.yml의 backend 서비스에서 true로)
     SEED_ON_STARTUP: bool = False
 
+    # 디스코드 알림 (코스 시드가 재시도 끝에도 실패했을 때)
+    DISCORD_WEBHOOK_URL: str = ""
+
     @property
     def is_production(self) -> bool:
         return self.ENVIRONMENT == "production"

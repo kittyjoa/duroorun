@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.clients.durunubi import DurunubiAPIError, fetch_course_list
 from app.database import AsyncSessionLocal, engine
-from app.domain.course.models import Course, CourseType, Difficulty
+from app.domain.course.models import Course, CourseSyncLog, CourseType, Difficulty, SyncStatus
 
 # Course의 관계/FK가 참조하는 다른 도메인 모델들 — 직접 안 써도 import해야
 # SQLAlchemy가 courses.created_by(→users), course_facility(→facilities) 매핑을 해석할 수 있음
@@ -132,6 +132,19 @@ async def _deactivate_missing_courses(session: AsyncSession, seen_dmb_ids: set[s
     )
 
 
+async def _record_sync_log(
+    session: AsyncSession,
+    status: SyncStatus,
+    fetched_count: int | None = None,
+    error_message: str | None = None,
+) -> None:
+    """동기화 시도 1건을 course_sync_logs에 기록(신청서에 따른 api 호출 기록용)."""
+    session.add(
+        CourseSyncLog(status=status, fetched_count=fetched_count, error_message=error_message)
+    )
+    await session.commit()
+
+
 async def _fetch_all_courses() -> tuple[list[dict], dict[str, str], bool]:
     """두루누비파일 fetch_course_list를 페이지 끝까지 반복 호출
     ㅡ 강원도 코스만 걸러서 전체 코스와 dmb_id -> gpxpath 매핑을 반환.
@@ -180,7 +193,7 @@ def _merge_manual_courses(
 
     ㅡ API가 나중에 이 코스를 정상 반환하기 시작하면, seen_ids에 이미 포함되므로
       여기서 자동으로 걸러져서 수동 데이터는 안 쓰임.
-    ㅡ 인자를 대체하지 않고, return 값으로만 이루어진 결과를 새로 준다?
+    ㅡ 인자를 대체하지 않고, return 값으로만 이루어진 새 리스트/딕셔너리를 반환
     """
     seen_ids = {item["crsIdx"] for item in all_items}
     missing_manual = [m for m in MANUAL_COURSES if m["crsIdx"] not in seen_ids]
@@ -298,24 +311,54 @@ async def seed_courses() -> None:
                 all_items, gpx_sources, complete = await _fetch_all_courses()
             except DurunubiAPIError as e:
                 logger.error("두루누비 API 호출 실패, 시드를 중단합니다: %s", e)
-                return
+                try:
+                    await _record_sync_log(
+                        session, SyncStatus.FAILURE, error_message=f"{type(e).__name__}: {e}"
+                    )
+                except Exception:
+                    logger.exception("실패 기록(course_sync_logs) 저장에도 실패했습니다.")
+                raise
 
-            all_items, gpx_sources = _merge_manual_courses(all_items, gpx_sources)
+            try:
+                all_items, gpx_sources = _merge_manual_courses(all_items, gpx_sources)
 
-            for i in range(0, len(all_items), _PAGE_SIZE):
-                await _upsert_courses(session, all_items[i : i + _PAGE_SIZE])
-            logger.info("코스 upsert 완료: %d건", len(all_items))
+                for i in range(0, len(all_items), _PAGE_SIZE):
+                    await _upsert_courses(session, all_items[i : i + _PAGE_SIZE])
+                logger.info("코스 upsert 완료: %d건", len(all_items))
 
-            if complete:
-                seen_dmb_ids = {item["crsIdx"] for item in all_items}
-                await _deactivate_missing_courses(session, seen_dmb_ids)
-            else:
-                logger.warning(
-                    "코스 목록을 끝까지 수집하지 못해 이번 실행은 비활성화 처리를 건너뜁니다."
-                )
+                if complete:
+                    seen_dmb_ids = {item["crsIdx"] for item in all_items}
+                    await _deactivate_missing_courses(session, seen_dmb_ids)
+                else:
+                    logger.warning(
+                        "코스 목록을 끝까지 수집하지 못해 이번 실행은 비활성화 처리를 건너뜁니다."
+                    )
 
-            await _sync_coordinates(session, gpx_sources)
-            logger.info("시드 완료")
+                await _sync_coordinates(session, gpx_sources)
+
+                if not complete:
+                    # 여기까지 upsert/좌표 동기화된 부분 데이터는 그대로 유지하되,
+                    # 이번 실행 자체는 실패로 기록하고 DurunubiAPIError로 재던져서
+                    # scheduler._run_seed_courses_with_retry의 재시도(+디스코드 알림) 경로를 태움
+                    raise DurunubiAPIError(
+                        f"코스 목록을 끝까지 수집하지 못해 부분 동기화로 중단합니다 "
+                        f"(수집 {len(all_items)}건, 비활성화 처리 스킵됨)."
+                    )
+
+                await _record_sync_log(session, SyncStatus.SUCCESS, fetched_count=len(all_items))
+                logger.info("시드 완료")
+            except Exception as e:
+                logger.exception("코스 시드 중 예상치 못한 오류로 중단합니다.")
+                try:
+                    # DB 오류로 세션이 실패 트랜잭션 상태일 수 있어, FAILURE 기록 전 롤백 필수
+                    # (안 하면 _record_sync_log의 commit이 원본 오류를 가리고 또 실패함)
+                    await session.rollback()
+                    await _record_sync_log(
+                        session, SyncStatus.FAILURE, error_message=f"{type(e).__name__}: {e}"
+                    )
+                except Exception:
+                    logger.exception("실패 기록(course_sync_logs) 저장에도 실패했습니다.")
+                raise
     finally:
         await lock_conn.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": _SEED_LOCK_KEY})
         await lock_conn.close()

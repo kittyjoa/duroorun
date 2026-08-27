@@ -164,3 +164,28 @@ button.profile-avatar { border:0; padding:0; font:inherit; cursor:pointer; }
 @media (max-width:560px) {
   .mypage-page { padding:100px 20px 40px; }
 }
+
+
+/* 코스 목록 / 상세 */
+.course-list-page { padding:60px clamp(24px,5vw,76px) 80px; min-height:100vh; }
+.course-list-page .course-card { display:block; }
+.course-list-status { color:#5c706c; font-family:'Apple SD Gothic Neo',sans-serif; font-size:14px; padding:40px 0; text-align:center; }
+.course-list-status.error { color:var(--red); }
+.course-detail-page { max-width:720px; margin:0 auto; padding:60px 24px 80px; min-height:100vh; }
+.course-detail-heading { margin:18px 0 28px; }
+.course-detail-heading h1 { font-size:32px; letter-spacing:-1.5px; margin:8px 0 0; }
+.course-detail-info { display:grid; grid-template-columns:repeat(2,1fr); gap:18px; margin:0 0 28px; padding:20px; border:1px solid #e1e7e2; border-radius:10px; }
+.course-detail-info div { display:flex; flex-direction:column; gap:4px; }
+.course-detail-info dt { color:#82928e; font-family:'Apple SD Gothic Neo',sans-serif; font-size:12px; }
+.course-detail-info dd { margin:0; font-size:16px; color:var(--ink); }
+.course-detail-desc { color:#5c706c; font-family:'Apple SD Gothic Neo',sans-serif; font-size:14px; line-height:1.8; }
+@media (max-width:560px) { .course-detail-info { grid-template-columns:1fr; } }
+
+/* 코스 타입 탭 / 필터 바 */
+.course-type-tabs { display:flex; gap:10px; margin:20px 0; }
+.course-type-tabs button { border:1px solid #e1e7e2; background:#fff; color:#5c706c; padding:10px 18px; border-radius:22px; cursor:pointer; font-size:14px; }
+.course-type-tabs button.active { background:var(--ink); color:#fff; border-color:var(--ink); }
+.course-filter-bar { display:flex; flex-wrap:wrap; gap:10px; margin-bottom:28px; }
+.course-filter-bar input, .course-filter-bar select { border:1px solid #dadce0; border-radius:8px; padding:10px 12px; font-size:13px; font-family:'Apple SD Gothic Neo',sans-serif; }
+.course-detail-images { display:flex; flex-wrap:wrap; gap:10px; margin-top:20px; }
+.course-detail-images img { width:160px; height:120px; object-fit:cover; border-radius:8px; }

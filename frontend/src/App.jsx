@@ -4,6 +4,7 @@ import { UserProvider } from './contexts/UserContext';
 import AppPreviewPage from './pages/AppPreviewPage';
 import CourseDetail from './pages/CourseDetail';
 import CourseList from './pages/CourseList';
+import CustomCourseForm from './pages/CustomCourseForm';
 import HomePage from './pages/HomePage';
 import Login from './pages/Login';
 import MyPage from './pages/MyPage';
@@ -22,6 +23,8 @@ const App = () => {
           <Route path="/onboarding" element={<Onboarding />} />
           <Route path="/mypage" element={<MyPage />} />
           <Route path="/courses" element={<CourseList />} />
+          <Route path="/courses/custom/new" element={<CustomCourseForm />} />
+          <Route path="/courses/custom/:courseId/edit" element={<CustomCourseForm />} />
           <Route path="/courses/:courseType/:courseId" element={<CourseDetail />} />
         </Routes>
       </UserProvider>

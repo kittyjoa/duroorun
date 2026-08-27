@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 
 import { apiFetch } from '../api';
 import Header from '../components/layout/Header';
+import KakaoMap from '../components/map/KakaoMap';
 
 const DIFFICULTY_LABEL = { EASY: '쉬움', NORMAL: '보통', HARD: '어려움' };
 
@@ -129,6 +130,34 @@ const CourseDetail = () => {
               <img key={image.image_id} src={image.image_url} alt={course.course_name} />
             ))}
           </div>
+        )}
+
+        {/* DRNB는 시작/종료 좌표만 DB에 있고 전체 경로가 없어서 마커만 표시(직선 경로선은
+            실제 트레일과 무관해 오해를 줄 수 있음). 커스텀은 경유지가 다 있어 경로선까지 표시 */}
+        {courseType === 'drnb' && course.has_verification_coords && (
+          <KakaoMap
+            markers={[
+              { lat: course.start_lat, lng: course.start_lng, label: '시작' },
+              { lat: course.end_lat, lng: course.end_lng, label: '종료' },
+            ]}
+          />
+        )}
+        {courseType === 'custom' && course.waypoints?.length > 0 && (
+          <KakaoMap
+            path={course.waypoints.map((w) => ({ lat: w.latitude, lng: w.longitude }))}
+            markers={[
+              {
+                lat: course.waypoints[0].latitude,
+                lng: course.waypoints[0].longitude,
+                label: '시작',
+              },
+              {
+                lat: course.waypoints.at(-1).latitude,
+                lng: course.waypoints.at(-1).longitude,
+                label: '종료',
+              },
+            ]}
+          />
         )}
       </main>
     </>

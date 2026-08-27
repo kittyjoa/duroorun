@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 
 import { apiFetch } from '../api';
 import Header from '../components/layout/Header';
+import { useUser } from '../contexts/UserContext';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
 
 const DIFFICULTY_LABEL = { EASY: '쉬움', NORMAL: '보통', HARD: '어려움' };
@@ -59,6 +60,7 @@ const buildCustomQuery = (filters) => {
 };
 
 const CourseList = () => {
+  const { user } = useUser();
   const [courseType, setCourseType] = useState('drnb');
   const [drnbFilters, setDrnbFilters] = useState(DRNB_INITIAL_FILTERS);
   const [customFilters, setCustomFilters] = useState(CUSTOM_INITIAL_FILTERS);
@@ -117,6 +119,11 @@ const CourseList = () => {
             <span className="section-kicker">코스 찾기</span>
             <h2>어떤 길을 달려볼까요?</h2>
           </div>
+          {courseType === 'custom' && user && (
+            <Link to="/courses/custom/new" className="primary-button">
+              코스 만들기
+            </Link>
+          )}
         </div>
 
         <div className="course-type-tabs">
@@ -226,32 +233,38 @@ const CourseList = () => {
         {!loading && !error && courses.length > 0 && (
           <div className="course-grid">
             {courses.map((course) => (
-              <Link
-                to={`/courses/${courseType}/${course.course_id}`}
-                className={`course-card ${DIFFICULTY_COLOR[course.difficulty] ?? 'green'}`}
-                key={course.course_id}
-              >
-                <div className="course-art">
-                  <div className="mini-route" />
-                  <span className="course-badge">
-                    {DIFFICULTY_LABEL[course.difficulty] ?? '난이도 정보 없음'}
-                  </span>
-                </div>
-                <div className="course-info">
-                  <span>
-                    {courseType === 'drnb' ? (course.sigun ?? course.brd_div) : '커스텀 코스'}
-                  </span>
-                  <h3>{course.course_name}</h3>
-                  <p>
-                    {courseType === 'custom' &&
-                      course.distance != null &&
-                      `${course.distance}km · `}
-                    {course.estimated_time != null
-                      ? `약 ${course.estimated_time}분`
-                      : '소요시간 정보 없음'}
-                  </p>
-                </div>
-              </Link>
+              <div className="course-card-wrapper" key={course.course_id}>
+                <Link
+                  to={`/courses/${courseType}/${course.course_id}`}
+                  className={`course-card ${DIFFICULTY_COLOR[course.difficulty] ?? 'green'}`}
+                >
+                  <div className="course-art">
+                    <div className="mini-route" />
+                    <span className="course-badge">
+                      {DIFFICULTY_LABEL[course.difficulty] ?? '난이도 정보 없음'}
+                    </span>
+                  </div>
+                  <div className="course-info">
+                    <span>
+                      {courseType === 'drnb' ? (course.sigun ?? course.brd_div) : '커스텀 코스'}
+                    </span>
+                    <h3>{course.course_name}</h3>
+                    <p>
+                      {courseType === 'custom' &&
+                        course.distance != null &&
+                        `${course.distance}km · `}
+                      {course.estimated_time != null
+                        ? `약 ${course.estimated_time}분`
+                        : '소요시간 정보 없음'}
+                    </p>
+                  </div>
+                </Link>
+                {courseType === 'custom' && user && course.created_by === user.user_id && (
+                  <Link to={`/courses/custom/${course.course_id}/edit`} className="course-card-edit">
+                    수정
+                  </Link>
+                )}
+              </div>
             ))}
           </div>
         )}

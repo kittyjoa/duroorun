@@ -64,3 +64,18 @@ class SocialAccount(Base):
     )
 
     user: Mapped["User"] = relationship(back_populates="social_accounts")
+
+
+class BannedAccount(Base):
+    """강제 탈퇴된 소셜 계정 — 재가입 방지용."""
+
+    __tablename__ = "banned_accounts"
+    __table_args__ = (UniqueConstraint("provider_type", "provider_uid", name="uq_banned_provider"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    provider_type: Mapped[ProviderType] = mapped_column(SAEnum(ProviderType), nullable=False)
+    provider_uid: Mapped[str] = mapped_column(String(255), nullable=False)
+    reason: Mapped[str] = mapped_column(String(255), nullable=False)
+    banned_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )

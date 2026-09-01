@@ -29,7 +29,7 @@ from app.core.security import (
 from app.domain.course.models import Course
 from app.domain.record.models import Record
 from app.domain.review.models import Review
-from app.domain.user.models import ProviderType, SocialAccount, User
+from app.domain.user.models import BannedAccount, ProviderType, SocialAccount, User
 
 _KAKAO_AUTH_URL = "https://kauth.kakao.com/oauth/authorize"
 _KAKAO_TOKEN_URL = "https://kauth.kakao.com/oauth/token"
@@ -51,6 +51,23 @@ _ALLOWED_IMAGE_TYPES = {
 
 _NICKNAME_PATTERN = re.compile(r"^[가-힣a-zA-Z0-9]+$")
 _LOCATION_PATTERN = re.compile(r"^[가-힣a-zA-Z0-9\s]+$")
+
+
+async def _check_not_banned(
+    provider_type: ProviderType, provider_uid: str, db: AsyncSession
+) -> None:
+    """강제 탈퇴로 차단된 소셜 계정인지 확인합니다. 신규 가입 직전에만 호출."""
+    result = await db.execute(
+        select(BannedAccount).where(
+            BannedAccount.provider_type == provider_type,
+            BannedAccount.provider_uid == provider_uid,
+        )
+    )
+    if result.scalar_one_or_none() is not None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="강제 탈퇴 처리된 계정으로는 재가입할 수 없습니다",
+        )
 
 
 def _has_valid_image_signature(content_type: str, file_bytes: bytes) -> bool:
@@ -174,6 +191,7 @@ async def kakao_login(
 
     is_new_user = social is None
     if is_new_user:
+        await _check_not_banned(ProviderType.KAKAO, provider_uid, db)
         try:
             user = User(name=name)
             db.add(user)
@@ -319,6 +337,7 @@ async def naver_login(
 
     is_new_user = social is None
     if is_new_user:
+        await _check_not_banned(ProviderType.NAVER, provider_uid, db)
         try:
             user = User(name=name)
             db.add(user)
@@ -457,6 +476,7 @@ async def google_login(
 
     is_new_user = social is None
     if is_new_user:
+        await _check_not_banned(ProviderType.GOOGLE, provider_uid, db)
         try:
             user = User(name=name)
             db.add(user)
@@ -652,8 +672,12 @@ async def delete_profile_image(user: User, db: AsyncSession) -> None:
         pass
 
 
-async def withdraw_user(user: User, access_token: str, db: AsyncSession, redis: Redis) -> None:
-    """회원 탈퇴: 개인정보 익명화 + 소셜 계정 삭제 + 연관 데이터 익명화 (단일 트랜잭션)."""
+async def _anonymize_user_data(user: User, db: AsyncSession) -> str | None:
+    """탈퇴 공통 처리: 개인정보 익명화 + 소셜 계정 삭제 + 연관 데이터 익명화.
+
+    commit은 호출자가 수행 (강제 탈퇴 시 banned_accounts 기록과 같은 트랜잭션으로 묶기 위함).
+    반환값은 삭제 전 프로필 이미지 URL (R2 정리용).
+    """
     now = datetime.now(tz=UTC)
 
     old_profile_image_url = user.profile_image_url
@@ -677,6 +701,12 @@ async def withdraw_user(user: User, access_token: str, db: AsyncSession, redis: 
         update(Course).where(Course.created_by == user.user_id).values(created_by=None)
     )
 
+    return old_profile_image_url
+
+
+async def withdraw_user(user: User, access_token: str, db: AsyncSession, redis: Redis) -> None:
+    """회원 탈퇴(본인) - 단일 트랜잭션 처리."""
+    old_profile_image_url = await _anonymize_user_data(user, db)
     await db.commit()
 
     # Redis 정리 실패해도 DB 탈퇴는 완료 — get_current_user가 deleted_at으로 차단하므로 정상 응답
@@ -685,6 +715,40 @@ async def withdraw_user(user: User, access_token: str, db: AsyncSession, redis: 
         jti = payload.get("jti")
         if jti:
             await add_to_blacklist(jti, redis)
+        await delete_refresh_token(user.user_id, redis)
+    except RedisError:
+        pass
+
+    # R2 정리 실패해도 탈퇴는 완료 — DB에는 이미 NULL 처리됨(고아 파일로만 남음)
+    if old_profile_image_url:
+        try:
+            await delete_file(old_profile_image_url)
+        except (ClientError, BotoCoreError):
+            pass
+
+
+async def force_withdraw_user(user: User, reason: str, db: AsyncSession, redis: Redis) -> None:
+    """유저 강제 탈퇴(관리자) - 단일 트랜잭션 처리.
+
+    본인 탈퇴와 달리 access_token이 없어 블랙리스트 등록은 생략하고, 재가입 방지를 위해
+    social_accounts를 하드 삭제하기 전에 provider 정보를 banned_accounts에 기록한다.
+    """
+    result = await db.execute(select(SocialAccount).where(SocialAccount.user_id == user.user_id))
+    social = result.scalar_one_or_none()
+
+    old_profile_image_url = await _anonymize_user_data(user, db)
+
+    if social is not None:
+        db.add(BannedAccount(
+            provider_type=social.provider_type,
+            provider_uid=social.provider_uid,
+            reason=reason,
+        ))
+
+    await db.commit()
+
+    # Redis 정리 실패해도 DB 탈퇴는 완료
+    try:
         await delete_refresh_token(user.user_id, redis)
     except RedisError:
         pass

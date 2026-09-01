@@ -74,16 +74,16 @@ async def get_drnb_courses(
     brd_div: str | None = None,
     sigun: str | None = None,
     difficulty: Difficulty | None = None,
-    estimated_time_min: int | None = None,
-    estimated_time_max: int | None = None,
+    distance_min: float | None = None,
+    distance_max: float | None = None,
 ) -> DrnbCourseListResponse:
     """DRNB 코스 목록을 조회합니다. 시드 스크립트로 저장된 DB 정보만 사용 (배치 갱신).
 
-    ㅡ brd_div/sigun/difficulty는 정확히 일치, estimated_time은 min/max 범위로 필터링
+    ㅡ brd_div/sigun/difficulty는 정확히 일치, distance는 min/max 범위로 필터링
     ㅡ 현재 시드 스크립트가 강원 코스만 적재하므로 DB엔 강원 코스만 존재.
     추후 다른 지역까지 시드 대상이 넓어져도 이 필터로 그대로 좁혀볼 수 있음.
     """
-    _validate_range(estimated_time_min, estimated_time_max, "estimated_time")
+    _validate_range(distance_min, distance_max, "distance")
 
     base_query = select(Course).where(
         Course.course_type == CourseType.DRNB,
@@ -96,10 +96,10 @@ async def get_drnb_courses(
         base_query = base_query.where(Course.sigun == sigun)
     if difficulty is not None:
         base_query = base_query.where(Course.difficulty == difficulty)
-    if estimated_time_min is not None:
-        base_query = base_query.where(Course.estimated_time >= estimated_time_min)
-    if estimated_time_max is not None:
-        base_query = base_query.where(Course.estimated_time <= estimated_time_max)
+    if distance_min is not None:
+        base_query = base_query.where(Course.distance >= distance_min)
+    if distance_max is not None:
+        base_query = base_query.where(Course.distance <= distance_max)
 
     total = (
         await session.execute(select(func.count()).select_from(base_query.subquery()))
@@ -380,8 +380,9 @@ async def upload_course_image(
             logger.exception("최대 개수 재확인 탈락 후 R2 롤백 삭제 실패: image_url=%s", image_url)
         raise _max_image_count_error()
 
+    # course.images 컬렉션도 append 해야 프론트에서 업로드한 이미지 잘 보임
     image = CourseImage(course_id=course_id, image_url=image_url)
-    session.add(image)
+    course.images.append(image)
     try:
         await session.commit()
     except Exception:

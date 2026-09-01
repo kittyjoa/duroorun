@@ -27,12 +27,12 @@ async def get_drnb_courses(
     brd_div: str | None = Query(default=None),
     sigun: str | None = Query(default=None),
     difficulty: Difficulty | None = Query(default=None),
-    estimated_time_min: int | None = Query(default=None, ge=0),
-    estimated_time_max: int | None = Query(default=None, ge=0),
+    distance_min: float | None = Query(default=None, ge=0),
+    distance_max: float | None = Query(default=None, ge=0),
     session: AsyncSession = Depends(get_db),
 ):
-    """DRNB(두루누비) 코스 목록 조회 (구간/지역/난이도/소요시간 필터 지원)
-    ㅡ 소요시간 필터는 프론트에서 범위 UI 가능"""
+    """DRNB(두루누비) 코스 목록 조회 (구간/지역/난이도/거리 필터 지원)
+    ㅡ 거리 필터는 프론트에서 범위 UI 가능"""
     return await course_service.get_drnb_courses(
         session=session,
         page=page,
@@ -40,8 +40,8 @@ async def get_drnb_courses(
         brd_div=brd_div,
         sigun=sigun,
         difficulty=difficulty,
-        estimated_time_min=estimated_time_min,
-        estimated_time_max=estimated_time_max,
+        distance_min=distance_min,
+        distance_max=distance_max,
     )
 
 

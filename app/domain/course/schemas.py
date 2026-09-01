@@ -75,6 +75,7 @@ class DrnbCourseSummary(BaseModel):
     course_name: str
     difficulty: Difficulty | None
     estimated_time: int | None
+    distance: float | None
     sigun: str | None
     brd_div: str | None
     # GPX 파싱 실패로 완주 인증 기준점(start/end 좌표)이 없는 코스면 False
@@ -160,6 +161,7 @@ class CustomCourseDetailResponse(BaseModel):
     start_lng: float | None
     end_lat: float | None
     end_lng: float | None
+    has_verification_coords: bool
     is_active: bool
     created_at: datetime
     updated_at: datetime | None

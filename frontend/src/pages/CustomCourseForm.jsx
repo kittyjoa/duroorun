@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useLocation, useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 
 import { apiFetch } from '../api';
 import Header from '../components/layout/Header';
@@ -33,11 +33,31 @@ const _isNearGangwon = (point) =>
   point.lng >= _GANGWON_BOUNDS.lngMin &&
   point.lng <= _GANGWON_BOUNDS.lngMax;
 
+// Haversine 방식으로 두 좌표 간 직선거리 측정
+const _haversineDistanceKm = (a, b) => {
+  const R = 6371;
+  const toRad = (deg) => (deg * Math.PI) / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+};
+
+// 경유지를 순서대로 이은 직선 구간 거리의 합 (실제 도로 굴곡은 반영 안 됨 — 근사치)
+const _totalDistanceKm = (points) => {
+  let total = 0;
+  for (let i = 1; i < points.length; i += 1) {
+    total += _haversineDistanceKm(points[i - 1], points[i]);
+  }
+  return total;
+};
+
 const CustomCourseForm = () => {
   const { courseId } = useParams();
   const isEditMode = Boolean(courseId);
   const navigate = useNavigate();
-  const location = useLocation();
   const { user, isLoading: userLoading } = useUser();
 
   const [form, setForm] = useState(EMPTY_FORM);
@@ -48,8 +68,9 @@ const CustomCourseForm = () => {
   const [saving, setSaving] = useState(false);
   const [uploadingImage, setUploadingImage] = useState(false);
   const [error, setError] = useState('');
-  // 코스 생성 직후 이 화면(수정)으로 넘어올 때 navigate state로 안내 문구를 실어 보냄
-  const [notice, setNotice] = useState(location.state?.notice ?? '');
+  const [notice, setNotice] = useState('');
+  // 신규 생성 저장 직후에만 씀: 완료 모달에서 "사진 추가"/"나만의 코스로 이동" 선택
+  const [createdCourseId, setCreatedCourseId] = useState(null);
   // GPS: 지도 초기 위치를 잡아주는 편의 기능/ 경유지 좌표는 지도 클릭으로 가능
   // 강원도 밖 외지인들도 커스텀코스 생성하게 해야 지역관광의 의미가 있다고 판단.
   // GPS 위치가 강원 근처일 때만 그 좌표로 지도를 열고,
@@ -109,16 +130,38 @@ const CustomCourseForm = () => {
     };
   }, [isEditMode, courseId]);
 
+  // '사진 추가하기'로 넘어온 경우(#course-photos-section) 사진 영역까지 자동 스크롤.
+  // 사진 섹션은 isEditMode && !loading일 때만 DOM에 존재하므로 그 시점에 실행.
+  useEffect(() => {
+    if (!isEditMode || loading) return;
+    if (window.location.hash !== '#course-photos-section') return;
+    document.getElementById('course-photos-section')?.scrollIntoView({ behavior: 'smooth' });
+  }, [isEditMode, loading]);
+
   const handleFieldChange = (field) => (event) => {
     setForm({ ...form, [field]: event.target.value });
   };
 
+  // 지도 클릭/삭제로 경유지가 바뀔 때만 거리 자동계산(재기입) — 수정 모드 진입 시
+  // 서버에서 불러온 기존 waypoints/distance는 이 핸들러를 거치지 않으므로 덮어쓰지 않음
   const handleMapClick = useCallback((point) => {
-    setWaypoints((prev) => [...prev, point]);
+    setWaypoints((prev) => {
+      const next = [...prev, point];
+      if (next.length >= 2) {
+        setForm((f) => ({ ...f, distance: _totalDistanceKm(next).toFixed(1) }));
+      }
+      return next;
+    });
   }, []);
 
   const handleRemoveWaypoint = (index) => {
-    setWaypoints((prev) => prev.filter((_, i) => i !== index));
+    setWaypoints((prev) => {
+      const next = prev.filter((_, i) => i !== index);
+      if (next.length >= 2) {
+        setForm((f) => ({ ...f, distance: _totalDistanceKm(next).toFixed(1) }));
+      }
+      return next;
+    });
   };
 
   const handleSubmit = async (event) => {
@@ -156,11 +199,8 @@ const CustomCourseForm = () => {
       if (isEditMode) {
         setNotice('저장됐어요');
       } else {
-        // 이미지는 코스가 생성된 뒤에만 업로드 가능(courseId 필요) — 생성 직후 수정 화면으로 이동
-        navigate(`/courses/custom/${data.course_id}/edit`, {
-          replace: true,
-          state: { notice: '코스가 생성됐어요! 사진도 추가해보세요.' },
-        });
+        // 완료 모달에서 사용자가 사진 추가/목록 이동을 직접 고르게 함
+        setCreatedCourseId(data.course_id);
       }
     } catch {
       setError('서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.');
@@ -266,7 +306,7 @@ const CustomCourseForm = () => {
       <Header />
       <main className="course-detail-page">
         <h1>{isEditMode ? '커스텀 코스 수정' : '커스텀 코스 만들기'}</h1>
-        <p className="course-detail-desc">커스텀 코스는 현재 강원도 지역에서만 만들 수 있어요.</p>
+        <p className="course-detail-desc">🏃 커스텀 코스는 현재 강원도 지역에서만 만들 수 있어요.</p>
 
         {loading && <p className="course-list-status">불러오는 중...</p>}
 
@@ -280,17 +320,6 @@ const CustomCourseForm = () => {
               required
             />
 
-            <label htmlFor="distance">거리 (km)</label>
-            <input
-              id="distance"
-              type="number"
-              min="0.1"
-              step="0.1"
-              value={form.distance}
-              onChange={handleFieldChange('distance')}
-              required
-            />
-
             <label htmlFor="difficulty">난이도</label>
             <select id="difficulty" value={form.difficulty} onChange={handleFieldChange('difficulty')}>
               {DIFFICULTY_OPTIONS.map((opt) => (
@@ -299,16 +328,6 @@ const CustomCourseForm = () => {
                 </option>
               ))}
             </select>
-
-            <label htmlFor="estimated_time">예상 소요시간 (분)</label>
-            <input
-              id="estimated_time"
-              type="number"
-              min="1"
-              value={form.estimated_time}
-              onChange={handleFieldChange('estimated_time')}
-              required
-            />
 
             <label htmlFor="course_description">코스 설명</label>
             <textarea
@@ -319,6 +338,7 @@ const CustomCourseForm = () => {
             />
 
             <label>경유지 (지도를 클릭해서 순서대로 추가)</label>
+            <p className="kakao-map-hint-static">⚠️ 지도가 제대로 표시되지 않으면 새로고침을 한번 해주세요</p>
             {!isEditMode && locationStatus === 'requesting' ? (
               // GPS 응답이 지도 SDK 로드보다 느린 경우가 많아, 위치가 잡히기 전에 지도부터
               // 띄우면 아래 initialCenter 판단(강원 근처인지)이 반영 안 된 채로 초기화돼버림
@@ -356,8 +376,32 @@ const CustomCourseForm = () => {
               </ul>
             )}
 
+            <label htmlFor="distance">거리 (km)</label>
+            <input
+              id="distance"
+              type="number"
+              min="0.1"
+              step="0.1"
+              value={form.distance}
+              onChange={handleFieldChange('distance')}
+              required
+            />
+            <p className="kakao-map-hint-static">
+              지도에 찍는 좌표를 바탕으로 거리를 자동 계산합니다. 직접 수정도 가능합니다.
+            </p>
+
+            <label htmlFor="estimated_time">예상 소요시간 (분)</label>
+            <input
+              id="estimated_time"
+              type="number"
+              min="1"
+              value={form.estimated_time}
+              onChange={handleFieldChange('estimated_time')}
+              required
+            />
+
             {isEditMode && (
-              <>
+              <div id="course-photos-section">
                 <label>사진 (최대 {COURSE_IMAGE_MAX_COUNT}장)</label>
                 <div className="course-detail-images">
                   {images.map((image) => (
@@ -381,7 +425,7 @@ const CustomCourseForm = () => {
                     />
                   </label>
                 )}
-              </>
+              </div>
             )}
 
             {error && <p className="onboarding-error">{error}</p>}
@@ -400,6 +444,41 @@ const CustomCourseForm = () => {
           </form>
         )}
       </main>
+
+      {createdCourseId != null && (
+        <div className="modal-overlay" role="dialog" aria-modal="true" aria-label="코스 저장 완료">
+          <div className="review-modal-card">
+            <h2>저장이 완료되었습니다</h2>
+            <p>사진을 추가해서 코스를 더 알아보기 쉽게 꾸며보세요.</p>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14, marginTop: 20 }}>
+              <button
+                type="button"
+                className="primary-button"
+                onClick={() => {
+                  // /new와 /:courseId/edit이 같은 컴포넌트라 navigate만으로는 리마운트되지 않음
+                  // ㅡ createdCourseId를 직접 비워야 모달이 edit 화면 위에 안 남음
+                  setCreatedCourseId(null);
+                  navigate(`/courses/custom/${createdCourseId}/edit#course-photos-section`, {
+                    replace: true,
+                  });
+                }}
+              >
+                사진 추가하기
+              </button>
+              <button
+                type="button"
+                className="text-button"
+                onClick={() => {
+                  setCreatedCourseId(null);
+                  navigate('/courses/custom/mine');
+                }}
+              >
+                나만의 코스로 이동
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 };

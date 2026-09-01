@@ -28,10 +28,10 @@ async def upload_file(folder: str, file_bytes: bytes, extension: str, content_ty
         Body=file_bytes,
         ContentType=content_type,
     )
-    return f"{settings.R2_PUBLIC_URL}/{key}"
+    return f"{settings.R2_PUBLIC_URL.rstrip('/')}/{key}"
 
 
 async def delete_file(url: str) -> None:
     """public URL에 해당하는 R2 오브젝트를 삭제합니다."""
-    key = url.removeprefix(f"{settings.R2_PUBLIC_URL}/")
+    key = url.removeprefix(f"{settings.R2_PUBLIC_URL.rstrip('/')}/")
     await asyncio.to_thread(_client.delete_object, Bucket=settings.R2_BUCKET_NAME, Key=key)

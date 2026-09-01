@@ -98,7 +98,7 @@ const CourseDetail = () => {
           </div>
           <div>
             <dt>거리</dt>
-            <dd>{course.distance != null ? `${course.distance}km` : '정보 없음'}</dd>
+            <dd>{course.distance != null ? `약 ${course.distance}km` : '정보 없음'}</dd>
           </div>
           <div>
             <dt>예상 소요시간</dt>
@@ -106,12 +106,10 @@ const CourseDetail = () => {
               {course.estimated_time != null ? `약 ${course.estimated_time}분` : '정보 없음'}
             </dd>
           </div>
-          {courseType === 'drnb' && (
-            <div>
-              <dt>완주 인증</dt>
-              <dd>{course.has_verification_coords ? '가능' : '불가 (좌표 정보 없음)'}</dd>
-            </div>
-          )}
+          <div>
+            <dt>완주 인증</dt>
+            <dd>{course.has_verification_coords ? '가능' : '불가 (좌표 정보 없음)'}</dd>
+          </div>
           {courseType === 'custom' && (
             <div>
               <dt>경유지 수</dt>
@@ -120,8 +118,16 @@ const CourseDetail = () => {
           )}
         </dl>
 
+        <p className="course-detail-source-note">
+          {courseType === 'drnb'
+            ? '※ 난이도, 거리, 소요시간은 두루누비 공식 API 기준입니다.'
+            : '※ 난이도, 거리, 소요시간은 코스 제작자 기준입니다.'}
+        </p>
+
         {course.course_description && (
-          <p className="course-detail-desc">{course.course_description}</p>
+          <p className="course-detail-desc">
+            {course.course_description.replace(/<br\s*\/?>/gi, '\n')}
+          </p>
         )}
 
         {courseType === 'custom' && course.images?.length > 0 && (

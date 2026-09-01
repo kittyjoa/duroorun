@@ -26,8 +26,8 @@ const GANGWON_SIGUN_OPTIONS = [
 const DRNB_INITIAL_FILTERS = {
   sigun: '',
   difficulty: '',
-  estimatedTimeMin: '',
-  estimatedTimeMax: '',
+  distanceMin: '',
+  distanceMax: '',
 };
 
 const CUSTOM_INITIAL_FILTERS = {
@@ -44,8 +44,8 @@ const buildDrnbQuery = (filters) => {
   params.set('size', String(PAGE_SIZE));
   if (filters.sigun) params.set('sigun', filters.sigun);
   if (filters.difficulty) params.set('difficulty', filters.difficulty);
-  if (filters.estimatedTimeMin) params.set('estimated_time_min', filters.estimatedTimeMin);
-  if (filters.estimatedTimeMax) params.set('estimated_time_max', filters.estimatedTimeMax);
+  if (filters.distanceMin) params.set('distance_min', filters.distanceMin);
+  if (filters.distanceMax) params.set('distance_max', filters.distanceMax);
   return params.toString();
 };
 
@@ -170,21 +170,21 @@ const CourseList = () => {
             <input
               type="number"
               min="0"
-              placeholder="최소 소요시간(분)"
-              aria-label="최소 소요시간(분)"
-              value={drnbFilters.estimatedTimeMin}
+              placeholder="최소 거리(km)"
+              aria-label="최소 거리(km)"
+              value={drnbFilters.distanceMin}
               onChange={(e) =>
-                setDrnbFilters({ ...drnbFilters, estimatedTimeMin: e.target.value })
+                setDrnbFilters({ ...drnbFilters, distanceMin: e.target.value })
               }
             />
             <input
               type="number"
               min="0"
-              placeholder="최대 소요시간(분)"
-              aria-label="최대 소요시간(분)"
-              value={drnbFilters.estimatedTimeMax}
+              placeholder="최대 거리(km)"
+              aria-label="최대 거리(km)"
+              value={drnbFilters.distanceMax}
               onChange={(e) =>
-                setDrnbFilters({ ...drnbFilters, estimatedTimeMax: e.target.value })
+                setDrnbFilters({ ...drnbFilters, distanceMax: e.target.value })
               }
             />
           </div>
@@ -250,9 +250,7 @@ const CourseList = () => {
                     </span>
                     <h3>{course.course_name}</h3>
                     <p>
-                      {courseType === 'custom' &&
-                        course.distance != null &&
-                        `${course.distance}km · `}
+                      {course.distance != null && `${course.distance}km · `}
                       {course.estimated_time != null
                         ? `약 ${course.estimated_time}분`
                         : '소요시간 정보 없음'}

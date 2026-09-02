@@ -5,9 +5,16 @@
 검증하기 위함. 테스트마다 코스를 새로 만들고 끝나면 관련 데이터를 전부 정리한다.
 """
 
+import asyncio
+import sys
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+
+# Windows 기본 이벤트루프(ProactorEventLoop)는 psycopg async 드라이버와 호환되지 않음
+# ㅡ macOS/Linux(도커 포함)에서는 영향 없음
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 import pytest_asyncio
 from sqlalchemy import delete

@@ -24,14 +24,21 @@ const EMPTY_FORM = {
   course_description: '',
 };
 
-// 강원도 대략적인 경계 박스
-// - 사용자 GPS 위치가 강원도 일때 초기 화면으로 써도 되는지 가늠하는 용도
-const _GANGWON_BOUNDS = { latMin: 37.0, latMax: 38.65, lngMin: 127.4, lngMax: 129.4 };
+// 강원도 대략적인 경계 박스 (app/domain/course/schemas.py의 _GANGWON_MAIN_BOX/_CHEORWON_BOX와 동일)
+// - 사용자 GPS 위치가 강원도 일때 초기 화면으로 써도 되는지 가늠하는 용도 + 경유지 클릭 시 지역 검증
+// - 사각형 1개로 구현하면 서울도 포함돼서 강원 본토 박스 + 철원군 전용 박스 2개
+const _GANGWON_BOXES = [
+  { latMin: 36.9, latMax: 38.7, lngMin: 127.4, lngMax: 129.5 }, // 강원 본토
+  { latMin: 37.95, latMax: 38.45, lngMin: 127.0, lngMax: 127.45 }, // 철원군 (38선 이북이라 서울과 안 겹침)
+];
 const _isNearGangwon = (point) =>
-  point.lat >= _GANGWON_BOUNDS.latMin &&
-  point.lat <= _GANGWON_BOUNDS.latMax &&
-  point.lng >= _GANGWON_BOUNDS.lngMin &&
-  point.lng <= _GANGWON_BOUNDS.lngMax;
+  _GANGWON_BOXES.some(
+    (box) =>
+      point.lat >= box.latMin &&
+      point.lat <= box.latMax &&
+      point.lng >= box.lngMin &&
+      point.lng <= box.lngMax,
+  );
 
 // Haversine 방식으로 두 좌표 간 직선거리 측정
 const _haversineDistanceKm = (a, b) => {
@@ -145,11 +152,19 @@ const CustomCourseForm = () => {
   // 지도 클릭/삭제로 경유지가 바뀔 때만 거리 자동계산(재기입) — 수정 모드 진입 시
   // 서버에서 불러온 기존 waypoints/distance는 이 핸들러를 거치지 않으므로 덮어쓰지 않음
   const handleMapClick = useCallback((point) => {
+    // 강원도 밖 클릭은 아예 경유지로 추가하지 않음
+    // ㅡ 지도 클릭 시점에 바로 알려줌
+    if (!_isNearGangwon(point)) {
+      setError('강원도 지역 내 좌표만 경유지로 추가할 수 있어요.');
+      return;
+    }
+    setError('');
     setWaypoints((prev) => {
       const next = [...prev, point];
-      if (next.length >= 2) {
-        setForm((f) => ({ ...f, distance: _totalDistanceKm(next).toFixed(1) }));
-      }
+      setForm((f) => ({
+        ...f,
+        distance: next.length >= 2 ? _totalDistanceKm(next).toFixed(1) : '',
+      }));
       return next;
     });
   }, []);
@@ -157,9 +172,10 @@ const CustomCourseForm = () => {
   const handleRemoveWaypoint = (index) => {
     setWaypoints((prev) => {
       const next = prev.filter((_, i) => i !== index);
-      if (next.length >= 2) {
-        setForm((f) => ({ ...f, distance: _totalDistanceKm(next).toFixed(1) }));
-      }
+      setForm((f) => ({
+        ...f,
+        distance: next.length >= 2 ? _totalDistanceKm(next).toFixed(1) : '',
+      }));
       return next;
     });
   };

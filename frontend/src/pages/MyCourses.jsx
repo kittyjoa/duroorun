@@ -1,47 +1,24 @@
-import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 
 import { apiFetch } from '../api';
 import Header from '../components/layout/Header';
 import { useUser } from '../contexts/UserContext';
+import { usePaginatedCourses } from '../hooks/usePaginatedCourses';
 
 const DIFFICULTY_LABEL = { EASY: '쉬움', NORMAL: '보통', HARD: '어려움' };
 const DIFFICULTY_COLOR = { EASY: 'green', NORMAL: 'blue', HARD: 'red' };
+const PAGE_SIZE = 20;
 
 const MyCourses = () => {
   const { user, isLoading: userLoading } = useUser();
-  const [courses, setCourses] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
 
-  useEffect(() => {
-    if (!user) return undefined;
-    let ignore = false;
+  // user 아직 없으면 path를 null로 둬서 훅이 조회를 미룸 ("불러오는 중..." 유지)
+  const path = user ? '/v1/courses/custom' : null;
+  const buildQuery = (targetPage) =>
+    `created_by=${user.user_id}&page=${targetPage}&size=${PAGE_SIZE}`;
 
-    const fetchMyCourses = async () => {
-      setLoading(true);
-      setError('');
-      try {
-        const res = await apiFetch(`/v1/courses/custom?created_by=${user.user_id}&size=100`);
-        if (ignore) return;
-        if (!res.ok) {
-          setError('코스 목록을 불러오지 못했어요.');
-          return;
-        }
-        const data = await res.json();
-        setCourses(data.items);
-      } catch {
-        if (!ignore) setError('서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.');
-      } finally {
-        if (!ignore) setLoading(false);
-      }
-    };
-    fetchMyCourses();
-
-    return () => {
-      ignore = true;
-    };
-  }, [user]);
+  const { courses, total, loading, loadingMore, error, setError, loadMore, removeCourse } =
+    usePaginatedCourses(path, buildQuery, [user?.user_id]);
 
   const handleDelete = async (courseId) => {
     if (!window.confirm('정말 이 코스를 삭제하시겠어요?')) return;
@@ -51,7 +28,7 @@ const MyCourses = () => {
         setError('삭제에 실패했어요');
         return;
       }
-      setCourses((prev) => prev.filter((c) => c.course_id !== courseId));
+      removeCourse(courseId);
     } catch {
       setError('서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.');
     }
@@ -126,6 +103,14 @@ const MyCourses = () => {
                 </button>
               </div>
             ))}
+          </div>
+        )}
+
+        {!loading && !error && courses.length < total && (
+          <div className="course-list-load-more">
+            <button type="button" onClick={loadMore} disabled={loadingMore}>
+              {loadingMore ? '불러오는 중...' : '더보기'}
+            </button>
           </div>
         )}
       </main>

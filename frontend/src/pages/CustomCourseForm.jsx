@@ -61,6 +61,17 @@ const _totalDistanceKm = (points) => {
   return total;
 };
 
+// FastAPI/pydantic 검증 실패 422의 detail 등 어떤 형태의 에러 응답 와도
+// 항상 안전한 문자열로 변환해서 반환 (로컬 헬퍼 함수)
+const _extractErrorMessage = (detail, fallback) => {
+  if (typeof detail === 'string') return detail;
+  if (Array.isArray(detail)) {
+    const messages = detail.map((item) => item?.msg).filter(Boolean);
+    if (messages.length > 0) return messages.join(' / ');
+  }
+  return fallback;
+};
+
 const CustomCourseForm = () => {
   const { courseId } = useParams();
   const isEditMode = Boolean(courseId);
@@ -69,6 +80,9 @@ const CustomCourseForm = () => {
 
   const [form, setForm] = useState(EMPTY_FORM);
   const [waypoints, setWaypoints] = useState([]); // [{lat, lng}] — 클릭한 순서가 곧 sequence
+  // 수정 모드에서 지도 클릭/삭제로 실제 경유지를 건드렸는지 
+  // — true일 때만 저장 시 waypoints 전송.
+  const [waypointsDirty, setWaypointsDirty] = useState(false);
   const [images, setImages] = useState([]);
   const [ownerId, setOwnerId] = useState(null);
   const [loading, setLoading] = useState(isEditMode);
@@ -159,6 +173,7 @@ const CustomCourseForm = () => {
       return;
     }
     setError('');
+    setWaypointsDirty(true);
     setWaypoints((prev) => {
       const next = [...prev, point];
       setForm((f) => ({
@@ -170,6 +185,7 @@ const CustomCourseForm = () => {
   }, []);
 
   const handleRemoveWaypoint = (index) => {
+    setWaypointsDirty(true);
     setWaypoints((prev) => {
       const next = prev.filter((_, i) => i !== index);
       setForm((f) => ({
@@ -195,8 +211,11 @@ const CustomCourseForm = () => {
       difficulty: form.difficulty,
       estimated_time: Number(form.estimated_time),
       course_description: form.course_description || null,
-      waypoints: waypoints.map((p) => ({ latitude: p.lat, longitude: p.lng })),
     };
+    // 생성 시엔 항상 필요, 수정 시엔 실제로 지도를 건드렸을 때만 보냄
+    if (!isEditMode || waypointsDirty) {
+      body.waypoints = waypoints.map((p) => ({ latitude: p.lat, longitude: p.lng }));
+    }
 
     setSaving(true);
     try {
@@ -207,11 +226,12 @@ const CustomCourseForm = () => {
 
       if (!res.ok) {
         const data = await res.json().catch(() => null);
-        setError(data?.detail ?? '저장에 실패했어요.');
+        setError(_extractErrorMessage(data?.detail, '저장에 실패했어요.'));
         return;
       }
 
       const data = await res.json();
+      setWaypointsDirty(false);
       if (isEditMode) {
         setNotice('저장됐어요');
       } else {
@@ -251,7 +271,7 @@ const CustomCourseForm = () => {
       });
       if (!res.ok) {
         const data = await res.json().catch(() => null);
-        setError(data?.detail ?? '이미지 업로드에 실패했어요');
+        setError(_extractErrorMessage(data?.detail, '이미지 업로드에 실패했어요'));
         return;
       }
       const data = await res.json();

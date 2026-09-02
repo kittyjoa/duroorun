@@ -188,6 +188,9 @@ button.profile-avatar { border:0; padding:0; font:inherit; cursor:pointer; }
 .course-type-tabs button.active { background:var(--ink); color:#fff; border-color:var(--ink); }
 .course-filter-bar { display:flex; flex-wrap:wrap; gap:10px; margin-bottom:28px; }
 .course-filter-bar input, .course-filter-bar select { border:1px solid #dadce0; border-radius:8px; padding:10px 12px; font-size:13px; font-family:'Apple SD Gothic Neo',sans-serif; }
+.course-list-load-more { display:flex; justify-content:center; margin-top:28px; }
+.course-list-load-more button { border:1px solid #dadce0; background:#fff; border-radius:8px; padding:10px 24px; font-size:13px; font-family:'Apple SD Gothic Neo',sans-serif; cursor:pointer; }
+.course-list-load-more button:disabled { opacity:.6; cursor:not-allowed; }
 .course-detail-images { display:flex; flex-wrap:wrap; gap:10px; margin-top:20px; }
 .course-detail-images img { width:160px; height:120px; object-fit:cover; border-radius:8px; }
 

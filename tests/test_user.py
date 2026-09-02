@@ -110,6 +110,9 @@ async def test_kakao_login_creates_new_user(db_session, ctx, redis_client):
     assert social.user_id == user_id
     assert social.provider_type == ProviderType.KAKAO
 
+    new_user = (await db_session.execute(select(User).where(User.user_id == user_id))).scalar_one()
+    assert new_user.last_login_at is not None
+
 
 # 2. 같은 소셜 계정으로 재로그인 시 새 유저 안 만들고 기존 유저로 로그인
 async def test_kakao_login_existing_account_reuses_user(db_session, ctx, redis_client):
@@ -147,12 +150,17 @@ async def test_refresh_tokens_rotates_on_valid_jti(db_session, ctx, redis_client
     refresh_token, jti = create_refresh_token(user.user_id)
     await save_refresh_jti(user.user_id, jti, redis_client)
 
-    _, new_refresh_token = await refresh_tokens(refresh_token, redis_client)
+    _, new_refresh_token = await refresh_tokens(refresh_token, db_session, redis_client)
     new_jti = decode_token(new_refresh_token)["jti"]
 
     stored = await redis_client.get(f"refresh:{user.user_id}")
     assert stored == new_jti
     assert stored != jti
+
+    refreshed_user = (
+        await db_session.execute(select(User).where(User.user_id == user.user_id))
+    ).scalar_one()
+    assert refreshed_user.last_login_at is not None
 
 
 # 4. 토큰 재발급 시 jti 불일치(탈취 의심) → 401
@@ -165,7 +173,7 @@ async def test_refresh_tokens_rejects_stale_jti(db_session, ctx, redis_client):
     stale_refresh_token, _ = create_refresh_token(user.user_id)
 
     with pytest.raises(HTTPException) as exc_info:
-        await refresh_tokens(stale_refresh_token, redis_client)
+        await refresh_tokens(stale_refresh_token, db_session, redis_client)
 
     assert exc_info.value.status_code == 401
 

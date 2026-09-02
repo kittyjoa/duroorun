@@ -144,10 +144,9 @@ async def get_user_stats(db: AsyncSession) -> UserStatsResponse:
 
     active_users_30d = (
         await db.execute(
-            select(func.count(func.distinct(Record.user_id))).where(
-                Record.created_at >= datetime.now(UTC) - timedelta(days=30),
-                Record.user_id.is_not(None),
-            )
+            select(func.count())
+            .select_from(User)
+            .where(User.last_login_at >= datetime.now(UTC) - timedelta(days=30))
         )
     ).scalar_one()
 

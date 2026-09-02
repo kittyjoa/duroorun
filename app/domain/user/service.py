@@ -212,6 +212,9 @@ async def kakao_login(
         result = await db.execute(select(User).where(User.user_id == social.user_id))
         user = result.scalar_one()
 
+    user.last_login_at = datetime.now(UTC)
+    await db.commit()
+
     access_token = create_access_token(user.user_id)
     refresh_token, refresh_jti = create_refresh_token(user.user_id)
     await save_refresh_jti(user.user_id, refresh_jti, redis)
@@ -358,6 +361,9 @@ async def naver_login(
         result = await db.execute(select(User).where(User.user_id == social.user_id))
         user = result.scalar_one()
 
+    user.last_login_at = datetime.now(UTC)
+    await db.commit()
+
     access_token = create_access_token(user.user_id)
     refresh_token, refresh_jti = create_refresh_token(user.user_id)
     await save_refresh_jti(user.user_id, refresh_jti, redis)
@@ -497,6 +503,9 @@ async def google_login(
         result = await db.execute(select(User).where(User.user_id == social.user_id))
         user = result.scalar_one()
 
+    user.last_login_at = datetime.now(UTC)
+    await db.commit()
+
     access_token = create_access_token(user.user_id)
     refresh_token, refresh_jti = create_refresh_token(user.user_id)
     await save_refresh_jti(user.user_id, refresh_jti, redis)
@@ -504,7 +513,7 @@ async def google_login(
     return access_token, refresh_token
 
 
-async def refresh_tokens(refresh_token: str, redis: Redis) -> tuple[str, str]:
+async def refresh_tokens(refresh_token: str, db: AsyncSession, redis: Redis) -> tuple[str, str]:
     """Refresh Token을 검증하고 새 Access Token + Refresh Token을 발급합니다."""
     payload = decode_token(refresh_token)
 
@@ -532,6 +541,11 @@ async def refresh_tokens(refresh_token: str, redis: Redis) -> tuple[str, str]:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="토큰이 탈취되었거나 만료되었습니다. 다시 로그인해주세요",
         )
+
+    await db.execute(
+        update(User).where(User.user_id == user_id).values(last_login_at=datetime.now(UTC))
+    )
+    await db.commit()
 
     return new_access_token, new_refresh_token
 

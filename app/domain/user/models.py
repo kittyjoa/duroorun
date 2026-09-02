@@ -43,6 +43,8 @@ class User(Base):
     )
     # 탈퇴 시 현재 시각 기록 (row 삭제 없이 익명화 처리)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # 로그인/토큰 재발급 시각 갱신 (활성 유저 통계용). 최초 가입 시 NULL
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     social_accounts: Mapped[list["SocialAccount"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"

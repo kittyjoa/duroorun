@@ -2,7 +2,7 @@
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 import pytest_asyncio
@@ -15,6 +15,7 @@ from app.domain.admin import service as admin_service
 from app.domain.admin.service import KST, _period_boundaries
 from app.domain.course.models import Course, CourseType
 from app.domain.record.models import Record
+from app.domain.review.models import Review
 from app.domain.user.models import BannedAccount, ProviderType, SocialAccount, User, UserRole
 from app.domain.user.service import _check_not_banned, force_withdraw_user
 
@@ -33,11 +34,15 @@ async def ctx(db_session):
     context = AdminTestContext()
     yield context
 
+    if context.course_ids:
+        await db_session.execute(delete(Record).where(Record.course_id.in_(context.course_ids)))
+        await db_session.execute(delete(Review).where(Review.course_id.in_(context.course_ids)))
     if context.user_ids:
         await db_session.execute(
             delete(SocialAccount).where(SocialAccount.user_id.in_(context.user_ids))
         )
         await db_session.execute(delete(Record).where(Record.user_id.in_(context.user_ids)))
+        await db_session.execute(delete(Review).where(Review.user_id.in_(context.user_ids)))
         await db_session.execute(delete(User).where(User.user_id.in_(context.user_ids)))
     if context.course_ids:
         await db_session.execute(delete(Course).where(Course.course_id.in_(context.course_ids)))
@@ -239,3 +244,78 @@ def test_period_boundaries_uses_kst():
     assert week_start == datetime(2026, 8, 31, 0, 0, tzinfo=KST)  # 이번주 월요일
     assert month_start == datetime(2026, 9, 1, 0, 0, tzinfo=KST)
     assert year_start == datetime(2026, 1, 1, 0, 0, tzinfo=KST)
+
+
+# 10. 인기 코스 동률 시 리뷰 개수 많은 순으로 2차 정렬
+async def test_popular_courses_tiebreak_by_review_count(db_session, ctx):
+    course_more_reviews = Course(
+        course_type=CourseType.CUSTOM,
+        course_name=f"pytest-course-{uuid.uuid4().hex[:8]}",
+        distance=5.0,
+    )
+    course_fewer_reviews = Course(
+        course_type=CourseType.CUSTOM,
+        course_name=f"pytest-course-{uuid.uuid4().hex[:8]}",
+        distance=5.0,
+    )
+    db_session.add_all([course_more_reviews, course_fewer_reviews])
+    await db_session.flush()
+    ctx.course_ids.extend([course_more_reviews.course_id, course_fewer_reviews.course_id])
+
+    # 두 코스 다 완주 1건씩 만들어 완주횟수를 동률로 맞춤
+    for course in (course_more_reviews, course_fewer_reviews):
+        runner = User(nickname=f"pytest-admin-{uuid.uuid4().hex[:12]}")
+        db_session.add(runner)
+        await db_session.flush()
+        ctx.user_ids.append(runner.user_id)
+        db_session.add(
+            Record(
+                user_id=runner.user_id,
+                course_id=course.course_id,
+                started_at=datetime.now(UTC),
+                ended_at=datetime.now(UTC),
+                is_completed=True,
+            )
+        )
+    await db_session.commit()
+
+    # course_more_reviews에만 리뷰 2개 추가 (완주횟수는 그대로 동률 유지)
+    for _ in range(2):
+        reviewer = User(nickname=f"pytest-admin-{uuid.uuid4().hex[:12]}")
+        db_session.add(reviewer)
+        await db_session.flush()
+        ctx.user_ids.append(reviewer.user_id)
+        db_session.add(
+            Review(
+                user_id=reviewer.user_id,
+                course_id=course_more_reviews.course_id,
+                content="좋아요",
+                difficulty="NORMAL",
+            )
+        )
+    await db_session.commit()
+
+    results = await admin_service._get_popular_courses(db_session, CourseType.CUSTOM, 50)
+    result_course_ids = [item.course_id for item in results]
+
+    assert result_course_ids.index(course_more_reviews.course_id) < result_course_ids.index(
+        course_fewer_reviews.course_id
+    )
+
+
+# 11. 미래 시각으로 저장된 데이터는 기간 통계에 포함되지 않음
+async def test_period_counts_excludes_future_timestamps(db_session, ctx):
+    baseline = await admin_service._get_period_counts(db_session, User.created_at)
+
+    future_user = User(
+        nickname=f"pytest-admin-{uuid.uuid4().hex[:12]}",
+        created_at=datetime.now(UTC) + timedelta(days=365),
+    )
+    db_session.add(future_user)
+    await db_session.commit()
+    ctx.user_ids.append(future_user.user_id)
+
+    after = await admin_service._get_period_counts(db_session, User.created_at)
+
+    assert after.this_year == baseline.this_year
+    assert after.this_month == baseline.this_month

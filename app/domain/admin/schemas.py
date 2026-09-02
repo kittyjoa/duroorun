@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.domain.facility.models import FacilityType
 from app.domain.user.models import ProviderType
@@ -12,6 +12,14 @@ class ForceWithdrawRequest(BaseModel):
     """유저 강제 탈퇴 요청."""
 
     reason: str = Field(min_length=1, max_length=255)
+
+    @field_validator("reason")
+    @classmethod
+    def strip_reason(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("사유를 입력해주세요")
+        return v
 
 
 class BannedAccountResponse(BaseModel):

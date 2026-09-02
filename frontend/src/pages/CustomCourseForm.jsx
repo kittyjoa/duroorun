@@ -80,7 +80,7 @@ const CustomCourseForm = () => {
 
   const [form, setForm] = useState(EMPTY_FORM);
   const [waypoints, setWaypoints] = useState([]); // [{lat, lng}] — 클릭한 순서가 곧 sequence
-  // 수정 모드에서 지도 클릭/삭제로 실제 경유지를 건드렸는지 
+  // 수정 모드에서 지도 클릭/삭제로 실제 경유지를 건드렸는지
   // — true일 때만 저장 시 waypoints 전송.
   const [waypointsDirty, setWaypointsDirty] = useState(false);
   const [images, setImages] = useState([]);
@@ -89,6 +89,8 @@ const CustomCourseForm = () => {
   const [saving, setSaving] = useState(false);
   const [uploadingImage, setUploadingImage] = useState(false);
   const [error, setError] = useState('');
+  // 아래 loadError: 코스 조회(GET) 실패 전용 (위의 폼 조작 에러 error 와 분리)
+  const [loadError, setLoadError] = useState('');
   const [notice, setNotice] = useState('');
   // 신규 생성 저장 직후에만 씀: 완료 모달에서 "사진 추가"/"나만의 코스로 이동" 선택
   const [createdCourseId, setCreatedCourseId] = useState(null);
@@ -118,14 +120,15 @@ const CustomCourseForm = () => {
     if (!isEditMode) return undefined;
     let ignore = false;
 
+    setLoading(true);
+    setLoadError('');
+
     (async () => {
-      setLoading(true);
-      setError('');
       try {
         const res = await apiFetch(`/v1/courses/custom/${courseId}`);
         if (ignore) return;
         if (!res.ok) {
-          setError(res.status === 404 ? '코스를 찾을 수 없어요.' : '코스 정보를 불러오지 못했어요.');
+          setLoadError(res.status === 404 ? '코스를 찾을 수 없어요.' : '코스 정보를 불러오지 못했어요.');
           return;
         }
         const data = await res.json();
@@ -140,7 +143,7 @@ const CustomCourseForm = () => {
         setImages(data.images ?? []);
         setOwnerId(data.created_by);
       } catch {
-        if (!ignore) setError('서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.');
+        if (!ignore) setLoadError('서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.');
       } finally {
         if (!ignore) setLoading(false);
       }
@@ -326,7 +329,18 @@ const CustomCourseForm = () => {
     );
   }
 
-  if (isEditMode && !loading && user && ownerId !== user.user_id) {
+  if (isEditMode && !loading && loadError) {
+    return (
+      <>
+        <Header />
+        <main className="course-detail-page">
+          <p className="course-list-status error">{loadError}</p>
+        </main>
+      </>
+    );
+  }
+
+  if (isEditMode && !loading && !loadError && user && ownerId !== user.user_id) {
     return (
       <>
         <Header />
@@ -375,27 +389,19 @@ const CustomCourseForm = () => {
 
             <label>경유지 (지도를 클릭해서 순서대로 추가)</label>
             <p className="kakao-map-hint-static">⚠️ 지도가 제대로 표시되지 않으면 새로고침을 한번 해주세요</p>
-            {!isEditMode && locationStatus === 'requesting' ? (
-              // GPS 응답이 지도 SDK 로드보다 느린 경우가 많아, 위치가 잡히기 전에 지도부터
-              // 띄우면 아래 initialCenter 판단(강원 근처인지)이 반영 안 된 채로 초기화돼버림
-              // — 다만 GPS는 이제 필수가 아니라서(거부/미지원이어도 폼은 그대로 진행)
-              // 결과를 기다리는 잠깐의 대기일 뿐, 막는 게 아님
-              <p className="course-list-status">위치 정보를 가져오는 중...</p>
-            ) : (
-              <KakaoMap
-                path={waypoints}
-                editable
-                onMapClick={handleMapClick}
-                // GPS 위치가 강원 근처일 때만 그 좌표로 열고, 아니면(강원 밖/거부/미지원)
-                // KakaoMap 자체의 강원 기본 좌표(_FALLBACK_CENTER)로 열리게 둠
-                initialCenter={
-                  locationStatus === 'granted' && userLocation && _isNearGangwon(userLocation)
-                    ? userLocation
-                    : undefined
-                }
-                emptyHint="지도를 클릭해서 경유지를 추가하세요"
-              />
-            )}
+            {/* GPS는 선택 기능 — 응답을 기다리지 않고 기본(강원) 위치로 지도부터 띄우고,
+                아직 경유지를 안 찍은 상태에서 GPS가 강원 근처로 도착하면 center로 중심만 옮김 */}
+            <KakaoMap
+              path={waypoints}
+              editable
+              onMapClick={handleMapClick}
+              center={
+                !isEditMode && locationStatus === 'granted' && userLocation && _isNearGangwon(userLocation)
+                  ? userLocation
+                  : undefined
+              }
+              emptyHint="지도를 클릭해서 경유지를 추가하세요"
+            />
             {waypoints.length > 0 && (
               <ul className="waypoint-list">
                 {waypoints.map((p, index) => (

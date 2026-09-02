@@ -7,7 +7,7 @@ export const loadKakaoMaps = () => {
     return Promise.resolve(window.kakao);
   }
   if (loadPromise) return loadPromise;
-  
+
   // loadPromise: 지금 로드중인/이미끝난 Promise 캐싱
   loadPromise = new Promise((resolve, reject) => {
     const appKey = import.meta.env.VITE_KAKAO_JS_KEY;

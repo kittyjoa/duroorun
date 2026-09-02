@@ -89,16 +89,20 @@ def _period_boundaries(now: datetime) -> tuple[datetime, datetime, datetime, dat
 async def _get_period_counts(
     db: AsyncSession, timestamp_column: ColumnElement[datetime | None]
 ) -> PeriodCountResponse:
-    """주어진 시각 컬럼 기준으로 오늘/이번주/이번달/올해 카운트를 한 번의 쿼리로 집계합니다."""
-    today_start, week_start, month_start, year_start = _period_boundaries(datetime.now(UTC))
+    """주어진 시각 컬럼 기준으로 오늘/이번주/이번달/올해 카운트를 한 번의 쿼리로 집계합니다.
+
+    잘못 저장된 미래 시각 데이터가 통계에 섞이지 않도록 현재 시각을 상한으로도 검사한다.
+    """
+    now = datetime.now(UTC)
+    today_start, week_start, month_start, year_start = _period_boundaries(now)
 
     result = (
         await db.execute(
             select(
-                func.count(case((timestamp_column >= today_start, 1))),
-                func.count(case((timestamp_column >= week_start, 1))),
-                func.count(case((timestamp_column >= month_start, 1))),
-                func.count(case((timestamp_column >= year_start, 1))),
+                func.count(case((timestamp_column.between(today_start, now), 1))),
+                func.count(case((timestamp_column.between(week_start, now), 1))),
+                func.count(case((timestamp_column.between(month_start, now), 1))),
+                func.count(case((timestamp_column.between(year_start, now), 1))),
             )
         )
     ).one()
@@ -111,14 +115,18 @@ async def _get_period_counts(
 async def _get_monthly_yearly_counts(
     db: AsyncSession, timestamp_column: ColumnElement[datetime | None]
 ) -> MonthlyYearlyCountResponse:
-    """주어진 시각 컬럼 기준으로 이번달/올해 카운트를 한 번의 쿼리로 집계합니다."""
-    _, _, month_start, year_start = _period_boundaries(datetime.now(UTC))
+    """주어진 시각 컬럼 기준으로 이번달/올해 카운트를 한 번의 쿼리로 집계합니다.
+
+    잘못 저장된 미래 시각 데이터가 통계에 섞이지 않도록 현재 시각을 상한으로도 검사한다.
+    """
+    now = datetime.now(UTC)
+    _, _, month_start, year_start = _period_boundaries(now)
 
     result = (
         await db.execute(
             select(
-                func.count(case((timestamp_column >= month_start, 1))),
-                func.count(case((timestamp_column >= year_start, 1))),
+                func.count(case((timestamp_column.between(month_start, now), 1))),
+                func.count(case((timestamp_column.between(year_start, now), 1))),
             )
         )
     ).one()
@@ -179,7 +187,19 @@ async def get_record_stats(db: AsyncSession) -> RecordStatsResponse:
 async def _get_popular_courses(
     db: AsyncSession, course_type: CourseType | None, limit: int
 ) -> list[CoursePopularityItem]:
-    """완주 횟수 기준 인기 코스 랭킹 (course_type=None이면 전체)."""
+    """완주 횟수 기준 인기 코스 랭킹 (course_type=None이면 전체).
+
+    완주 횟수가 같으면 리뷰 개수가 많은 순으로 2차 정렬해 순서를 안정적으로 고정한다.
+    Review는 Record와 별도로 Course에 N:1 관계라, 그냥 join하면 조합이 곱해져
+    완주 횟수 집계가 틀어지므로 상관 서브쿼리로 따로 계산한다.
+    """
+    review_count_subquery = (
+        select(func.count(Review.review_id))
+        .where(Review.course_id == Course.course_id)
+        .correlate(Course)
+        .scalar_subquery()
+    )
+
     query = (
         select(
             Course.course_id,
@@ -193,7 +213,7 @@ async def _get_popular_courses(
         query = query.where(Course.course_type == course_type)
     query = (
         query.group_by(Course.course_id, Course.course_name)
-        .order_by(func.count(Record.record_id).desc())
+        .order_by(func.count(Record.record_id).desc(), review_count_subquery.desc())
         .limit(limit)
     )
 

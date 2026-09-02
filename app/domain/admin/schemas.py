@@ -21,7 +21,6 @@ class BannedAccountResponse(BaseModel):
 
     id: int
     provider_type: ProviderType
-    provider_uid: str
     reason: str
     banned_at: datetime
 

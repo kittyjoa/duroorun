@@ -26,6 +26,7 @@ const KakaoMap = ({
   height = '360px',
   emptyHint,          // 아무것도 안 찍었을때 안내문구
   initialCenter,      // 지도 처음 열때 중심 어디 보여줄지
+  center,             // 마운트 이후에도 지도 중심을 옮기고 싶을 때(예: GPS 응답 도착) — path/markers가 비어있을 때만 적용
 }) => {
   const containerRef = useRef(null);
   const mapRef = useRef(null);
@@ -149,6 +150,15 @@ const KakaoMap = ({
     };
   }, []);
 
+  // center prop이 바뀌면 지도 중심만 이동 (initialCenter와 달리 마운트 이후에도 반영됨)
+  // ㅡ 이미 path/markers가 있으면 위 effect의 bounds 조정과 충돌하니 비어있을 때만 적용
+  useEffect(() => {
+    if (status !== 'ready' || !center) return;
+    if (path.length > 0 || markers.length > 0) return;
+    mapRef.current.setCenter(new kakaoRef.current.maps.LatLng(center.lat, center.lng));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status, center?.lat, center?.lng]);
+
   // 편집 모드 클릭 핸들러 (지도 클릭시 좌표를 부모에게 넘김)
   useEffect(() => {
     if (status !== 'ready' || !editable || !onMapClick) return;
@@ -166,21 +176,18 @@ const KakaoMap = ({
     };
   }, [status, editable, onMapClick]);
 
-  if (status === 'error') {
-    return (
-      <p className="kakao-map-status error">
-        지도를 불러오지 못했어요.{' '}
-        <button type="button" onClick={() => setRetryToken((n) => n + 1)}>
-          다시 시도
-        </button>
-      </p>
-    );
-  }
-
   return (
     <div className="kakao-map-wrapper">
       <div ref={containerRef} className="kakao-map" style={{ height }} />
       {status === 'loading' && <p className="kakao-map-status">지도를 불러오는 중...</p>}
+      {status === 'error' && (
+        <p className="kakao-map-status error">
+          지도를 불러오지 못했어요.{' '}
+          <button type="button" onClick={() => setRetryToken((n) => n + 1)}>
+            다시 시도
+          </button>
+        </p>
+      )}
       {status === 'ready' && editable && path.length === 0 && emptyHint && (
         <p className="kakao-map-hint">{emptyHint}</p>  // 경유지 없으면 emptyHint
       )}

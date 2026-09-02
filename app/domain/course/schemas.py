@@ -7,12 +7,12 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.domain.course.models import Difficulty
 from app.domain.review.schemas import ReviewSummaryResponse
 
-
 # 강원도 대략적인 경계 박스 (frontend/src/pages/CustomCourseForm.jsx의 _GANGWON_BOXES와 동일)
 # ㅡ 커스텀 코스는 강원도 전체 범위로 제한
 # 강원 본토 박스 + 철원군 전용 박스 2개로 구성
 _GANGWON_MAIN_BOX = {"lat": (36.9, 38.7), "lng": (127.4, 129.5)}
-_CHEORWON_BOX = {"lat": (37.95, 38.45), "lng": (127.0, 127.45)}  # 철원군 전 지역이 38선 이북이라 서울과 안 겹침
+# 철원군 전 지역이 38선 이북이라 서울과 안 겹침
+_CHEORWON_BOX = {"lat": (37.95, 38.45), "lng": (127.0, 127.45)}
 
 
 def _in_box(lat: float, lng: float, box: dict) -> bool:
@@ -58,14 +58,21 @@ class CourseImageResponse(BaseModel):
     created_at: datetime
 
 
+# 터무니없는 값(DB 정수 범위 초과 등)을 막기 위한 상한선 - 정밀 한도 X
+_COURSE_NAME_MAX_LENGTH = 100
+_COURSE_DESCRIPTION_MAX_LENGTH = 2000
+_DISTANCE_MAX_KM = 500.0
+_ESTIMATED_TIME_MAX_MINUTES = 10000
+
+
 class CourseCreateRequest(BaseModel):
     """커스텀 코스 등록 - 로그인 유저 전용. course_type은 CUSTOM 고정"""
 
-    course_name: str = Field(min_length=1)
-    distance: float = Field(gt=0)
+    course_name: str = Field(min_length=1, max_length=_COURSE_NAME_MAX_LENGTH)
+    distance: float = Field(gt=0, le=_DISTANCE_MAX_KM)
     difficulty: Difficulty
-    estimated_time: int = Field(gt=0)
-    course_description: str | None = None
+    estimated_time: int = Field(gt=0, le=_ESTIMATED_TIME_MAX_MINUTES)
+    course_description: str | None = Field(default=None, max_length=_COURSE_DESCRIPTION_MAX_LENGTH)
     # 시작/종료 좌표(start_lat/lng, end_lat/lng)는 service.py에서 첫/마지막 경유지로 자동 저장
     # max_length=500: 대량 좌표 전송 방지
     waypoints: list[CourseWaypointCreate] = Field(min_length=2, max_length=500)
@@ -74,11 +81,11 @@ class CourseCreateRequest(BaseModel):
 class CourseUpdateRequest(BaseModel):
     """커스텀 코스 수정 - 작성자 본인 전용. 부분 수정이므로 전달된 필드만 반영"""
 
-    course_name: str | None = Field(default=None, min_length=1)
-    distance: float | None = Field(default=None, gt=0)
+    course_name: str | None = Field(default=None, min_length=1, max_length=_COURSE_NAME_MAX_LENGTH)
+    distance: float | None = Field(default=None, gt=0, le=_DISTANCE_MAX_KM)
     difficulty: Difficulty | None = None
-    estimated_time: int | None = Field(default=None, gt=0)
-    course_description: str | None = None
+    estimated_time: int | None = Field(default=None, gt=0, le=_ESTIMATED_TIME_MAX_MINUTES)
+    course_description: str | None = Field(default=None, max_length=_COURSE_DESCRIPTION_MAX_LENGTH)
     # 경유지를 다시 보내면 전체 교체 (부분 수정 대상 아님)
     # - 프론트: 경유지 미변경 시 필드 자체를 생략할 것
     # min_length=2라 waypoints를 보내는 순간 항상 최소 2개 필요

@@ -17,8 +17,10 @@ if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 import pytest_asyncio
+from redis.asyncio import Redis
 from sqlalchemy import delete
 
+from app.config import settings
 from app.database import AsyncSessionLocal
 from app.domain.course.models import Course, CourseType
 from app.domain.record.models import Record
@@ -38,6 +40,19 @@ class ReviewTestCourse:
 async def db_session():
     async with AsyncSessionLocal() as session:
         yield session
+
+
+@pytest_asyncio.fixture
+async def redis_client():
+    """실제 Redis(docker-compose redis 서비스)에 테스트 전용 연결을 새로 맺는다.
+
+    ㅡ app.redis.get_redis()의 전역 캐시 커넥션을 재사용하면, 테스트마다 새로
+      뜨는 이벤트루프와 이전 테스트의 커넥션이 서로 안 맞아 "Event loop is
+      closed" 에러가 남 — db_session처럼 테스트마다 새 연결을 맺고 정리한다.
+    """
+    redis = Redis.from_url(settings.REDIS_URL, decode_responses=True)
+    yield redis
+    await redis.aclose()
 
 
 @pytest_asyncio.fixture

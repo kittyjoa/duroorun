@@ -29,6 +29,7 @@ const KakaoMap = ({
 }) => {
   const containerRef = useRef(null);
   const mapRef = useRef(null);
+  const kakaoRef = useRef(null); // loadKakaoMaps()가 resolve한 kakao 객체
   const overlaysRef = useRef([]); // 매 렌더마다 지우고 다시 그리는 폴리라인/마커/오버레이 전부
   const [status, setStatus] = useState('loading'); // 'loading' | 'ready' | 'error'
   const [retryToken, setRetryToken] = useState(0);
@@ -44,6 +45,7 @@ const KakaoMap = ({
     loadKakaoMaps()  // 지도 심기
       .then((kakao) => {
         if (cancelled || !containerRef.current) return;
+        kakaoRef.current = kakao;
         const center = initialCenter ?? _FALLBACK_CENTER;
         mapRef.current = new kakao.maps.Map(containerRef.current, {
           center: new kakao.maps.LatLng(center.lat, center.lng),
@@ -66,7 +68,7 @@ const KakaoMap = ({
   // path/markers가 바뀔 때마다 기존 오버레이 지우고 다시 그림 + 화면에 다 보이도록 범위 조정
   useEffect(() => {
     if (status !== 'ready') return;
-    const kakao = window.kakao;
+    const kakao = kakaoRef.current;
     const map = mapRef.current;
 
     overlaysRef.current.forEach((overlay) => overlay.setMap(null));
@@ -150,7 +152,7 @@ const KakaoMap = ({
   // 편집 모드 클릭 핸들러 (지도 클릭시 좌표를 부모에게 넘김)
   useEffect(() => {
     if (status !== 'ready' || !editable || !onMapClick) return;
-    const kakao = window.kakao;
+    const kakao = kakaoRef.current;
     const map = mapRef.current;
 
     const listener = (mouseEvent) => {

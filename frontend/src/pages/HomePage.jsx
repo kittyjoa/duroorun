@@ -21,8 +21,8 @@ export default function Home() {
           <h1>바다를 따라,<br /><em>나답게 달려요</em></h1>
           <p>두루누비의 아름다운 해안길부터 러너들이 만든 특별한 코스까지.<br />오늘 달리고 싶은 길을 발견해보세요.</p>
           <div className="hero-buttons">
-            <Link className="primary-button" to="/courses/custom/mine">내 코스 찾기 <span>→</span></Link>
-            <a className="text-button" href="#how">두루런 둘러보기 <span>↘</span></a>
+            <a className="primary-button" href="#courses">코스 둘러보기 <span>→</span></a>
+            <a className="text-button" href="#how">두루런 사용법 <span>↘</span></a>
           </div>
           <div className="quick-stats" aria-label="서비스 통계">
             <div><strong>50+</strong><span>공식 해안 코스</span></div>

@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.clients.gemini import summarize_reviews
 from app.config import settings
 from app.database import AsyncSessionLocal
-from app.domain.course.models import Course, Difficulty
+from app.domain.course.models import DIFFICULTY_SCORE, Course, Difficulty
 from app.domain.record.models import Record
 from app.domain.review.models import Review, ReviewImage, ReviewSummary
 from app.domain.review.schemas import (
@@ -77,15 +77,7 @@ _IMAGE_EXTENSIONS = {
     "image/gif": "gif",
 }
 
-# TODO: course 도메인과 공유하는 상수라 course/models.py의 Difficulty 옆으로 옮길 예정
-# (course 담당과 협의 필요). 옮긴 뒤 아래 두 줄(_DIFFICULTY_SCORE, _SCORE_TO_DIFFICULTY)을
-# 삭제하고 from app.domain.course.models import DIFFICULTY_SCORE로 교체할 것
-_DIFFICULTY_SCORE = {
-    Difficulty.EASY: 1,
-    Difficulty.NORMAL: 2,
-    Difficulty.HARD: 3,
-}
-_SCORE_TO_DIFFICULTY = {score: difficulty for difficulty, score in _DIFFICULTY_SCORE.items()}
+_SCORE_TO_DIFFICULTY = {score: difficulty for difficulty, score in DIFFICULTY_SCORE.items()}
 
 
 def _detect_image_content_type(data: bytes) -> str | None:
@@ -509,9 +501,9 @@ async def get_average_difficulty(session: AsyncSession, course_id: int) -> Diffi
     """
     # 리뷰가 수천 개인 코스에서도 매번 전체 행을 파이썬으로 끌어오지 않도록 평균을 DB에서 계산
     score_expr = case(
-        (Review.difficulty == Difficulty.EASY, _DIFFICULTY_SCORE[Difficulty.EASY]),
-        (Review.difficulty == Difficulty.NORMAL, _DIFFICULTY_SCORE[Difficulty.NORMAL]),
-        (Review.difficulty == Difficulty.HARD, _DIFFICULTY_SCORE[Difficulty.HARD]),
+        (Review.difficulty == Difficulty.EASY, DIFFICULTY_SCORE[Difficulty.EASY]),
+        (Review.difficulty == Difficulty.NORMAL, DIFFICULTY_SCORE[Difficulty.NORMAL]),
+        (Review.difficulty == Difficulty.HARD, DIFFICULTY_SCORE[Difficulty.HARD]),
     )
     result = await session.execute(
         select(func.avg(score_expr), func.count())
@@ -530,9 +522,11 @@ async def get_reviews(
     course_id: int,
     page: int,
     size: int,
+    offset: int | None = None,
 ) -> ReviewListResponse:
     """코스 리뷰 목록 조회 (탈퇴 유저 리뷰는 노출 제외, 최신순으로 조회)"""
-    offset = (page - 1) * size
+    if offset is None:
+        offset = (page - 1) * size
     total_result = await session.execute(
         select(func.count())
         .select_from(Review)
@@ -560,17 +554,24 @@ async def get_my_reviews(
     user_id: int,
     page: int,
     size: int,
+    course_id: int | None = None,
 ) -> MyReviewListResponse:
-    """마이페이지 - 내가 작성한 리뷰 목록 조회 (최신순, 코스명 포함)"""
+    """마이페이지 - 내가 작성한 리뷰 목록 조회 (최신순, 코스명 포함).
+
+    course_id를 주면 그 코스에 내가 쓴 리뷰가 있는지만 확인하는 용도로도 쓸 수 있다
+    (코스당 리뷰 1개 제한이라 결과는 최대 1건).
+    """
+    filters = [Review.user_id == user_id]
+    if course_id is not None:
+        filters.append(Review.course_id == course_id)
+
     offset = (page - 1) * size
-    total_result = await session.execute(
-        select(func.count()).select_from(Review).where(Review.user_id == user_id)
-    )
+    total_result = await session.execute(select(func.count()).select_from(Review).where(*filters))
     total = total_result.scalar_one()
     result = await session.execute(
         select(Review, Course.course_name)
         .join(Course, Course.course_id == Review.course_id)
-        .where(Review.user_id == user_id)
+        .where(*filters)
         .order_by(Review.created_at.desc())
         .offset(offset)
         .limit(size)

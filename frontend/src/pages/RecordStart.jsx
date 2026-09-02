@@ -4,8 +4,8 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { apiFetch } from '../api';
 import Header from '../components/layout/Header';
 import { useUser } from '../contexts/UserContext';
-
-const DIFFICULTY_LABEL = { EASY: '쉬움', NORMAL: '보통', HARD: '어려움' };
+import { DIFFICULTY_LABEL } from '../utils/difficulty';
+import { formatElapsed, formatPace } from '../utils/format';
 
 const getPosition = () =>
   new Promise((resolve, reject) => {
@@ -18,22 +18,6 @@ const getPosition = () =>
       timeout: 10000,
     });
   });
-
-const formatElapsed = (totalSeconds) => {
-  const h = Math.floor(totalSeconds / 3600);
-  const m = Math.floor((totalSeconds % 3600) / 60);
-  const s = totalSeconds % 60;
-  const pad = (n) => String(n).padStart(2, '0');
-  return h > 0 ? `${pad(h)}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
-};
-
-// pace: 초/km (백엔드가 duration_seconds / course.distance로 계산)
-const formatPace = (paceSecondsPerKm) => {
-  if (paceSecondsPerKm == null) return '정보 없음';
-  const m = Math.floor(paceSecondsPerKm / 60);
-  const s = Math.round(paceSecondsPerKm % 60);
-  return `${m}'${String(s).padStart(2, '0')}" /km`;
-};
 
 const RecordStart = () => {
   const { courseType, courseId } = useParams();
@@ -49,10 +33,12 @@ const RecordStart = () => {
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [error, setError] = useState('');
   const [blockedMessage, setBlockedMessage] = useState('');
+  // 다른 코스에서 진행 중인 기록이 있을 때, 그 기록 화면으로 바로 이동할 수 있게 위치를 기억해둔다
+  const [blockedRecordTarget, setBlockedRecordTarget] = useState(null);
 
-  // 일시정지 누적 시간(ms)을 로컬에서 직접 추적한다 - RecordResponse엔
-  // total_paused_seconds가 내려오지 않아서, pause/resume 시각을 기록해 계산한다.
-  // (페이지를 새로고침하면 이 누적값은 초기화됨 - 진행 중 기록 복구 시 알려진 한계)
+  // 일시정지 누적 시간(ms)을 로컬에서 직접 추적한다 - 진행 중(pause/resume 시각)엔
+  // 여기서 직접 계산하고, 새로고침 등으로 진행 중인 기록을 복구할 때는 checkActiveRecord가
+  // 서버가 내려주는 total_paused_seconds로 이 값을 다시 채워넣는다.
   const pausedAccumMsRef = useRef(0);
   const pausedAtRef = useRef(null);
 
@@ -88,6 +74,10 @@ const RecordStart = () => {
   useEffect(() => {
     let ignore = false;
     const checkActiveRecord = async () => {
+      // courseId가 바뀌어 effect가 재실행될 때(SPA 내비게이션, 새로고침 없이), 이전
+      // courseId에서 떴던 차단 메시지가 상황이 해소된 뒤에도 남아있지 않도록 초기화한다
+      setBlockedMessage('');
+      setBlockedRecordTarget(null);
       try {
         const res = await apiFetch('/v1/records/?page=1&size=1');
         if (ignore || !res.ok) return;
@@ -97,16 +87,27 @@ const RecordStart = () => {
 
         if (String(latest.course_id) === String(courseId)) {
           setRecord(latest);
+          const startedMs = new Date(latest.started_at).getTime();
+          const pausedAccumMs = (latest.total_paused_seconds ?? 0) * 1000;
+          pausedAccumMsRef.current = pausedAccumMs;
+
           if (latest.paused_at) {
-            pausedAtRef.current = new Date(latest.paused_at).getTime();
+            const pausedAtMs = new Date(latest.paused_at).getTime();
+            pausedAtRef.current = pausedAtMs;
+            setElapsedSeconds(Math.max(0, Math.floor((pausedAtMs - startedMs - pausedAccumMs) / 1000)));
             setPhase('paused');
           } else {
+            setElapsedSeconds(Math.max(0, Math.floor((Date.now() - startedMs - pausedAccumMs) / 1000)));
             setPhase('running');
           }
         } else {
           setBlockedMessage(
             '다른 코스에서 진행 중인 러닝 기록이 있어요. 먼저 그 기록을 종료해주세요.'
           );
+          setBlockedRecordTarget({
+            courseType: latest.course_type.toLowerCase(),
+            courseId: latest.course_id,
+          });
         }
       } catch {
         // 조용히 무시 - 복구 실패해도 새로 시작하는 데는 지장 없음
@@ -207,6 +208,26 @@ const RecordStart = () => {
     }
   };
 
+  // "이미 종료된 기록입니다" 실패는 이 record_id에 대해 종료 요청이 이전에 이미 서버에
+  // 성공적으로 처리됐다는 뜻이다(네트워크 에러로 그 응답을 못 받고 "저장 안 됨"으로 표시된 뒤
+  // "다시 시도"를 눌렀을 때 등). 실제 저장된 결과를 조회해서 보여준다. 성공하면 true.
+  const tryShowActualResult = async () => {
+    try {
+      const checkRes = await apiFetch(`/v1/records/${record.record_id}`);
+      if (checkRes.ok) {
+        const checkData = await checkRes.json();
+        if (checkData.ended_at) {
+          setResult(checkData);
+          setPhase('finished');
+          return true;
+        }
+      }
+    } catch {
+      // 재확인도 실패하면 호출한 쪽에서 그냥 에러로 처리한다
+    }
+    return false;
+  };
+
   const handleEnd = async () => {
     setError('');
     setPhase('ending');
@@ -230,6 +251,12 @@ const RecordStart = () => {
       });
       if (!res.ok) {
         const data = await res.json().catch(() => null);
+        // "이미 종료된 기록"은 실패가 아니라, 이전 시도가 실제로는 성공했다는 뜻이다 -
+        // (예: 네트워크 에러로 "저장 안 됨"이 떴던 걸 "다시 시도"로 재요청한 경우) 그
+        // 이전 결과를 그대로 보여준다.
+        if (data?.detail === '이미 종료된 기록입니다.' && (await tryShowActualResult())) {
+          return;
+        }
         // 종료 버튼을 누른 시점에 사용자 의도상 러닝은 끝난 것으로 본다 - 저장에
         // 실패해도(너무 짧음 등) 진행 중이던 화면(타이머)으로 되돌리지 않는다.
         setError(data?.detail ?? '러닝을 종료하지 못했어요.');
@@ -239,6 +266,10 @@ const RecordStart = () => {
       setResult(await res.json());
       setPhase('finished');
     } catch {
+      // 네트워크 에러(응답 자체를 못 받음)일 수 있어, 실제로 서버에 저장됐는지 다시
+      // 확인한다 - 요청은 서버에 도달해 처리됐는데 응답만 유실된 경우 "저장 안 됨"으로
+      // 잘못 안내하는 걸 방지하기 위함
+      if (await tryShowActualResult()) return;
       setError('서버에 연결할 수 없어요.');
       setPhase('end_failed');
     }
@@ -282,7 +313,17 @@ const RecordStart = () => {
         {error && <p className="course-list-status error">{error}</p>}
 
         {blockedMessage && phase === 'idle' && (
-          <p className="course-list-status error">{blockedMessage}</p>
+          <div className="record-start-panel">
+            <p className="course-list-status error">{blockedMessage}</p>
+            {blockedRecordTarget && (
+              <Link
+                to={`/records/start/${blockedRecordTarget.courseType}/${blockedRecordTarget.courseId}`}
+                className="primary-button record-end-button"
+              >
+                진행 중인 기록으로 이동
+              </Link>
+            )}
+          </div>
         )}
 
         {phase === 'idle' && !blockedMessage && (
@@ -345,12 +386,14 @@ const RecordStart = () => {
           <div className="record-start-panel record-result">
             <div className="record-timer">{formatElapsed(elapsedSeconds)}</div>
             <p className="record-hint">기록이 저장되지 않았어요</p>
-            <Link
-              to={`/courses/${courseType}/${courseId}`}
-              className="primary-button record-end-button"
-            >
-              코스로 돌아가기
-            </Link>
+            <div className="review-item-actions">
+              <button type="button" className="primary-button record-end-button" onClick={handleEnd}>
+                다시 시도
+              </button>
+              <Link to={`/courses/${courseType}/${courseId}`} className="text-button">
+                코스로 돌아가기
+              </Link>
+            </div>
           </div>
         )}
 

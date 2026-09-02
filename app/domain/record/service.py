@@ -319,7 +319,7 @@ async def get_records(
     )
     total = total_result.scalar_one()
     result = await session.execute(
-        select(Record, Course.course_name)
+        select(Record, Course.course_name, Course.course_type)
         .join(Course, Course.course_id == Record.course_id)
         .where(Record.user_id == user_id)
         .order_by(Record.created_at.desc())
@@ -327,9 +327,10 @@ async def get_records(
         .limit(size)
     )
     items = []
-    for record, course_name in result.all():
+    for record, course_name, course_type in result.all():
         # Record 모델의 실제 컬럼이 아니라 이 응답 한정으로만 붙이는 값 - DB에는 저장되지 않는다.
         record.course_name = course_name
+        record.course_type = course_type
         items.append(MyRecordResponse.model_validate(record))
     return MyRecordListResponse(
         items=items,

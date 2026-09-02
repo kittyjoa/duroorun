@@ -4,6 +4,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.domain.course.models import CourseType
+
 
 class RecordStartRequest(BaseModel):
     """러닝시작: 시작 눌렀을 때 보내는 데이터"""
@@ -31,6 +33,9 @@ class RecordResponse(BaseModel):
     started_at: datetime
     ended_at: datetime | None
     paused_at: datetime | None
+    # 진행 중 지금까지 일시정지로 쓴 누적 시간(초) - 새로고침 등으로 진행 중인 기록을
+    # 복구할 때, 프론트가 경과 시간을 정확히 재계산하는 데 필요
+    total_paused_seconds: int
     created_at: datetime
     pace: float | None
     is_completed: bool
@@ -48,10 +53,14 @@ class MyRecordResponse(BaseModel):
     record_id: int
     course_id: int
     course_name: str
+    # 다른 코스에서 진행 중인 기록을 안내할 때, 프론트가 그 기록 화면 URL
+    # (/records/start/{course_type}/{course_id})을 만들 수 있도록 포함
+    course_type: CourseType
     duration_seconds: int | None
     started_at: datetime
     ended_at: datetime | None
     paused_at: datetime | None
+    total_paused_seconds: int
     created_at: datetime
     pace: float | None
     is_completed: bool

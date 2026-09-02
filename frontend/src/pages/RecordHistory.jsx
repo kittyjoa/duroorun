@@ -3,23 +3,7 @@ import { Link } from 'react-router-dom';
 
 import { apiFetch } from '../api';
 import Header from '../components/layout/Header';
-
-const formatElapsed = (totalSeconds) => {
-  if (totalSeconds == null) return '정보 없음';
-  const h = Math.floor(totalSeconds / 3600);
-  const m = Math.floor((totalSeconds % 3600) / 60);
-  const s = totalSeconds % 60;
-  const pad = (n) => String(n).padStart(2, '0');
-  return h > 0 ? `${pad(h)}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
-};
-
-// pace: 초/km (백엔드가 duration_seconds / course.distance로 계산)
-const formatPace = (paceSecondsPerKm) => {
-  if (paceSecondsPerKm == null) return '정보 없음';
-  const m = Math.floor(paceSecondsPerKm / 60);
-  const s = Math.round(paceSecondsPerKm % 60);
-  return `${m}'${String(s).padStart(2, '0')}" /km`;
-};
+import { formatElapsed, formatPace } from '../utils/format';
 
 const formatDate = (isoString) => {
   const date = new Date(isoString);
@@ -35,24 +19,34 @@ const RecordHistory = () => {
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [loadingMore, setLoadingMore] = useState(false);
+  // "더보기" 실패는 error(초기 로딩 에러)와 분리한다 - error를 같이 쓰면 render 조건이
+  // !error를 요구해서, 더보기만 실패해도 이미 불러온 목록 전체가 화면에서 사라져버린다
+  const [loadMoreError, setLoadMoreError] = useState('');
   // 컴포넌트가 언마운트된 뒤 도착하는 응답이 setState를 시도하지 않도록 막는다
   const unmountedRef = useRef(false);
 
   const fetchRecords = async (targetPage = 1, { append = false } = {}) => {
     if (append) {
       setLoadingMore(true);
+      setLoadMoreError('');
     } else {
       setLoading(true);
+      setError('');
     }
-    setError('');
     try {
       const res = await apiFetch(`/v1/records/?page=${targetPage}&size=${RECORD_PAGE_SIZE}`);
       if (unmountedRef.current) return;
       if (!res.ok) {
-        if (res.status === 401) {
-          setError('로그인이 필요해요.');
+        const message =
+          res.status === 401
+            ? '로그인이 필요해요.'
+            : append
+              ? '기록을 더 불러오지 못했어요.'
+              : '러닝 기록을 불러오지 못했어요.';
+        if (append) {
+          setLoadMoreError(message);
         } else {
-          setError('러닝 기록을 불러오지 못했어요.');
+          setError(message);
         }
         return;
       }
@@ -62,7 +56,14 @@ const RecordHistory = () => {
       setPage(data.page);
       setTotal(data.total);
     } catch {
-      if (!unmountedRef.current) setError('서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.');
+      if (!unmountedRef.current) {
+        const message = '서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.';
+        if (append) {
+          setLoadMoreError(message);
+        } else {
+          setError(message);
+        }
+      }
     } finally {
       if (!unmountedRef.current) {
         if (append) {
@@ -75,6 +76,9 @@ const RecordHistory = () => {
   };
 
   useEffect(() => {
+    // StrictMode(개발 모드)가 effect를 마운트→클린업→마운트 순으로 두 번 실행하므로,
+    // 매 실행 시작 시점에 반드시 false로 되돌려야 두 번째 실행의 응답이 무시되지 않는다
+    unmountedRef.current = false;
     fetchRecords(1);
     return () => {
       unmountedRef.current = true;
@@ -120,6 +124,8 @@ const RecordHistory = () => {
             ))}
           </ul>
         )}
+
+        {loadMoreError && <p className="course-list-status error">{loadMoreError}</p>}
 
         {!loading && records.length < total && (
           <button

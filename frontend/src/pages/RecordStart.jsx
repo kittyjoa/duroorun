@@ -135,8 +135,17 @@ const RecordStart = () => {
   const handleStart = async () => {
     setError('');
     setPhase('starting');
+
+    let position;
     try {
-      const position = await getPosition();
+      position = await getPosition();
+    } catch {
+      setError('위치 정보를 가져올 수 없어요. 위치 권한을 확인해주세요.');
+      setPhase('idle');
+      return;
+    }
+
+    try {
       const res = await apiFetch('/v1/records/start', {
         method: 'POST',
         body: JSON.stringify({
@@ -158,7 +167,7 @@ const RecordStart = () => {
       setElapsedSeconds(0);
       setPhase('running');
     } catch {
-      setError('위치 정보를 가져올 수 없어요. 위치 권한을 확인해주세요.');
+      setError('서버에 연결할 수 없어요.');
       setPhase('idle');
     }
   };
@@ -168,7 +177,8 @@ const RecordStart = () => {
     try {
       const res = await apiFetch(`/v1/records/${record.record_id}/pause`, { method: 'PATCH' });
       if (!res.ok) {
-        setError('일시정지에 실패했어요.');
+        const data = await res.json().catch(() => null);
+        setError(data?.detail ?? '일시정지에 실패했어요.');
         return;
       }
       pausedAtRef.current = Date.now();
@@ -183,7 +193,8 @@ const RecordStart = () => {
     try {
       const res = await apiFetch(`/v1/records/${record.record_id}/resume`, { method: 'PATCH' });
       if (!res.ok) {
-        setError('재시작에 실패했어요.');
+        const data = await res.json().catch(() => null);
+        setError(data?.detail ?? '재시작에 실패했어요.');
         return;
       }
       if (pausedAtRef.current) {
@@ -199,8 +210,17 @@ const RecordStart = () => {
   const handleEnd = async () => {
     setError('');
     setPhase('ending');
+
+    let position;
     try {
-      const position = await getPosition();
+      position = await getPosition();
+    } catch {
+      setError('위치 정보를 가져올 수 없어요. 위치 권한을 확인해주세요.');
+      setPhase('end_failed');
+      return;
+    }
+
+    try {
       const res = await apiFetch(`/v1/records/${record.record_id}/end`, {
         method: 'PATCH',
         body: JSON.stringify({
@@ -219,7 +239,7 @@ const RecordStart = () => {
       setResult(await res.json());
       setPhase('finished');
     } catch {
-      setError('위치 정보를 가져올 수 없어요. 위치 권한을 확인해주세요.');
+      setError('서버에 연결할 수 없어요.');
       setPhase('end_failed');
     }
   };

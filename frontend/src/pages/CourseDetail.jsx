@@ -48,6 +48,10 @@ const CourseDetail = () => {
   const [reviewFormError, setReviewFormError] = useState('');
   const [deletingReviewId, setDeletingReviewId] = useState(null);
   const [uploadingImageReviewId, setUploadingImageReviewId] = useState(null);
+  // reviews는 더보기로 불러온 만큼만 담겨있어서, 거기서 내 리뷰를 찾으면 리뷰가 많은
+  // 코스에서 내 리뷰가 뒤 페이지로 밀려나 있을 때 오탐(있는데 없다고 판단)이 난다.
+  // /reviews/mine으로 별도 확인해서 페이지네이션과 무관하게 정확히 판별한다.
+  const [hasMyReview, setHasMyReview] = useState(false);
 
   useEffect(() => {
     // 이 effect가 재실행된 뒤(= 더 최신 요청이 시작된 뒤) 도착하는 이전 응답은 무시
@@ -120,6 +124,25 @@ const CourseDetail = () => {
     fetchReviews(1);
   }, [courseId]);
 
+  const checkMyReview = async () => {
+    if (!user) {
+      setHasMyReview(false);
+      return;
+    }
+    try {
+      const res = await apiFetch('/v1/reviews/mine?page=1&size=100');
+      if (!res.ok) return;
+      const data = await res.json();
+      setHasMyReview(data.items.some((review) => String(review.course_id) === String(courseId)));
+    } catch {
+      // 조용히 무시 - 확인 실패해도 작성 시도 자체는 가능하고, 이미 썼다면 백엔드가 최종 검증함
+    }
+  };
+
+  useEffect(() => {
+    checkMyReview();
+  }, [user, courseId]);
+
   const handleLoadMoreReviews = () => {
     fetchReviews(reviewsPage + 1, { append: true });
   };
@@ -158,6 +181,7 @@ const CourseDetail = () => {
       setReviewDifficulty('NORMAL');
       setEditingReviewId(null);
       await fetchReviews(1);
+      await checkMyReview();
     } catch {
       setReviewFormError('서버에 연결할 수 없어요.');
     } finally {
@@ -176,6 +200,7 @@ const CourseDetail = () => {
         return;
       }
       await fetchReviews(1);
+      await checkMyReview();
     } catch {
       setReviewActionError('서버에 연결할 수 없어요.');
     } finally {
@@ -225,8 +250,6 @@ const CourseDetail = () => {
       setReviewActionError('서버에 연결할 수 없어요.');
     }
   };
-
-  const myReview = user ? reviews.find((review) => review.user_id === user.user_id) : null;
 
   if (loading) {
     return (
@@ -328,7 +351,7 @@ const CourseDetail = () => {
         <div className="course-reviews">
           <h2>리뷰</h2>
 
-          {user && !myReview && (
+          {user && !hasMyReview && (
             <form className="review-form" onSubmit={handleSubmitReview}>
               <h3 className="review-form-title">나의 리뷰 작성하기</h3>
               <textarea

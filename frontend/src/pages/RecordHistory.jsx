@@ -26,42 +26,55 @@ const formatDate = (isoString) => {
   return date.toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric' });
 };
 
+const RECORD_PAGE_SIZE = 20;
+
 const RecordHistory = () => {
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
+
+  const fetchRecords = async (targetPage = 1, { append = false } = {}) => {
+    if (append) {
+      setLoadingMore(true);
+    } else {
+      setLoading(true);
+    }
+    setError('');
+    try {
+      const res = await apiFetch(`/v1/records/?page=${targetPage}&size=${RECORD_PAGE_SIZE}`);
+      if (!res.ok) {
+        if (res.status === 401) {
+          setError('로그인이 필요해요.');
+        } else {
+          setError('러닝 기록을 불러오지 못했어요.');
+        }
+        return;
+      }
+      const data = await res.json();
+      setRecords((prev) => (append ? [...prev, ...data.items] : data.items));
+      setPage(data.page);
+      setTotal(data.total);
+    } catch {
+      setError('서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.');
+    } finally {
+      if (append) {
+        setLoadingMore(false);
+      } else {
+        setLoading(false);
+      }
+    }
+  };
 
   useEffect(() => {
-    let ignore = false;
-
-    const fetchRecords = async () => {
-      setLoading(true);
-      setError('');
-      try {
-        const res = await apiFetch('/v1/records/?page=1&size=20');
-        if (ignore) return;
-        if (!res.ok) {
-          if (res.status === 401) {
-            setError('로그인이 필요해요.');
-          } else {
-            setError('러닝 기록을 불러오지 못했어요.');
-          }
-          return;
-        }
-        const data = await res.json();
-        setRecords(data.items);
-      } catch {
-        if (!ignore) setError('서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.');
-      } finally {
-        if (!ignore) setLoading(false);
-      }
-    };
-    fetchRecords();
-
-    return () => {
-      ignore = true;
-    };
+    fetchRecords(1);
   }, []);
+
+  const handleLoadMore = () => {
+    fetchRecords(page + 1, { append: true });
+  };
 
   return (
     <>
@@ -97,6 +110,17 @@ const RecordHistory = () => {
               </li>
             ))}
           </ul>
+        )}
+
+        {!loading && records.length < total && (
+          <button
+            type="button"
+            className="text-button review-load-more"
+            onClick={handleLoadMore}
+            disabled={loadingMore}
+          >
+            {loadingMore ? '불러오는 중...' : '기록 더보기'}
+          </button>
         )}
 
         <Link to="/courses" className="text-button">

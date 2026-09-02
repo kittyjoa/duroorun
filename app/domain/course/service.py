@@ -146,7 +146,11 @@ async def _get_custom_course(
     query = (
         select(Course)
         .where(Course.course_id == course_id, Course.course_type == CourseType.CUSTOM)
-        .options(selectinload(Course.waypoints), selectinload(Course.images))
+        .options(
+            selectinload(Course.waypoints),
+            selectinload(Course.images),
+            selectinload(Course.creator),
+        )
     )
     if for_update:
         # for_update 스위치로 수정/삭제할때만 True (같은 코스 건드리는 다른 요청 끼어들지 못하게)
@@ -187,6 +191,7 @@ async def create_course(
     # (방금 생성된 코스라 리뷰가 없어 항상 None이지만, 나머지 3곳과 패턴을 맞춰둔다)
     course.average_difficulty = await get_average_difficulty(session, course.course_id)
     course.review_summary = await get_review_summary(session, course.course_id)
+    course.creator_nickname = course.creator.nickname if course.creator else None
     return CustomCourseDetailResponse.model_validate(course)
 
 
@@ -196,6 +201,7 @@ async def get_custom_course(session: AsyncSession, course_id: int) -> CustomCour
     # Course 모델의 실제 컬럼이 아니라 이 응답 한정으로만 붙이는 값 - DB에는 저장되지 않는다.
     course.average_difficulty = await get_average_difficulty(session, course_id)
     course.review_summary = await get_review_summary(session, course_id)
+    course.creator_nickname = course.creator.nickname if course.creator else None
     return CustomCourseDetailResponse.model_validate(course)
 
 
@@ -234,8 +240,12 @@ async def get_custom_courses(
         base_query.order_by(Course.created_at.desc(), Course.course_id.desc())
         .offset((page - 1) * size)
         .limit(size)
+        .options(selectinload(Course.creator))
     )
     courses = (await session.execute(list_query)).scalars().all()
+    for c in courses:
+        # Course 모델의 실제 컬럼이 아니라 이 응답 한정으로만 붙이는 값 - DB에는 저장되지 않는다.
+        c.creator_nickname = c.creator.nickname if c.creator else None
 
     return CustomCourseListResponse(
         items=[CustomCourseSummary.model_validate(c) for c in courses],
@@ -293,6 +303,7 @@ async def update_course(
     # Course 모델의 실제 컬럼이 아니라 이 응답 한정으로만 붙이는 값 - DB에는 저장되지 않는다.
     course.average_difficulty = await get_average_difficulty(session, course_id)
     course.review_summary = await get_review_summary(session, course_id)
+    course.creator_nickname = course.creator.nickname if course.creator else None
     return CustomCourseDetailResponse.model_validate(course)
 
 
@@ -398,6 +409,7 @@ async def upload_course_image(
     # Course 모델의 실제 컬럼이 아니라 이 응답 한정으로만 붙이는 값 - DB에는 저장되지 않는다.
     course.average_difficulty = await get_average_difficulty(session, course_id)
     course.review_summary = await get_review_summary(session, course_id)
+    course.creator_nickname = course.creator.nickname if course.creator else None
     return CustomCourseDetailResponse.model_validate(course)
 
 

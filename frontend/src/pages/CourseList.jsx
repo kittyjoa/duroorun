@@ -212,6 +212,9 @@ const CourseList = () => {
                 >
                   <div className="course-art">
                     <div className="mini-route" />
+                    {courseType === 'custom' && user && course.created_by === user.user_id && (
+                      <span className="course-card-mine">내 코스</span>
+                    )}
                     <span className="course-badge">
                       {DIFFICULTY_LABEL[course.difficulty] ?? '난이도 정보 없음'}
                     </span>
@@ -227,13 +230,11 @@ const CourseList = () => {
                         ? `약 ${course.estimated_time}분`
                         : '소요시간 정보 없음'}
                     </p>
+                    {courseType === 'custom' && (
+                      <p>제작자: {course.creator_nickname ?? '알 수 없음'}</p>
+                    )}
                   </div>
                 </Link>
-                {courseType === 'custom' && user && course.created_by === user.user_id && (
-                  <Link to={`/courses/custom/${course.course_id}/edit`} className="course-card-edit">
-                    수정
-                  </Link>
-                )}
               </div>
             ))}
           </div>

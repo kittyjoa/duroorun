@@ -58,6 +58,7 @@ h1 em { font-style:normal; color:var(--blue); }
 .section-kicker { color:var(--green); font-size:13px; }
 h2 { font-size:36px; letter-spacing:-1.5px; margin:8px 0 0; line-height:1.25; }
 .section-heading>a { font-size:13px; color:#61726e; border-bottom:1px solid #d2d9d5; padding-bottom:5px; }
+.section-heading .primary-button { display:inline-flex; align-items:center; justify-content:center; color:#fff; border-bottom:0; padding:16px 22px; font-family:'Apple SD Gothic Neo',sans-serif; }
 .course-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:18px; }
 .course-card { border:1px solid #e1e7e2; border-radius:6px; overflow:hidden; transition:.25s ease; cursor:pointer; }
 .course-card:hover { transform:translateY(-5px); box-shadow:0 14px 32px rgba(24,62,56,.12); }
@@ -68,6 +69,7 @@ h2 { font-size:36px; letter-spacing:-1.5px; margin:8px 0 0; line-height:1.25; }
 .course-art:after { bottom:-72%; background:rgba(13,177,75,.24); transform:rotate(-5deg); }
 .course-number { position:absolute; left:16px; top:12px; font-size:34px; color:rgba(255,255,255,.8); }
 .course-badge { position:absolute; right:13px; top:13px; background:rgba(255,255,255,.86); padding:5px 9px; border-radius:12px; font-size:10px; color:#45635d; }
+.course-card-mine { position:absolute; left:13px; top:13px; z-index:3; background:rgba(255,255,255,.9); padding:5px 10px; border-radius:12px; font-size:10px; color:var(--green); font-weight:600; }
 .mini-route { position:absolute; z-index:2; width:110px; height:60px; border:3px dotted white; border-radius:50%; left:35%; top:38%; transform:rotate(-18deg); }
 .course-info { padding:18px; }
 .course-info>span { color:var(--blue); font-size:11px; }.course-info h3 { margin:7px 0; font-size:20px; }.course-info p { margin:0; color:#82918e; font-family:'Apple SD Gothic Neo',sans-serif; font-size:12px; }
@@ -174,12 +176,15 @@ button.profile-avatar { border:0; padding:0; font:inherit; cursor:pointer; }
 .course-detail-page { max-width:720px; margin:0 auto; padding:124px 24px 80px; min-height:100vh; }
 .course-detail-heading { margin:18px 0 28px; }
 .course-detail-heading h1 { font-size:32px; letter-spacing:-1.5px; margin:8px 0 0; }
+.course-detail-creator { margin:6px 0 0; color:#5c706c; font-family:'Apple SD Gothic Neo',sans-serif; font-size:13px; }
 .course-detail-info { display:grid; grid-template-columns:repeat(2,1fr); gap:18px; margin:0 0 28px; padding:20px; border:1px solid #e1e7e2; border-radius:10px; }
 .course-detail-info div { display:flex; flex-direction:column; gap:4px; }
 .course-detail-info dt { color:#82928e; font-family:'Apple SD Gothic Neo',sans-serif; font-size:12px; }
-.course-detail-info dd { margin:0; font-size:16px; color:var(--ink); }
+.course-detail-info dd { margin:0; font-size:16px; color:var(--ink); font-family:'Apple SD Gothic Neo',sans-serif; }
 .course-detail-desc { color:#5c706c; font-family:'Apple SD Gothic Neo',sans-serif; font-size:14px; line-height:1.8; white-space:pre-line; }
-.course-detail-source-note { margin:-14px 0 20px; font-size:12px; color:#9aa9a5; }
+.course-detail-source-note { margin:-14px 0 20px; font-size:12px; color:#9aa9a5; font-family:'Apple SD Gothic Neo',sans-serif; }
+.course-detail-page .section-kicker,
+.course-detail-page .text-button { font-family:'Apple SD Gothic Neo',sans-serif; }
 @media (max-width:560px) { .course-detail-info { grid-template-columns:1fr; } }
 
 /* 코스 타입 탭 / 필터 바 */
@@ -191,7 +196,7 @@ button.profile-avatar { border:0; padding:0; font:inherit; cursor:pointer; }
 .course-list-load-more { display:flex; justify-content:center; margin-top:28px; }
 .course-list-load-more button { border:1px solid #dadce0; background:#fff; border-radius:8px; padding:10px 24px; font-size:13px; font-family:'Apple SD Gothic Neo',sans-serif; cursor:pointer; }
 .course-list-load-more button:disabled { opacity:.6; cursor:not-allowed; }
-.course-detail-images { display:flex; flex-wrap:wrap; gap:10px; margin-top:20px; }
+.course-detail-images { display:flex; flex-wrap:wrap; gap:10px; margin:20px 0 28px; }
 .course-detail-images img { width:160px; height:120px; object-fit:cover; border-radius:8px; }
 
 .kakao-map-wrapper { position:relative; border:1px solid #e1e7e2; border-radius:10px; overflow:hidden; margin:0 0 28px; }

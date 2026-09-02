@@ -158,6 +158,9 @@ class CustomCourseSummary(BaseModel):
     difficulty: Difficulty | None
     estimated_time: int | None
     created_by: int | None
+    # created_by가 가리키는 유저의 닉네임 - service.py에서 course.creator로 eager load 후 채워 넣음
+    # (탈퇴 등으로 created_by가 NULL이면 이 값도 None)
+    creator_nickname: str | None = None
     is_active: bool
     created_at: datetime
 
@@ -183,6 +186,9 @@ class CustomCourseDetailResponse(BaseModel):
     estimated_time: int | None
     course_description: str | None
     created_by: int | None
+    # created_by가 가리키는 유저의 닉네임 - service.py에서 course.creator로 eager load 후 채워 넣음
+    # (탈퇴 등으로 created_by가 NULL이면 이 값도 None)
+    creator_nickname: str | None = None
     # DRNB와 동일하게 record의 완주 인증 기준점으로 쓰임. 다만 커스텀 코스는 등록 시
     # 첫/마지막 경유지로 항상 채워지므로 DRNB의 None 케이스 결정과 무관
     start_lat: float | None

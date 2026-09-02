@@ -85,6 +85,9 @@ const CourseDetail = () => {
             {courseType === 'drnb' ? (course.sigun ?? course.brd_div) : '커스텀 코스'}
           </span>
           <h1>{course.course_name}</h1>
+          {courseType === 'custom' && (
+            <p className="course-detail-creator">제작자: {course.creator_nickname ?? '알 수 없음'}</p>
+          )}
         </div>
 
         <dl className="course-detail-info">

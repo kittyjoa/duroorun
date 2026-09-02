@@ -12,12 +12,17 @@ export const usePaginatedCourses = (path, buildQuery, deps) => {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState('');
+  const [loadMoreError, setLoadMoreError] = useState('');
   const requestIdRef = useRef(0);
 
   useEffect(() => {
     // path 아직 없으면 loading 상태 그대로 둔 채 대기 — 준비되면 deps 변경으로 재실행
     if (!path) return;
     const myRequestId = ++requestIdRef.current;
+    // 새 1페이지 요청은 진행 중이던 "더보기" 요청을 무효화함
+    // ㅡ 새 요청 시작되면 전 요청은 여기서 직접 초기화(finally가 request ID 가드에 막혀서)
+    setLoadingMore(false);
+    setLoadMoreError('');
 
     (async () => {
       setLoading(true);
@@ -51,13 +56,13 @@ export const usePaginatedCourses = (path, buildQuery, deps) => {
     const myRequestId = ++requestIdRef.current;
     const nextPage = page + 1;
     setLoadingMore(true);
-    setError('');
+    setLoadMoreError('');
     try {
       const query = buildQuery(nextPage);
       const res = await apiFetch(query ? `${path}?${query}` : path);
       if (requestIdRef.current !== myRequestId) return;
       if (!res.ok) {
-        setError('코스 목록을 불러오지 못했어요.');
+        setLoadMoreError('코스 목록을 불러오지 못했어요.');
         return;
       }
       const data = await res.json();
@@ -66,7 +71,7 @@ export const usePaginatedCourses = (path, buildQuery, deps) => {
       setPage(nextPage);
     } catch {
       if (requestIdRef.current === myRequestId) {
-        setError('서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.');
+        setLoadMoreError('서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.');
       }
     } finally {
       if (requestIdRef.current === myRequestId) setLoadingMore(false);
@@ -80,5 +85,16 @@ export const usePaginatedCourses = (path, buildQuery, deps) => {
     setTotal((prev) => prev - 1);
   };
 
-  return { courses, total, page, loading, loadingMore, error, setError, loadMore, removeCourse };
+  return {
+    courses,
+    total,
+    page,
+    loading,
+    loadingMore,
+    error,
+    loadMoreError,
+    setError,
+    loadMore,
+    removeCourse,
+  };
 };

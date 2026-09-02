@@ -76,7 +76,7 @@ const CourseList = () => {
 
   // 탭 전환/필터 변경 시 1페이지부터 다시 조회(목록 교체), "더보기"는 다음 페이지를 이어 붙임
   // ㅡ 훅 내부에서 요청 세대를 관리해 늦게 도착한 응답(예: 더보기 도중 탭 전환)은 버림
-  const { courses, total, loading, loadingMore, error, loadMore } = usePaginatedCourses(
+  const { courses, total, loading, loadingMore, error, loadMoreError, loadMore } = usePaginatedCourses(
     path,
     buildQuery,
     [courseType, activeDebouncedFilters],
@@ -241,8 +241,9 @@ const CourseList = () => {
 
         {!loading && !error && courses.length < total && (
           <div className="course-list-load-more">
+            {loadMoreError && <p className="course-list-status error">{loadMoreError}</p>}
             <button type="button" onClick={loadMore} disabled={loadingMore}>
-              {loadingMore ? '불러오는 중...' : '더보기'}
+              {loadingMore ? '불러오는 중...' : loadMoreError ? '다시 시도' : '더보기'}
             </button>
           </div>
         )}

@@ -17,7 +17,7 @@ const MyCourses = () => {
   const buildQuery = (targetPage) =>
     `created_by=${user.user_id}&page=${targetPage}&size=${PAGE_SIZE}`;
 
-  const { courses, total, loading, loadingMore, error, setError, loadMore, removeCourse } =
+  const { courses, total, loading, loadingMore, error, loadMoreError, setError, loadMore, removeCourse } =
     usePaginatedCourses(path, buildQuery, [user?.user_id]);
 
   const handleDelete = async (courseId) => {
@@ -108,8 +108,9 @@ const MyCourses = () => {
 
         {!loading && !error && courses.length < total && (
           <div className="course-list-load-more">
+            {loadMoreError && <p className="course-list-status error">{loadMoreError}</p>}
             <button type="button" onClick={loadMore} disabled={loadingMore}>
-              {loadingMore ? '불러오는 중...' : '더보기'}
+              {loadingMore ? '불러오는 중...' : loadMoreError ? '다시 시도' : '더보기'}
             </button>
           </div>
         )}

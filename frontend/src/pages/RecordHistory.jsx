@@ -1,0 +1,110 @@
+import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
+
+import { apiFetch } from '../api';
+import Header from '../components/layout/Header';
+
+const formatElapsed = (totalSeconds) => {
+  if (totalSeconds == null) return '정보 없음';
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = totalSeconds % 60;
+  const pad = (n) => String(n).padStart(2, '0');
+  return h > 0 ? `${pad(h)}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+};
+
+// pace: 초/km (백엔드가 duration_seconds / course.distance로 계산)
+const formatPace = (paceSecondsPerKm) => {
+  if (paceSecondsPerKm == null) return '정보 없음';
+  const m = Math.floor(paceSecondsPerKm / 60);
+  const s = Math.round(paceSecondsPerKm % 60);
+  return `${m}'${String(s).padStart(2, '0')}" /km`;
+};
+
+const formatDate = (isoString) => {
+  const date = new Date(isoString);
+  return date.toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric' });
+};
+
+const RecordHistory = () => {
+  const [records, setRecords] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let ignore = false;
+
+    const fetchRecords = async () => {
+      setLoading(true);
+      setError('');
+      try {
+        const res = await apiFetch('/v1/records/?page=1&size=20');
+        if (ignore) return;
+        if (!res.ok) {
+          if (res.status === 401) {
+            setError('로그인이 필요해요.');
+          } else {
+            setError('러닝 기록을 불러오지 못했어요.');
+          }
+          return;
+        }
+        const data = await res.json();
+        setRecords(data.items);
+      } catch {
+        if (!ignore) setError('서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.');
+      } finally {
+        if (!ignore) setLoading(false);
+      }
+    };
+    fetchRecords();
+
+    return () => {
+      ignore = true;
+    };
+  }, []);
+
+  return (
+    <>
+      <Header />
+      <main className="course-detail-page">
+        <div className="course-detail-heading">
+          <span className="section-kicker">러닝 기록</span>
+          <h1>내 러닝 히스토리</h1>
+        </div>
+
+        {loading && <p className="course-list-status">불러오는 중...</p>}
+        {error && <p className="course-list-status error">{error}</p>}
+
+        {!loading && !error && records.length === 0 && (
+          <p className="course-list-status">아직 러닝 기록이 없어요.</p>
+        )}
+
+        {!loading && !error && records.length > 0 && (
+          <ul className="record-history-list">
+            {records.map((record) => (
+              <li key={record.record_id} className="record-history-item">
+                <div className="record-history-main">
+                  <strong>{record.course_name}</strong>
+                  <span className="record-hint">{formatDate(record.started_at)}</span>
+                </div>
+                <div className="record-history-stats">
+                  <span>{formatElapsed(record.duration_seconds)}</span>
+                  <span>{formatPace(record.pace)}</span>
+                  <span className={record.is_completed ? 'record-badge success' : 'record-badge'}>
+                    {record.is_completed ? '완주' : '미완주'}
+                  </span>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        <Link to="/courses" className="text-button">
+          코스 찾아보기 →
+        </Link>
+      </main>
+    </>
+  );
+};
+
+export default RecordHistory;

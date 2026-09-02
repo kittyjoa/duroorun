@@ -12,8 +12,9 @@ from app.config import settings
 from app.domain.course.models import Course
 from app.domain.record.models import Record
 from app.domain.record.schemas import (
+    MyRecordListResponse,
+    MyRecordResponse,
     RecordEndRequest,
-    RecordListResponse,
     RecordResponse,
     RecordStartRequest,
 )
@@ -310,23 +311,28 @@ async def get_records(
     user_id: int,
     page: int,
     size: int,
-) -> RecordListResponse:
-    """내 러닝기록 조회(내 기록 전체리스트)"""
+) -> MyRecordListResponse:
+    """내 러닝기록 조회(내 기록 전체리스트, 코스명 포함)"""
     offset = (page - 1) * size
     total_result = await session.execute(
         select(func.count()).select_from(Record).where(Record.user_id == user_id)
     )
     total = total_result.scalar_one()
     result = await session.execute(
-        select(Record)
+        select(Record, Course.course_name)
+        .join(Course, Course.course_id == Record.course_id)
         .where(Record.user_id == user_id)
         .order_by(Record.created_at.desc())
         .offset(offset)
         .limit(size)
     )
-    records = result.scalars().all()
-    return RecordListResponse(
-        items=[RecordResponse.model_validate(r) for r in records],
+    items = []
+    for record, course_name in result.all():
+        # Record 모델의 실제 컬럼이 아니라 이 응답 한정으로만 붙이는 값 - DB에는 저장되지 않는다.
+        record.course_name = course_name
+        items.append(MyRecordResponse.model_validate(record))
+    return MyRecordListResponse(
+        items=items,
         total=total,
         page=page,
         size=size,

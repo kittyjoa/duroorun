@@ -7,7 +7,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.security import get_current_admin
 from app.database import get_db
 from app.domain.admin import service as admin_service
-from app.domain.admin.schemas import BannedAccountListResponse, ForceWithdrawRequest
+from app.domain.admin.schemas import (
+    BannedAccountListResponse,
+    DashboardStatsResponse,
+    ForceWithdrawRequest,
+)
 from app.domain.user.models import User
 from app.domain.user.schemas import MessageResponse
 from app.redis import get_redis
@@ -49,3 +53,12 @@ async def unban_account(
 ) -> None:
     """밴을 해제하여 해당 소셜 계정으로 재가입할 수 있게 합니다."""
     await admin_service.unban_account(banned_id, db)
+
+
+@router.get("/dashboard", response_model=DashboardStatsResponse, summary="대시보드 통계 조회")
+async def get_dashboard(
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+) -> DashboardStatsResponse:
+    """유저/러닝기록/코스/리뷰/편의시설 통계를 조회합니다."""
+    return await admin_service.get_dashboard_stats(db)

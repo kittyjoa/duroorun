@@ -1,6 +1,7 @@
 """관리자 대시보드 - 비즈니스 로직 (통계 집계 등)."""
 
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException, status
 from redis.asyncio import Redis
@@ -25,6 +26,8 @@ from app.domain.record.models import Record
 from app.domain.review.models import Review
 from app.domain.user.models import BannedAccount, User
 from app.domain.user.service import force_withdraw_user as _force_withdraw_user
+
+KST = ZoneInfo("Asia/Seoul")
 
 
 async def force_withdraw_user(user_id: int, reason: str, db: AsyncSession, redis: Redis) -> None:
@@ -74,8 +77,9 @@ async def unban_account(banned_id: int, db: AsyncSession) -> None:
 
 
 def _period_boundaries(now: datetime) -> tuple[datetime, datetime, datetime, datetime]:
-    """오늘/이번주(월요일)/이번달/올해 시작 시각을 반환합니다."""
-    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    """오늘/이번주(월요일)/이번달/올해 시작 시각을 한국 시간(KST) 기준으로 반환합니다."""
+    now_kst = now.astimezone(KST)
+    today_start = now_kst.replace(hour=0, minute=0, second=0, microsecond=0)
     week_start = today_start - timedelta(days=today_start.weekday())
     month_start = today_start.replace(day=1)
     year_start = today_start.replace(month=1, day=1)

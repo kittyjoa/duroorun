@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 
 import { apiFetch } from '../api';
@@ -52,6 +52,14 @@ const CourseDetail = () => {
   // 코스에서 내 리뷰가 뒤 페이지로 밀려나 있을 때 오탐(있는데 없다고 판단)이 난다.
   // /reviews/mine으로 별도 확인해서 페이지네이션과 무관하게 정확히 판별한다.
   const [hasMyReview, setHasMyReview] = useState(false);
+  // 컴포넌트가 언마운트된 뒤 도착하는 리뷰 응답이 setState를 시도하지 않도록 막는다
+  const unmountedRef = useRef(false);
+  useEffect(
+    () => () => {
+      unmountedRef.current = true;
+    },
+    []
+  );
 
   useEffect(() => {
     // 이 effect가 재실행된 뒤(= 더 최신 요청이 시작된 뒤) 도착하는 이전 응답은 무시
@@ -101,21 +109,25 @@ const CourseDetail = () => {
       const res = await apiFetch(
         `/v1/reviews/courses/${courseId}?page=${page}&size=${REVIEW_PAGE_SIZE}`
       );
+      if (unmountedRef.current) return;
       if (!res.ok) {
         setReviewsError('리뷰를 불러오지 못했어요.');
         return;
       }
       const data = await res.json();
+      if (unmountedRef.current) return;
       setReviews((prev) => (append ? [...prev, ...data.items] : data.items));
       setReviewsPage(data.page);
       setReviewsTotal(data.total);
     } catch {
-      setReviewsError('서버에 연결할 수 없어요.');
+      if (!unmountedRef.current) setReviewsError('서버에 연결할 수 없어요.');
     } finally {
-      if (append) {
-        setLoadingMoreReviews(false);
-      } else {
-        setReviewsLoading(false);
+      if (!unmountedRef.current) {
+        if (append) {
+          setLoadingMoreReviews(false);
+        } else {
+          setReviewsLoading(false);
+        }
       }
     }
   };

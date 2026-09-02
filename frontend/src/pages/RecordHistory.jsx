@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 
 import { apiFetch } from '../api';
@@ -35,6 +35,8 @@ const RecordHistory = () => {
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [loadingMore, setLoadingMore] = useState(false);
+  // 컴포넌트가 언마운트된 뒤 도착하는 응답이 setState를 시도하지 않도록 막는다
+  const unmountedRef = useRef(false);
 
   const fetchRecords = async (targetPage = 1, { append = false } = {}) => {
     if (append) {
@@ -45,6 +47,7 @@ const RecordHistory = () => {
     setError('');
     try {
       const res = await apiFetch(`/v1/records/?page=${targetPage}&size=${RECORD_PAGE_SIZE}`);
+      if (unmountedRef.current) return;
       if (!res.ok) {
         if (res.status === 401) {
           setError('로그인이 필요해요.');
@@ -54,22 +57,28 @@ const RecordHistory = () => {
         return;
       }
       const data = await res.json();
+      if (unmountedRef.current) return;
       setRecords((prev) => (append ? [...prev, ...data.items] : data.items));
       setPage(data.page);
       setTotal(data.total);
     } catch {
-      setError('서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.');
+      if (!unmountedRef.current) setError('서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.');
     } finally {
-      if (append) {
-        setLoadingMore(false);
-      } else {
-        setLoading(false);
+      if (!unmountedRef.current) {
+        if (append) {
+          setLoadingMore(false);
+        } else {
+          setLoading(false);
+        }
       }
     }
   };
 
   useEffect(() => {
     fetchRecords(1);
+    return () => {
+      unmountedRef.current = true;
+    };
   }, []);
 
   const handleLoadMore = () => {

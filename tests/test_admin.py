@@ -319,3 +319,21 @@ async def test_period_counts_excludes_future_timestamps(db_session, ctx):
 
     assert after.this_year == baseline.this_year
     assert after.this_month == baseline.this_month
+
+
+# 12. 최근 로그인했더라도 탈퇴한 유저는 활성 유저 수에서 제외
+async def test_active_users_30d_excludes_withdrawn_users(db_session, ctx):
+    baseline = (await admin_service.get_user_stats(db_session)).active_users_30d
+
+    user = User(
+        nickname=f"pytest-admin-{uuid.uuid4().hex[:12]}",
+        last_login_at=datetime.now(UTC),
+        deleted_at=datetime.now(UTC),
+    )
+    db_session.add(user)
+    await db_session.commit()
+    ctx.user_ids.append(user.user_id)
+
+    after = (await admin_service.get_user_stats(db_session)).active_users_30d
+
+    assert after == baseline

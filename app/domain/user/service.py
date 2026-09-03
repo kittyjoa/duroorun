@@ -2,7 +2,7 @@
 
 import re
 import secrets
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from urllib.parse import urlencode
 
 import httpx
@@ -10,7 +10,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import HTTPException, UploadFile, status
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, or_, select, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -51,6 +51,33 @@ _ALLOWED_IMAGE_TYPES = {
 
 _NICKNAME_PATTERN = re.compile(r"^[가-힣a-zA-Z0-9]+$")
 _LOCATION_PATTERN = re.compile(r"^[가-힣a-zA-Z0-9\s]+$")
+
+_LAST_LOGIN_UPDATE_THRESHOLD = timedelta(minutes=5)
+
+
+async def _touch_last_login(user_id: int, db: AsyncSession) -> None:
+    """로그인/토큰 재발급 시 last_login_at을 갱신합니다.
+
+    - 통계용 부가 작업이라 실패해도 로그인/재발급 자체를 막지 않도록 예외를 흡수한다.
+    - 최근 _LAST_LOGIN_UPDATE_THRESHOLD 이내에 이미 갱신됐으면 쓰기를 생략해, Access
+      Token 만료 주기(30분)마다 반복되는 재발급 요청이 매번 DB write를 유발하지 않게 한다.
+    """
+    now = datetime.now(UTC)
+    try:
+        await db.execute(
+            update(User)
+            .where(
+                User.user_id == user_id,
+                or_(
+                    User.last_login_at.is_(None),
+                    User.last_login_at < now - _LAST_LOGIN_UPDATE_THRESHOLD,
+                ),
+            )
+            .values(last_login_at=now)
+        )
+        await db.commit()
+    except SQLAlchemyError:
+        await db.rollback()
 
 
 async def _check_not_banned(
@@ -212,8 +239,7 @@ async def kakao_login(
         result = await db.execute(select(User).where(User.user_id == social.user_id))
         user = result.scalar_one()
 
-    user.last_login_at = datetime.now(UTC)
-    await db.commit()
+    await _touch_last_login(user.user_id, db)
 
     access_token = create_access_token(user.user_id)
     refresh_token, refresh_jti = create_refresh_token(user.user_id)
@@ -361,8 +387,7 @@ async def naver_login(
         result = await db.execute(select(User).where(User.user_id == social.user_id))
         user = result.scalar_one()
 
-    user.last_login_at = datetime.now(UTC)
-    await db.commit()
+    await _touch_last_login(user.user_id, db)
 
     access_token = create_access_token(user.user_id)
     refresh_token, refresh_jti = create_refresh_token(user.user_id)
@@ -503,8 +528,7 @@ async def google_login(
         result = await db.execute(select(User).where(User.user_id == social.user_id))
         user = result.scalar_one()
 
-    user.last_login_at = datetime.now(UTC)
-    await db.commit()
+    await _touch_last_login(user.user_id, db)
 
     access_token = create_access_token(user.user_id)
     refresh_token, refresh_jti = create_refresh_token(user.user_id)
@@ -542,10 +566,7 @@ async def refresh_tokens(refresh_token: str, db: AsyncSession, redis: Redis) -> 
             detail="토큰이 탈취되었거나 만료되었습니다. 다시 로그인해주세요",
         )
 
-    await db.execute(
-        update(User).where(User.user_id == user_id).values(last_login_at=datetime.now(UTC))
-    )
-    await db.commit()
+    await _touch_last_login(user_id, db)
 
     return new_access_token, new_refresh_token
 

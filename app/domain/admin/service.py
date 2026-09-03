@@ -146,7 +146,10 @@ async def get_user_stats(db: AsyncSession) -> UserStatsResponse:
         await db.execute(
             select(func.count())
             .select_from(User)
-            .where(User.last_login_at >= datetime.now(UTC) - timedelta(days=30))
+            .where(
+                User.last_login_at >= datetime.now(UTC) - timedelta(days=30),
+                User.deleted_at.is_(None),
+            )
         )
     ).scalar_one()
 

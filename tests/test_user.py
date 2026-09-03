@@ -25,6 +25,7 @@ from app.domain.record.models import Record
 from app.domain.review.models import Review
 from app.domain.user.models import ProviderType, SocialAccount, User
 from app.domain.user.service import (
+    _touch_last_login,
     kakao_login,
     logout,
     refresh_tokens,
@@ -311,3 +312,20 @@ async def test_update_profile_rejects_duplicate_nickname(db_session, ctx):
         await update_profile(user_b, nickname=taken_nickname, location=None, db=db_session)
 
     assert exc_info.value.status_code == 409
+
+
+# 11. 짧은 시간 내 반복 호출 시 last_login_at 갱신을 생략함 (불필요한 DB write 방지)
+async def test_touch_last_login_skips_recent_update(db_session, ctx):
+    user = await _make_user(db_session, ctx)
+
+    await _touch_last_login(user.user_id, db_session)
+    first = (
+        await db_session.execute(select(User.last_login_at).where(User.user_id == user.user_id))
+    ).scalar_one()
+
+    await _touch_last_login(user.user_id, db_session)
+    second = (
+        await db_session.execute(select(User.last_login_at).where(User.user_id == user.user_id))
+    ).scalar_one()
+
+    assert first == second

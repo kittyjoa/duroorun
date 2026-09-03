@@ -1,38 +1,41 @@
 """코스 (DRNB + 커스텀) - Pydantic 스키마 (요청/응답 검증)."""
 
+import json
 from datetime import datetime
+from pathlib import Path
 from typing import Annotated
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
+from shapely.geometry import Point, shape
+from shapely.geometry.base import BaseGeometry
 
 from app.domain.course.models import Difficulty
 from app.domain.review.schemas import ReviewSummaryResponse
 
-# 강원도 대략적인 경계 박스 (frontend/src/pages/CustomCourseForm.jsx의 _GANGWON_BOXES와 동일)
-# ㅡ 커스텀 코스는 강원도 전체 범위로 제한
-# 강원 본토 박스 + 철원군 전용 박스 2개로 구성
-_GANGWON_MAIN_BOX = {"lat": (36.9, 38.7), "lng": (127.4, 129.5)}
-# 철원군 전 지역이 38선 이북이라 서울과 안 겹침
-_CHEORWON_BOX = {"lat": (37.95, 38.45), "lng": (127.0, 127.45)}
+# 강원도 실제 경계(폴리곤) - 통계청 SGIS 시도 경계 데이터에서 강원도만 추출
+# (출처/추출: app/scripts/extract_gangwon_boundary.py, 공공누리 제1유형)
+# ㅡ 프론트 검증은 여전히 대략적인 박스(안내용) - 최종 기준은 여기
+_GANGWON_BOUNDARY_PATH = Path(__file__).parent / "gangwon_boundary" / "gangwon_boundary.geojson"
+with _GANGWON_BOUNDARY_PATH.open(encoding="utf-8") as _f:
+    _GANGWON_BOUNDARY: BaseGeometry = shape(json.load(_f)["geometry"])
 
 
-def _in_box(lat: float, lng: float, box: dict) -> bool:
-    return box["lat"][0] <= lat <= box["lat"][1] and box["lng"][0] <= lng <= box["lng"][1]
+def _in_gangwon(lat: float, lng: float) -> bool:
+    # shapely는 (경도, 위도)=(x, y) 순서 - lat/lng 그대로 넣으면 조용히 틀린 결과 나옴
+    # covers(): contains()와 달리 경계선 위의 점도 포함 (도 경계 걸친 좌표 포함 위해)
+    return _GANGWON_BOUNDARY.covers(Point(lng, lat))
 
 
 class CourseWaypointCreate(BaseModel):
     """커스텀 코스 경유지 좌표 입력 - 리스트 순서가 곧 sequence
-    ㅡ 강원 본토 박스 + 철원군 박스 중 하나에 속해야 함 (강원도 밖 코스 생성 막기)"""
+    ㅡ 강원도 실제 경계(폴리곤) 안에 있어야 함 (강원도 밖 코스 생성 막기)"""
 
     latitude: float = Field(ge=-90, le=90)
     longitude: float = Field(ge=-180, le=180)
 
     @model_validator(mode="after")
     def _validate_gangwon_bounds(self) -> "CourseWaypointCreate":
-        if not (
-            _in_box(self.latitude, self.longitude, _GANGWON_MAIN_BOX)
-            or _in_box(self.latitude, self.longitude, _CHEORWON_BOX)
-        ):
+        if not _in_gangwon(self.latitude, self.longitude):
             raise ValueError("강원도 지역 내 좌표만 입력할 수 있습니다.")
         return self
 

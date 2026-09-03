@@ -185,20 +185,28 @@ async def test_update_course_replaces_waypoints_and_start_end_coords(
         {"latitude": 37.7519, "longitude": 128.8761},  # 강릉시청
     ]
 
-    result = await update_course(
-        session=db_session,
-        user_id=owner.user_id,
-        course_id=course.course_id,
-        body=CourseUpdateRequest(waypoints=new_waypoints),
-    )
+    try:
+        result = await update_course(
+            session=db_session,
+            user_id=owner.user_id,
+            course_id=course.course_id,
+            body=CourseUpdateRequest(waypoints=new_waypoints),
+        )
 
-    assert [(w.latitude, w.longitude) for w in result.waypoints] == [
-        (38.2070, 128.5918),
-        (37.3422, 127.9202),
-        (37.7519, 128.8761),
-    ]
-    assert (result.start_lat, result.start_lng) == (38.2070, 128.5918)
-    assert (result.end_lat, result.end_lng) == (37.7519, 128.8761)
+        assert [(w.latitude, w.longitude) for w in result.waypoints] == [
+            (38.2070, 128.5918),
+            (37.3422, 127.9202),
+            (37.7519, 128.8761),
+        ]
+        assert (result.start_lat, result.start_lng) == (38.2070, 128.5918)
+        assert (result.end_lat, result.end_lng) == (37.7519, 128.8761)
+    finally:
+        # 도커 테스트 돌리다 뒷정리 단계에서 FK 제약 위반이 나서 여기서 먼저 정리
+        # ㅡ finally로 course_waypoints를 먼저 지우도록 고침
+        await db_session.execute(
+            delete(CourseWaypoint).where(CourseWaypoint.course_id == course.course_id)
+        )
+        await db_session.commit()
 
 
 def test_update_course_rejects_waypoint_outside_gangwon():

@@ -63,10 +63,27 @@ const _totalDistanceKm = (points) => {
 
 // FastAPI/pydantic 검증 실패 422의 detail 등 어떤 형태의 에러 응답 와도
 // 항상 안전한 문자열로 변환해서 반환 (로컬 헬퍼 함수)
+// - waypoints 배열 항목 검증 실패시 loc 안에서 'waypoints'를 찾아
+//   그 다음 값을 인덱스로 - 몇 번째 경유지가 문제인지 붙여줌
+// - pydantic이 커스텀 ValueError 메시지 앞에 자동으로 붙이는 "Value error, " 제거
+const _cleanValidatorMessage = (msg) => msg.replace(/^Value error,\s*/, '');
+
 const _extractErrorMessage = (detail, fallback) => {
   if (typeof detail === 'string') return detail;
   if (Array.isArray(detail)) {
-    const messages = detail.map((item) => item?.msg).filter(Boolean);
+    const messages = detail
+      .map((item) => {
+        if (!item?.msg) return null;
+        const loc = item.loc ?? [];
+        const waypointsPos = loc.indexOf('waypoints');
+        const index = waypointsPos !== -1 ? loc[waypointsPos + 1] : undefined;
+        const msg = _cleanValidatorMessage(item.msg);
+        if (typeof index === 'number') {
+          return `${index + 1}번째 경유지: ${msg}`;
+        }
+        return msg;
+      })
+      .filter(Boolean);
     if (messages.length > 0) return messages.join(' / ');
   }
   return fallback;
@@ -142,7 +159,8 @@ const CustomCourseForm = () => {
         setWaypoints((data.waypoints ?? []).map((w) => ({ lat: w.latitude, lng: w.longitude })));
         setImages(data.images ?? []);
         setOwnerId(data.created_by);
-      } catch {
+      } catch (err) {
+        console.error('커스텀 코스 조회 실패:', err);
         if (!ignore) setLoadError('서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.');
       } finally {
         if (!ignore) setLoading(false);
@@ -188,6 +206,8 @@ const CustomCourseForm = () => {
   }, []);
 
   const handleRemoveWaypoint = (index) => {
+    // 경유지 순서가 바뀌면 이전에 뜬 "N번째 경유지" 에러의 N이 안 맞을 수 있어 제거
+    setError('');
     setWaypointsDirty(true);
     setWaypoints((prev) => {
       const next = prev.filter((_, i) => i !== index);
@@ -197,6 +217,13 @@ const CustomCourseForm = () => {
       }));
       return next;
     });
+  };
+
+  const handleClearWaypoints = () => {
+    setError('');
+    setWaypointsDirty(true);
+    setWaypoints([]);
+    setForm((f) => ({ ...f, distance: '' }));
   };
 
   const handleSubmit = async (event) => {
@@ -241,7 +268,8 @@ const CustomCourseForm = () => {
         // 완료 모달에서 사용자가 사진 추가/목록 이동을 직접 고르게 함
         setCreatedCourseId(data.course_id);
       }
-    } catch {
+    } catch (err) {
+      console.error('커스텀 코스 저장 실패:', err);
       setError('서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.');
     } finally {
       setSaving(false);
@@ -279,7 +307,8 @@ const CustomCourseForm = () => {
       }
       const data = await res.json();
       setImages(data.images ?? []);
-    } catch {
+    } catch (err) {
+      console.error('코스 이미지 업로드 실패:', err);
       setError('서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.');
     } finally {
       event.target.value = '';
@@ -298,7 +327,8 @@ const CustomCourseForm = () => {
         return;
       }
       setImages((prev) => prev.filter((img) => img.image_id !== imageId));
-    } catch {
+    } catch (err) {
+      console.error('코스 이미지 삭제 실패:', err);
       setError('서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.');
     }
   };
@@ -313,7 +343,8 @@ const CustomCourseForm = () => {
         return;
       }
       navigate('/courses');
-    } catch {
+    } catch (err) {
+      console.error('커스텀 코스 삭제 실패:', err);
       setError('서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.');
     }
   };
@@ -389,6 +420,10 @@ const CustomCourseForm = () => {
 
             <label>경유지 (지도를 클릭해서 순서대로 추가)</label>
             <p className="kakao-map-hint-static">⚠️ 지도가 제대로 표시되지 않으면 새로고침을 한번 해주세요</p>
+            <p className="kakao-map-hint-static">
+              ➡️ 경유지끼리 직선으로 이어 경로를 표시합니다. 실제 도로·트레일과 다를 수 있습니다. 
+              촘촘히 찍을수록 실제 경로에 가까워집니다.
+            </p>
             {/* GPS는 선택 기능 — 응답을 기다리지 않고 기본(강원) 위치로 지도부터 띄우고,
                 아직 경유지를 안 찍은 상태에서 GPS가 강원 근처로 도착하면 center로 중심만 옮김 */}
             <KakaoMap
@@ -403,19 +438,29 @@ const CustomCourseForm = () => {
               emptyHint="지도를 클릭해서 경유지를 추가하세요"
             />
             {waypoints.length > 0 && (
-              <ul className="waypoint-list">
-                {waypoints.map((p, index) => (
-                  // eslint-disable-next-line react/no-array-index-key -- 좌표만으로는 중복 클릭 시 key 충돌 가능, 순서 자체가 의미있는 값이라 index가 자연스러움
-                  <li key={index}>
-                    <span>
-                      {index + 1}. {p.lat.toFixed(5)}, {p.lng.toFixed(5)}
-                    </span>
-                    <button type="button" onClick={() => handleRemoveWaypoint(index)}>
-                      삭제
-                    </button>
-                  </li>
-                ))}
-              </ul>
+              <>
+                <ul className="waypoint-list">
+                  {waypoints.map((p, index) => (
+                    // eslint-disable-next-line react/no-array-index-key
+                    // 좌표만으로는 중복 클릭 시 key 충돌 가능, 순서 때문에 index가 자연스러움
+                    <li key={index}>
+                      <span>
+                        {index + 1}. {p.lat.toFixed(5)}, {p.lng.toFixed(5)}
+                      </span>
+                      <button type="button" onClick={() => handleRemoveWaypoint(index)}>
+                        삭제
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+                <button
+                  type="button"
+                  className="text-button waypoint-clear-all"
+                  onClick={handleClearWaypoints}
+                >
+                  경유지 전체 삭제
+                </button>
+              </>
             )}
 
             <label htmlFor="distance">거리 (km)</label>
@@ -449,8 +494,12 @@ const CustomCourseForm = () => {
                   {images.map((image) => (
                     <div key={image.image_id} className="course-form-image">
                       <img src={image.image_url} alt="" />
-                      <button type="button" onClick={() => handleImageDelete(image.image_id)}>
-                        삭제
+                      <button
+                        type="button"
+                        aria-label="사진 삭제"
+                        onClick={() => handleImageDelete(image.image_id)}
+                      >
+                        ×
                       </button>
                     </div>
                   ))}
@@ -478,7 +527,11 @@ const CustomCourseForm = () => {
                 {saving ? '저장 중...' : '저장하기'}
               </button>
               {isEditMode && (
-                <button type="button" className="text-button" onClick={handleDelete}>
+                <button
+                  type="button"
+                  className="primary-button danger-button"
+                  onClick={handleDelete}
+                >
                   코스 삭제
                 </button>
               )}

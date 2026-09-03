@@ -37,7 +37,8 @@ const CourseDetail = () => {
         }
         const data = await res.json();
         setCourse(data);
-      } catch {
+      } catch (err) {
+        console.error('코스 상세 조회 실패:', err);
         if (!ignore) setError('서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.');
       } finally {
         if (!ignore) setLoading(false);
@@ -152,21 +153,26 @@ const CourseDetail = () => {
           />
         )}
         {courseType === 'custom' && course.waypoints?.length > 0 && (
-          <KakaoMap
-            path={course.waypoints.map((w) => ({ lat: w.latitude, lng: w.longitude }))}
-            markers={[
-              {
-                lat: course.waypoints[0].latitude,
-                lng: course.waypoints[0].longitude,
-                label: '시작',
-              },
-              {
-                lat: course.waypoints.at(-1).latitude,
-                lng: course.waypoints.at(-1).longitude,
-                label: '종료',
-              },
-            ]}
-          />
+          <>
+            <p className="kakao-map-hint-static">
+              경유지끼리 직선으로 이은 참고 경로입니다. 실제 도로·트레일과 다를 수 있습니다.
+            </p>
+            <KakaoMap
+              path={course.waypoints.map((w) => ({ lat: w.latitude, lng: w.longitude }))}
+              markers={[
+                {
+                  lat: course.waypoints[0].latitude,
+                  lng: course.waypoints[0].longitude,
+                  label: '시작',
+                },
+                {
+                  lat: course.waypoints.at(-1).latitude,
+                  lng: course.waypoints.at(-1).longitude,
+                  label: '종료',
+                },
+              ]}
+            />
+          </>
         )}
       </main>
     </>

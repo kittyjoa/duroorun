@@ -1,6 +1,7 @@
 """코스 (DRNB + 커스텀) - API 엔드포인트 (APIRouter)."""
 
 from fastapi import APIRouter, Depends, Query, UploadFile, status
+from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import get_current_user
@@ -8,6 +9,7 @@ from app.database import get_db
 from app.domain.course import service as course_service
 from app.domain.course.models import Difficulty
 from app.domain.course.schemas import (
+    GANGWON_BOUNDARY_PATH,
     CourseCreateRequest,
     CourseUpdateRequest,
     CustomCourseDetailResponse,
@@ -18,6 +20,18 @@ from app.domain.course.schemas import (
 from app.domain.user.models import User
 
 router = APIRouter(prefix="/courses", tags=["courses"])
+
+
+@router.get("/gangwon-boundary")
+async def get_gangwon_boundary():
+    """강원도 경계 geojson 원본 그대로 반환 (프론트 커스텀 코스 폼이 경유지 지역을
+    백엔드와 동일한 폴리곤으로 검증하는 데 사용). 정적 공개 데이터라 인증 불필요.
+    ㅡ 도 경계는 거의 안 바뀌므로 캐시 헤더를 길게 둠"""
+    return FileResponse(
+        GANGWON_BOUNDARY_PATH,
+        media_type="application/geo+json",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
 
 
 @router.get("/drnb", response_model=DrnbCourseListResponse)

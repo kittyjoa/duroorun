@@ -14,9 +14,10 @@ from app.domain.review.schemas import ReviewSummaryResponse
 
 # 강원도 실제 경계(폴리곤) - 통계청 SGIS 시도 경계 데이터에서 강원도만 추출
 # (출처/추출: app/scripts/extract_gangwon_boundary.py, 공공누리 제1유형)
-# ㅡ 프론트 검증은 여전히 대략적인 박스(안내용) - 최종 기준은 여기
-_GANGWON_BOUNDARY_PATH = Path(__file__).parent / "gangwon_boundary" / "gangwon_boundary.geojson"
-with _GANGWON_BOUNDARY_PATH.open(encoding="utf-8") as _f:
+# ㅡ 프론트도 이 파일을 GET /courses/gangwon-boundary로 그대로 받아 같은 폴리곤으로 검증함
+#   (router.py) - 경로 상수를 여기 하나만 둬서 프론트/백엔드가 다른 파일을 보는 일이 없게 함
+GANGWON_BOUNDARY_PATH = Path(__file__).parent / "gangwon_boundary" / "gangwon_boundary.geojson"
+with GANGWON_BOUNDARY_PATH.open(encoding="utf-8") as _f:
     _GANGWON_BOUNDARY: BaseGeometry = shape(json.load(_f)["geometry"])
 
 

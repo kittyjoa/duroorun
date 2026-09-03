@@ -5,13 +5,22 @@
 검증하기 위함. 테스트마다 코스를 새로 만들고 끝나면 관련 데이터를 전부 정리한다.
 """
 
+import asyncio
+import sys
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
+# Windows 기본 이벤트루프(ProactorEventLoop)는 psycopg async 드라이버와 호환되지 않음
+# ㅡ macOS/Linux(도커 포함)에서는 영향 없음
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 import pytest_asyncio
+from redis.asyncio import Redis
 from sqlalchemy import delete
 
+from app.config import settings
 from app.database import AsyncSessionLocal
 from app.domain.course.models import Course, CourseType
 from app.domain.record.models import Record
@@ -31,6 +40,19 @@ class ReviewTestCourse:
 async def db_session():
     async with AsyncSessionLocal() as session:
         yield session
+
+
+@pytest_asyncio.fixture
+async def redis_client():
+    """실제 Redis(docker-compose redis 서비스)에 테스트 전용 연결을 새로 맺는다.
+
+    ㅡ app.redis.get_redis()의 전역 캐시 커넥션을 재사용하면, 테스트마다 새로
+      뜨는 이벤트루프와 이전 테스트의 커넥션이 서로 안 맞아 "Event loop is
+      closed" 에러가 남 — db_session처럼 테스트마다 새 연결을 맺고 정리한다.
+    """
+    redis = Redis.from_url(settings.REDIS_URL, decode_responses=True)
+    yield redis
+    await redis.aclose()
 
 
 @pytest_asyncio.fixture

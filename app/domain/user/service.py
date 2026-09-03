@@ -1,8 +1,9 @@
 """회원/인증 - 비즈니스 로직."""
 
+import logging
 import re
 import secrets
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from urllib.parse import urlencode
 
 import httpx
@@ -10,7 +11,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import HTTPException, UploadFile, status
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, or_, select, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,7 +30,9 @@ from app.core.security import (
 from app.domain.course.models import Course
 from app.domain.record.models import Record
 from app.domain.review.models import Review
-from app.domain.user.models import ProviderType, SocialAccount, User
+from app.domain.user.models import BannedAccount, ProviderType, SocialAccount, User
+
+logger = logging.getLogger(__name__)
 
 _KAKAO_AUTH_URL = "https://kauth.kakao.com/oauth/authorize"
 _KAKAO_TOKEN_URL = "https://kauth.kakao.com/oauth/token"
@@ -51,6 +54,51 @@ _ALLOWED_IMAGE_TYPES = {
 
 _NICKNAME_PATTERN = re.compile(r"^[가-힣a-zA-Z0-9]+$")
 _LOCATION_PATTERN = re.compile(r"^[가-힣a-zA-Z0-9\s]+$")
+
+_LAST_LOGIN_UPDATE_THRESHOLD = timedelta(minutes=5)
+
+
+async def _touch_last_login(user_id: int, db: AsyncSession) -> None:
+    """로그인/토큰 재발급 시 last_login_at을 갱신합니다.
+
+    - 통계용 부가 작업이라 실패해도 로그인/재발급 자체를 막지 않도록 예외를 흡수한다.
+    - 최근 _LAST_LOGIN_UPDATE_THRESHOLD 이내에 이미 갱신됐으면 쓰기를 생략해, Access
+      Token 만료 주기(30분)마다 반복되는 재발급 요청이 매번 DB write를 유발하지 않게 한다.
+    """
+    now = datetime.now(UTC)
+    try:
+        await db.execute(
+            update(User)
+            .where(
+                User.user_id == user_id,
+                or_(
+                    User.last_login_at.is_(None),
+                    User.last_login_at < now - _LAST_LOGIN_UPDATE_THRESHOLD,
+                ),
+            )
+            .values(last_login_at=now)
+        )
+        await db.commit()
+    except SQLAlchemyError:
+        await db.rollback()
+        logger.warning("last_login_at 갱신 실패: user_id=%s", user_id)
+
+
+async def _check_not_banned(
+    provider_type: ProviderType, provider_uid: str, db: AsyncSession
+) -> None:
+    """강제 탈퇴로 차단된 소셜 계정인지 확인합니다. 신규 가입 직전에만 호출."""
+    result = await db.execute(
+        select(BannedAccount).where(
+            BannedAccount.provider_type == provider_type,
+            BannedAccount.provider_uid == provider_uid,
+        )
+    )
+    if result.scalar_one_or_none() is not None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="강제 탈퇴 처리된 계정으로는 재가입할 수 없습니다",
+        )
 
 
 def _has_valid_image_signature(content_type: str, file_bytes: bytes) -> bool:
@@ -174,6 +222,7 @@ async def kakao_login(
 
     is_new_user = social is None
     if is_new_user:
+        await _check_not_banned(ProviderType.KAKAO, provider_uid, db)
         try:
             user = User(name=name)
             db.add(user)
@@ -193,6 +242,8 @@ async def kakao_login(
     else:
         result = await db.execute(select(User).where(User.user_id == social.user_id))
         user = result.scalar_one()
+
+    await _touch_last_login(user.user_id, db)
 
     access_token = create_access_token(user.user_id)
     refresh_token, refresh_jti = create_refresh_token(user.user_id)
@@ -319,6 +370,7 @@ async def naver_login(
 
     is_new_user = social is None
     if is_new_user:
+        await _check_not_banned(ProviderType.NAVER, provider_uid, db)
         try:
             user = User(name=name)
             db.add(user)
@@ -338,6 +390,8 @@ async def naver_login(
     else:
         result = await db.execute(select(User).where(User.user_id == social.user_id))
         user = result.scalar_one()
+
+    await _touch_last_login(user.user_id, db)
 
     access_token = create_access_token(user.user_id)
     refresh_token, refresh_jti = create_refresh_token(user.user_id)
@@ -457,6 +511,7 @@ async def google_login(
 
     is_new_user = social is None
     if is_new_user:
+        await _check_not_banned(ProviderType.GOOGLE, provider_uid, db)
         try:
             user = User(name=name)
             db.add(user)
@@ -477,6 +532,8 @@ async def google_login(
         result = await db.execute(select(User).where(User.user_id == social.user_id))
         user = result.scalar_one()
 
+    await _touch_last_login(user.user_id, db)
+
     access_token = create_access_token(user.user_id)
     refresh_token, refresh_jti = create_refresh_token(user.user_id)
     await save_refresh_jti(user.user_id, refresh_jti, redis)
@@ -484,7 +541,7 @@ async def google_login(
     return access_token, refresh_token
 
 
-async def refresh_tokens(refresh_token: str, redis: Redis) -> tuple[str, str]:
+async def refresh_tokens(refresh_token: str, db: AsyncSession, redis: Redis) -> tuple[str, str]:
     """Refresh Token을 검증하고 새 Access Token + Refresh Token을 발급합니다."""
     payload = decode_token(refresh_token)
 
@@ -502,6 +559,18 @@ async def refresh_tokens(refresh_token: str, redis: Redis) -> tuple[str, str]:
             detail="유효하지 않은 토큰입니다",
         )
 
+    # 탈퇴한 유저는 Redis에 옛 refresh token이 남아있어도(정리 실패 등) 재발급을 거부한다
+    active_user = (
+        await db.execute(
+            select(User.user_id).where(User.user_id == user_id, User.deleted_at.is_(None))
+        )
+    ).scalar_one_or_none()
+    if active_user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="탈퇴했거나 존재하지 않는 사용자입니다",
+        )
+
     new_access_token = create_access_token(user_id)
     new_refresh_token, new_jti = create_refresh_token(user_id)
 
@@ -512,6 +581,8 @@ async def refresh_tokens(refresh_token: str, redis: Redis) -> tuple[str, str]:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="토큰이 탈취되었거나 만료되었습니다. 다시 로그인해주세요",
         )
+
+    await _touch_last_login(user_id, db)
 
     return new_access_token, new_refresh_token
 
@@ -612,7 +683,7 @@ async def upload_profile_image(user: User, file: UploadFile, db: AsyncSession) -
         try:
             await delete_file(new_url)
         except (ClientError, BotoCoreError):
-            pass
+            logger.warning("고아 파일 정리 실패 (R2): user_id=%s, url=%s", user.user_id, new_url)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="이미지 저장에 실패했습니다. 잠시 후 다시 시도해주세요",
@@ -623,7 +694,7 @@ async def upload_profile_image(user: User, file: UploadFile, db: AsyncSession) -
         try:
             await delete_file(old_url)
         except (ClientError, BotoCoreError):
-            pass
+            logger.warning("기존 이미지 정리 실패 (R2): user_id=%s, url=%s", user.user_id, old_url)
 
     return new_url
 
@@ -649,11 +720,15 @@ async def delete_profile_image(user: User, db: AsyncSession) -> None:
     try:
         await delete_file(old_url)
     except (ClientError, BotoCoreError):
-        pass
+        logger.warning("기존 이미지 정리 실패 (R2): user_id=%s, url=%s", user.user_id, old_url)
 
 
-async def withdraw_user(user: User, access_token: str, db: AsyncSession, redis: Redis) -> None:
-    """회원 탈퇴: 개인정보 익명화 + 소셜 계정 삭제 + 연관 데이터 익명화 (단일 트랜잭션)."""
+async def _anonymize_user_data(user: User, db: AsyncSession) -> str | None:
+    """탈퇴 공통 처리: 개인정보 익명화 + 소셜 계정 삭제 + 연관 데이터 익명화.
+
+    commit은 호출자가 수행 (강제 탈퇴 시 banned_accounts 기록과 같은 트랜잭션으로 묶기 위함).
+    반환값은 삭제 전 프로필 이미지 URL (R2 정리용).
+    """
     now = datetime.now(tz=UTC)
 
     old_profile_image_url = user.profile_image_url
@@ -677,6 +752,12 @@ async def withdraw_user(user: User, access_token: str, db: AsyncSession, redis: 
         update(Course).where(Course.created_by == user.user_id).values(created_by=None)
     )
 
+    return old_profile_image_url
+
+
+async def withdraw_user(user: User, access_token: str, db: AsyncSession, redis: Redis) -> None:
+    """회원 탈퇴(본인) - 단일 트랜잭션 처리."""
+    old_profile_image_url = await _anonymize_user_data(user, db)
     await db.commit()
 
     # Redis 정리 실패해도 DB 탈퇴는 완료 — get_current_user가 deleted_at으로 차단하므로 정상 응답
@@ -687,11 +768,57 @@ async def withdraw_user(user: User, access_token: str, db: AsyncSession, redis: 
             await add_to_blacklist(jti, redis)
         await delete_refresh_token(user.user_id, redis)
     except RedisError:
-        pass
+        logger.warning("탈퇴 시 refresh token 정리 실패 (Redis): user_id=%s", user.user_id)
 
     # R2 정리 실패해도 탈퇴는 완료 — DB에는 이미 NULL 처리됨(고아 파일로만 남음)
     if old_profile_image_url:
         try:
             await delete_file(old_profile_image_url)
         except (ClientError, BotoCoreError):
-            pass
+            logger.warning(
+                "탈퇴 시 프로필 이미지 정리 실패 (R2): user_id=%s, url=%s",
+                user.user_id,
+                old_profile_image_url,
+            )
+
+
+async def force_withdraw_user(
+    user: User, admin_id: int, reason: str, db: AsyncSession, redis: Redis
+) -> None:
+    """유저 강제 탈퇴(관리자) - 단일 트랜잭션 처리.
+
+    본인 탈퇴와 달리 access_token이 없어 블랙리스트 등록은 생략하고, 재가입 방지를 위해
+    social_accounts를 하드 삭제하기 전에 provider 정보를 banned_accounts에 기록한다.
+    admin_id는 밴 목록에서 동일 사유/날짜의 밴을 구분하고 누가 처리했는지 감사하기 위함.
+    """
+    result = await db.execute(select(SocialAccount).where(SocialAccount.user_id == user.user_id))
+    social = result.scalar_one_or_none()
+
+    old_profile_image_url = await _anonymize_user_data(user, db)
+
+    if social is not None:
+        db.add(BannedAccount(
+            provider_type=social.provider_type,
+            provider_uid=social.provider_uid,
+            reason=reason,
+            banned_by=admin_id,
+        ))
+
+    await db.commit()
+
+    # Redis 정리 실패해도 DB 탈퇴는 완료
+    try:
+        await delete_refresh_token(user.user_id, redis)
+    except RedisError:
+        logger.warning("강제 탈퇴 시 refresh token 정리 실패 (Redis): user_id=%s", user.user_id)
+
+    # R2 정리 실패해도 탈퇴는 완료 — DB에는 이미 NULL 처리됨(고아 파일로만 남음)
+    if old_profile_image_url:
+        try:
+            await delete_file(old_profile_image_url)
+        except (ClientError, BotoCoreError):
+            logger.warning(
+                "강제 탈퇴 시 프로필 이미지 정리 실패 (R2): user_id=%s, url=%s",
+                user.user_id,
+                old_profile_image_url,
+            )

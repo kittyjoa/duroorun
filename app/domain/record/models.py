@@ -2,7 +2,17 @@
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, func, text
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    func,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -42,12 +52,18 @@ class Record(Base):
     # user: Mapped["User"] = relationship("User")
     # course: Mapped["Course"] = relationship("Course")
 
-    # 유저당 진행 중(ended_at IS NULL)인 기록은 최대 1개만 허용 (동시 시작 레이스 방지)
     __table_args__ = (
+        # 유저당 진행 중(ended_at IS NULL)인 기록은 최대 1개만 허용 (동시 시작 레이스 방지)
         Index(
             "uq_records_active_user",
             "user_id",
             unique=True,
             postgresql_where=text("ended_at IS NULL"),
+        ),
+        # 완주(is_completed=true) 처리된 기록은 종료 시각이 반드시 있어야 함
+        # — 통계 쿼리들이 is_completed 기준(총계)과 ended_at 기준(기간별)을 섞어 써서,
+        # 이 둘이 어긋나면 두 통계 간 숫자가 안 맞게 됨 (관리자 대시보드 리뷰에서 지적)
+        CheckConstraint(
+            "NOT is_completed OR ended_at IS NOT NULL", name="ck_records_completed_has_ended_at"
         ),
     )

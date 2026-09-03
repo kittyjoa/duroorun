@@ -43,6 +43,8 @@ class User(Base):
     )
     # 탈퇴 시 현재 시각 기록 (row 삭제 없이 익명화 처리)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # 로그인/토큰 재발급 시각 갱신 (활성 유저 통계용). 최초 가입 시 NULL
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     social_accounts: Mapped[list["SocialAccount"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
@@ -53,7 +55,11 @@ class SocialAccount(Base):
     """소셜 로그인 연동 정보 — 탈퇴 시 Hard Delete."""
 
     __tablename__ = "social_accounts"
-    __table_args__ = (UniqueConstraint("provider_type", "provider_uid", name="uq_social_provider"),)
+    __table_args__ = (
+        UniqueConstraint("provider_type", "provider_uid", name="uq_social_provider"),
+        # 계정당 소셜 연동 1개 정책을 DB 레벨에서 강제 (연동 기능 없음, FEATURES.md 참고)
+        UniqueConstraint("user_id", name="uq_social_account_user"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.user_id"), nullable=False)
@@ -64,3 +70,22 @@ class SocialAccount(Base):
     )
 
     user: Mapped["User"] = relationship(back_populates="social_accounts")
+
+
+class BannedAccount(Base):
+    """강제 탈퇴된 소셜 계정 — 재가입 방지용."""
+
+    __tablename__ = "banned_accounts"
+    __table_args__ = (UniqueConstraint("provider_type", "provider_uid", name="uq_banned_provider"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    provider_type: Mapped[ProviderType] = mapped_column(SAEnum(ProviderType), nullable=False)
+    provider_uid: Mapped[str] = mapped_column(String(255), nullable=False)
+    reason: Mapped[str] = mapped_column(String(255), nullable=False)
+    # 어느 관리자가 강제 탈퇴시켰는지 (감사/식별용). 유저는 soft-delete만 하므로 FK 유지
+    banned_by: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("users.user_id"), nullable=True
+    )
+    banned_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )

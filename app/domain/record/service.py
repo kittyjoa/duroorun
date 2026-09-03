@@ -12,8 +12,9 @@ from app.config import settings
 from app.domain.course.models import Course
 from app.domain.record.models import Record
 from app.domain.record.schemas import (
+    MyRecordListResponse,
+    MyRecordResponse,
     RecordEndRequest,
-    RecordListResponse,
     RecordResponse,
     RecordStartRequest,
 )
@@ -310,23 +311,32 @@ async def get_records(
     user_id: int,
     page: int,
     size: int,
-) -> RecordListResponse:
-    """내 러닝기록 조회(내 기록 전체리스트)"""
+) -> MyRecordListResponse:
+    """내 러닝기록 조회(내 기록 전체리스트, 코스명 포함)"""
     offset = (page - 1) * size
     total_result = await session.execute(
         select(func.count()).select_from(Record).where(Record.user_id == user_id)
     )
     total = total_result.scalar_one()
     result = await session.execute(
-        select(Record)
+        select(Record, Course.course_name, Course.course_type)
+        .join(Course, Course.course_id == Record.course_id)
         .where(Record.user_id == user_id)
-        .order_by(Record.created_at.desc())
+        # created_at만으로 정렬하면 같은 시각에 생성된 행끼리는 순서가 DB 실행마다
+        # 달라질 수 있어(정렬 안정성 보장 안 됨), 페이지 경계에서 항목이 중복되거나
+        # 누락될 수 있다 - PK를 보조 정렬 기준으로 추가해 항상 동일한 순서를 보장한다.
+        .order_by(Record.created_at.desc(), Record.record_id.desc())
         .offset(offset)
         .limit(size)
     )
-    records = result.scalars().all()
-    return RecordListResponse(
-        items=[RecordResponse.model_validate(r) for r in records],
+    items = []
+    for record, course_name, course_type in result.all():
+        # Record 모델의 실제 컬럼이 아니라 이 응답 한정으로만 붙이는 값 - DB에는 저장되지 않는다.
+        record.course_name = course_name
+        record.course_type = course_type
+        items.append(MyRecordResponse.model_validate(record))
+    return MyRecordListResponse(
+        items=items,
         total=total,
         page=page,
         size=size,

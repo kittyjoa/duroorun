@@ -1,16 +1,101 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 
 import { apiFetch } from '../api';
 import Header from '../components/layout/Header';
+import { useUser } from '../contexts/UserContext';
+import { DIFFICULTY_COLOR, DIFFICULTY_LABEL } from '../utils/difficulty';
 
-const DIFFICULTY_LABEL = { EASY: '쉬움', NORMAL: '보통', HARD: '어려움' };
+// 백엔드 검증 규칙과 동일 (app/config.py REVIEW_CONTENT_MAX_LENGTH)
+const REVIEW_CONTENT_MAX_LENGTH = 2000;
+const REVIEW_PAGE_SIZE = 20;
+
+const DifficultyPicker = ({ value, onChange }) => (
+  <div className="review-difficulty-picker" role="group" aria-label="체감 난이도">
+    {Object.entries(DIFFICULTY_LABEL).map(([level, label]) => (
+      <button
+        key={level}
+        type="button"
+        className={value === level ? 'active' : ''}
+        onClick={() => onChange(level)}
+      >
+        {label}
+      </button>
+    ))}
+  </div>
+);
 
 const CourseDetail = () => {
   const { courseType, courseId } = useParams();
+  const { user } = useUser();
+  // courseId가 바뀔 때마다 늘어나는 "코스 세대" 번호. courseId 값 자체를 대조하는 대신
+  // 이 번호를 스냅샷 비교하면, "A → B → 다시 A"처럼 결국 같은 값으로 돌아와도 그 사이
+  // 코스가 바뀐 적이 있었다는 걸 정확히 감지할 수 있다.
+  const courseGenerationRef = useRef(0);
+  useEffect(() => {
+    courseGenerationRef.current += 1;
+  }, [courseId]);
+  // 코스가 같아도 같은 요청을 여러 번(예: 더보기 도중 코스를 벗어났다 되돌아옴) 보낼 수
+  // 있는데, 그중 나중에 시작한 요청보다 먼저 시작한 요청의 응답이 늦게 도착하면 최신
+  // 데이터를 덮어쓸 수 있다 - 요청마다 일련번호를 매겨서 가장 최근 요청의 응답만 반영한다.
+  const reviewsRequestSeqRef = useRef(0);
+  const myReviewRequestSeqRef = useRef(0);
   const [course, setCourse] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+
+  const [reviews, setReviews] = useState([]);
+  const [reviewsLoading, setReviewsLoading] = useState(true);
+  const [reviewsError, setReviewsError] = useState('');
+  const [reviewsTotal, setReviewsTotal] = useState(0);
+  const [loadingMoreReviews, setLoadingMoreReviews] = useState(false);
+  const [reviewActionError, setReviewActionError] = useState('');
+
+  const [reviewContent, setReviewContent] = useState('');
+  const [reviewDifficulty, setReviewDifficulty] = useState('NORMAL');
+  const [editingReviewId, setEditingReviewId] = useState(null);
+  const [reviewSaving, setReviewSaving] = useState(false);
+  const [reviewFormError, setReviewFormError] = useState('');
+  const [deletingReviewId, setDeletingReviewId] = useState(null);
+  const [uploadingImageReviewId, setUploadingImageReviewId] = useState(null);
+  // reviews는 더보기로 불러온 만큼만 담겨있어서, 거기서 내 리뷰를 찾으면 리뷰가 많은
+  // 코스에서 내 리뷰가 뒤 페이지로 밀려나 있을 때 오탐(있는데 없다고 판단)이 난다.
+  // /reviews/mine으로 별도 확인해서 페이지네이션과 무관하게 정확히 판별한다.
+  const [hasMyReview, setHasMyReview] = useState(false);
+  // true인 동안은 "내 리뷰 있는지" 확인이 안 끝난 상태 - 이때 작성 폼을 보여주면, 확인이
+  // 끝나고 hasMyReview가 true로 바뀌는 순간 폼이 잠깐 떴다 사라지는 깜빡임이 생긴다
+  const [checkingMyReview, setCheckingMyReview] = useState(true);
+  // 컴포넌트가 언마운트된 뒤 도착하는 리뷰 응답이 setState를 시도하지 않도록 막는다.
+  // StrictMode(개발 모드)가 effect를 마운트→클린업→마운트 순으로 두 번 실행하므로,
+  // 매 실행 시작 시점에 반드시 false로 되돌려야 두 번째 실행의 응답이 무시되지 않는다
+  const unmountedRef = useRef(false);
+  useEffect(() => {
+    unmountedRef.current = false;
+    return () => {
+      unmountedRef.current = true;
+    };
+  }, []);
+
+  // fetchReviews/checkMyReview가 공통으로 쓰는 staleness 체크. 호출 시점의 코스 세대와
+  // 같은 종류 요청의 일련번호를 캡처해두고, 응답이 왔을 때 그 사이 언마운트/코스 변경/더
+  // 최신 같은-종류 요청 발생 중 하나라도 있었으면 true를 반환한다.
+  const createStaleChecker = (seqRef) => {
+    const requestedGeneration = courseGenerationRef.current;
+    const requestSeq = ++seqRef.current;
+    return () =>
+      unmountedRef.current ||
+      courseGenerationRef.current !== requestedGeneration ||
+      seqRef.current !== requestSeq;
+  };
+
+  // 리뷰 작성/수정/삭제/이미지 변경이 공통으로 쓰는 staleness 체크. 이 요청들은 서로 다른
+  // 리뷰를 대상으로 동시에 진행될 수 있어(예: 리뷰A 삭제 중 리뷰B에 이미지 추가) 하나의
+  // 일련번호를 공유하면 서로 무관한 요청끼리 상대방을 stale로 오판해 정상 응답을 버리게
+  // 된다 - 그래서 같은-종류 요청 순서는 신경쓰지 않고, 코스가 바뀌었는지만 확인한다.
+  const createMutationStaleChecker = () => {
+    const requestedGeneration = courseGenerationRef.current;
+    return () => unmountedRef.current || courseGenerationRef.current !== requestedGeneration;
+  };
 
   useEffect(() => {
     // 이 effect가 재실행된 뒤(= 더 최신 요청이 시작된 뒤) 도착하는 이전 응답은 무시
@@ -49,6 +134,241 @@ const CourseDetail = () => {
     };
   }, [courseType, courseId]);
 
+  // "더보기"는 offset(이미 불러온 개수)만큼 건너뛰고 그 다음 항목만 받아서 이어붙인다.
+  // 리뷰 수정/삭제/이미지 변경 등 로컬 옵티미스틱 업데이트가 리뷰 목록 순서(생성일 내림차순)
+  // 자체는 바꾸지 않으므로 - 작성은 맨 앞에 추가, 삭제는 그 자리에서만 제거 - reviews.length를
+  // 그대로 다음 offset으로 써도 서버 쪽 실제 위치와 어긋나지 않는다.
+  const fetchReviews = async (offset = 0, { append = false } = {}) => {
+    const isStale = createStaleChecker(reviewsRequestSeqRef);
+
+    if (append) {
+      setLoadingMoreReviews(true);
+    } else {
+      setReviewsLoading(true);
+    }
+    setReviewsError('');
+    try {
+      const res = await apiFetch(
+        `/v1/reviews/courses/${courseId}?offset=${offset}&size=${REVIEW_PAGE_SIZE}`
+      );
+      if (isStale()) return;
+      if (!res.ok) {
+        setReviewsError('리뷰를 불러오지 못했어요.');
+        return;
+      }
+      const data = await res.json();
+      if (isStale()) return;
+      setReviews((prev) => {
+        if (!append) return data.items;
+        // offset 기반 페이지네이션은 다른 유저가 그사이 리뷰를 추가/삭제하면 경계에서
+        // 항목이 겹칠 수 있다 - review_id 기준으로 걸러서 중복 렌더링을 막는다
+        const existingIds = new Set(prev.map((r) => r.review_id));
+        return [...prev, ...data.items.filter((r) => !existingIds.has(r.review_id))];
+      });
+      setReviewsTotal(data.total);
+    } catch {
+      if (!isStale()) setReviewsError('서버에 연결할 수 없어요.');
+    } finally {
+      // stale 요청의 finally가 무조건 실행되면, 다른(더 최신) 요청이 아직 진행 중인데도
+      // 로딩 플래그를 꺼버려 "더보기" 버튼이 잠깐 다시 눌리거나 인디케이터가 깜빡일 수
+      // 있다 - 이 요청 자신이 stale하지 않을 때만 끈다. 코스가 바뀌어 더보기 요청 자체가
+      // stale해진 경우엔, 아래 courseId 변경 effect에서 loadingMoreReviews를 명시적으로
+      // 리셋해주므로 여기서 무조건 꺼줄 필요가 없다.
+      if (append) {
+        if (!isStale()) setLoadingMoreReviews(false);
+      } else {
+        if (!isStale()) setReviewsLoading(false);
+      }
+    }
+  };
+
+  useEffect(() => {
+    // 코스를 바꿨는데 이전 코스에서 "수정" 중이던 상태(editingReviewId)가 남아있으면,
+    // 이 코스에서 "리뷰 작성" 폼을 새로 제출해도 실제로는 handleSubmitReview가 여전히
+    // 수정 모드로 판단해 이전 코스의 리뷰를 덮어써버린다 - 그걸 막기 위해 초기화한다
+    setEditingReviewId(null);
+    setReviewContent('');
+    setReviewDifficulty('NORMAL');
+    setReviewFormError('');
+    // 이전 코스에서 "더보기" 진행 중이었다면(응답 전 코스 이동), 위 fetchReviews의
+    // finally는 이제 stale 요청에 대해선 안 꺼주므로 여기서 명시적으로 리셋한다 -
+    // 안 그러면 "더보기" 버튼이 새 코스에서도 계속 disabled로 남는다.
+    setLoadingMoreReviews(false);
+    fetchReviews(0);
+  }, [courseId]);
+
+  const checkMyReview = async () => {
+    const isStale = createStaleChecker(myReviewRequestSeqRef);
+
+    if (!user) {
+      if (!isStale()) {
+        setHasMyReview(false);
+        setCheckingMyReview(false);
+      }
+      return;
+    }
+    setCheckingMyReview(true);
+    try {
+      const res = await apiFetch(`/v1/reviews/mine?page=1&size=1&course_id=${courseId}`);
+      if (isStale() || !res.ok) return;
+      const data = await res.json();
+      if (isStale()) return;
+      setHasMyReview(data.total > 0);
+    } catch {
+      // 조용히 무시 - 확인 실패해도 작성 시도 자체는 가능하고, 이미 썼다면 백엔드가 최종 검증함
+    } finally {
+      if (!isStale()) setCheckingMyReview(false);
+    }
+  };
+
+  useEffect(() => {
+    checkMyReview();
+  }, [user, courseId]);
+
+  const handleLoadMoreReviews = () => {
+    fetchReviews(reviews.length, { append: true });
+  };
+
+  const startEdit = (review) => {
+    setEditingReviewId(review.review_id);
+    setReviewContent(review.content);
+    setReviewDifficulty(review.difficulty);
+    setReviewFormError('');
+  };
+
+  const cancelEdit = () => {
+    setEditingReviewId(null);
+    setReviewContent('');
+    setReviewDifficulty('NORMAL');
+    setReviewFormError('');
+  };
+
+  const handleSubmitReview = async (event) => {
+    event.preventDefault();
+    const isStale = createMutationStaleChecker();
+    setReviewFormError('');
+    setReviewSaving(true);
+    try {
+      const isEditing = editingReviewId != null;
+      const url = isEditing ? `/v1/reviews/${editingReviewId}` : `/v1/reviews/courses/${courseId}`;
+      const res = await apiFetch(url, {
+        method: isEditing ? 'PATCH' : 'POST',
+        body: JSON.stringify({ content: reviewContent, difficulty: reviewDifficulty }),
+      });
+      if (isStale()) return;
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        setReviewFormError(data?.detail ?? '리뷰 저장에 실패했어요.');
+        return;
+      }
+      const saved = await res.json();
+      if (isStale()) return;
+      setReviewContent('');
+      setReviewDifficulty('NORMAL');
+      setEditingReviewId(null);
+      // 로컬에서 목록을 직접 고치므로(fetchReviews를 다시 부르지 않으므로) 초기 로딩 때
+      // 뜬 에러 배너가 있었다면 여기서 직접 지워야 한다 - 안 그러면 이번 저장이 성공해도
+      // 리뷰가 정상 표시된 목록 위에 옛 에러 문구가 계속 남는다
+      setReviewsError('');
+      if (isEditing) {
+        // 서버 전체를 다시 불러오지 않고, 방금 수정한 리뷰 하나만 바꿔치기한다 - 그래야
+        // "더보기"로 펼쳐놓은 나머지 페이지가 리셋되지 않는다
+        setReviews((prev) => prev.map((r) => (r.review_id === saved.review_id ? saved : r)));
+      } else {
+        // 새 리뷰는 최신순 목록 맨 앞에 추가한다
+        setReviews((prev) => [saved, ...prev]);
+        setReviewsTotal((prev) => prev + 1);
+      }
+      // 작성/수정 성공은 곧 "내 리뷰가 존재함"이므로, 서버에 다시 물어보지 않고 바로 반영한다
+      setHasMyReview(true);
+    } catch {
+      if (!isStale()) setReviewFormError('서버에 연결할 수 없어요.');
+    } finally {
+      setReviewSaving(false);
+    }
+  };
+
+  const handleDeleteReview = async (reviewId) => {
+    const isStale = createMutationStaleChecker();
+    setReviewActionError('');
+    setDeletingReviewId(reviewId);
+    try {
+      const res = await apiFetch(`/v1/reviews/${reviewId}`, { method: 'DELETE' });
+      if (isStale()) return;
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        setReviewActionError(data?.detail ?? '리뷰 삭제에 실패했어요.');
+        return;
+      }
+      setReviewsError('');
+      setReviews((prev) => prev.filter((r) => r.review_id !== reviewId));
+      setReviewsTotal((prev) => Math.max(0, prev - 1));
+      // 코스당 리뷰 1개 제한이라, 삭제 성공은 곧 "내 리뷰가 더 이상 없음"이므로 바로 반영한다
+      setHasMyReview(false);
+    } catch {
+      if (!isStale()) setReviewActionError('서버에 연결할 수 없어요.');
+    } finally {
+      setDeletingReviewId(null);
+    }
+  };
+
+  const handleUploadImage = async (reviewId, event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+    const isStale = createMutationStaleChecker();
+    setReviewActionError('');
+    setUploadingImageReviewId(reviewId);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await apiFetch(`/v1/reviews/${reviewId}/images`, {
+        method: 'POST',
+        body: formData,
+      });
+      if (isStale()) return;
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        setReviewActionError(data?.detail ?? '이미지 업로드에 실패했어요.');
+        return;
+      }
+      const saved = await res.json();
+      if (isStale()) return;
+      // 이미지가 반영된 리뷰 전체(images 포함)를 그대로 받아서 그 항목만 바꿔치기한다
+      setReviews((prev) => prev.map((r) => (r.review_id === saved.review_id ? saved : r)));
+    } catch {
+      if (!isStale()) setReviewActionError('서버에 연결할 수 없어요.');
+    } finally {
+      event.target.value = '';
+      setUploadingImageReviewId(null);
+    }
+  };
+
+  const handleDeleteImage = async (reviewId, imageId) => {
+    const isStale = createMutationStaleChecker();
+    setReviewActionError('');
+    try {
+      const res = await apiFetch(`/v1/reviews/${reviewId}/images/${imageId}`, {
+        method: 'DELETE',
+      });
+      if (isStale()) return;
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        setReviewActionError(data?.detail ?? '이미지 삭제에 실패했어요.');
+        return;
+      }
+      // 204라 응답 본문이 없으므로, 해당 리뷰의 이미지 목록에서 그 이미지만 로컬에서 제거한다
+      setReviews((prev) =>
+        prev.map((r) =>
+          r.review_id === reviewId
+            ? { ...r, images: r.images.filter((img) => img.image_id !== imageId) }
+            : r
+        )
+      );
+    } catch {
+      if (!isStale()) setReviewActionError('서버에 연결할 수 없어요.');
+    }
+  };
+
   if (loading) {
     return (
       <>
@@ -84,6 +404,13 @@ const CourseDetail = () => {
             {courseType === 'drnb' ? (course.sigun ?? course.brd_div) : '커스텀 코스'}
           </span>
           <h1>{course.course_name}</h1>
+          {/* 러닝 시작 버튼 */}
+          <Link
+            to={`/records/start/${courseType}/${courseId}`}
+            className="primary-button course-start-run-button"
+          >
+            러닝 시작
+          </Link>
         </div>
 
         <dl className="course-detail-info">
@@ -130,6 +457,157 @@ const CourseDetail = () => {
             ))}
           </div>
         )}
+
+        {course.review_summary && (
+          <div className="review-summary-box">
+            <h2>AI 리뷰 요약</h2>
+            <p>{course.review_summary.summary}</p>
+            <span className="record-hint">리뷰 {course.review_summary.review_count}개 기준</span>
+          </div>
+        )}
+
+        <div className="course-reviews">
+          <h2>리뷰</h2>
+
+          {user && !checkingMyReview && !hasMyReview && (
+            <form className="review-form" onSubmit={handleSubmitReview}>
+              <h3 className="review-form-title">나의 리뷰 작성하기</h3>
+              <textarea
+                value={reviewContent}
+                onChange={(event) => setReviewContent(event.target.value)}
+                placeholder="이 코스는 어땠나요? (완주한 코스만 작성 가능해요)"
+                maxLength={REVIEW_CONTENT_MAX_LENGTH}
+                required
+              />
+              <label className="review-form-label">체감 난이도</label>
+              <DifficultyPicker value={reviewDifficulty} onChange={setReviewDifficulty} />
+              {reviewFormError && <p className="onboarding-error">{reviewFormError}</p>}
+              <button type="submit" className="primary-button" disabled={reviewSaving}>
+                {reviewSaving ? '등록 중...' : '리뷰 등록'}
+              </button>
+            </form>
+          )}
+
+          {reviewsLoading && <p className="course-list-status">리뷰 불러오는 중...</p>}
+          {reviewsError && <p className="course-list-status error">{reviewsError}</p>}
+          {reviewActionError && <p className="course-list-status error">{reviewActionError}</p>}
+          {!reviewsLoading && !reviewsError && reviews.length === 0 && (
+            <p className="course-list-status">아직 리뷰가 없어요.</p>
+          )}
+
+          {!reviewsLoading && reviews.length > 0 && (
+            <ul className="review-list">
+              {reviews.map((review) => {
+                const isMine = user && review.user_id === user.user_id;
+                const isEditingThis = editingReviewId === review.review_id;
+
+                if (isEditingThis) {
+                  return (
+                    <li key={review.review_id} className="review-item">
+                      <form className="review-form" onSubmit={handleSubmitReview}>
+                        <textarea
+                          value={reviewContent}
+                          onChange={(event) => setReviewContent(event.target.value)}
+                          maxLength={REVIEW_CONTENT_MAX_LENGTH}
+                          required
+                        />
+                        <label className="review-form-label">체감 난이도</label>
+                        <DifficultyPicker value={reviewDifficulty} onChange={setReviewDifficulty} />
+                        {reviewFormError && <p className="onboarding-error">{reviewFormError}</p>}
+                        <div className="review-item-actions">
+                          <button type="submit" className="primary-button" disabled={reviewSaving}>
+                            {reviewSaving ? '저장 중...' : '저장'}
+                          </button>
+                          <button type="button" className="text-button" onClick={cancelEdit}>
+                            취소
+                          </button>
+                        </div>
+                      </form>
+                    </li>
+                  );
+                }
+
+                return (
+                  <li key={review.review_id} className="review-item">
+                    <div className="review-item-header">
+                      <span
+                        className={`review-difficulty-badge ${DIFFICULTY_COLOR[review.difficulty] ?? ''}`}
+                      >
+                        {DIFFICULTY_LABEL[review.difficulty]}
+                      </span>
+                      <span className="record-hint">
+                        {new Date(review.created_at).toLocaleDateString('ko-KR')}
+                      </span>
+                    </div>
+                    <p className="review-item-content">{review.content}</p>
+
+                    {review.images?.length > 0 && (
+                      <div className="course-detail-images">
+                        {review.images.map((image) => (
+                          <div key={image.image_id} className="review-item-image">
+                            <img src={image.image_url} alt="리뷰 사진" />
+                            {isMine && (
+                              <button
+                                type="button"
+                                aria-label="이미지 삭제"
+                                onClick={() => handleDeleteImage(review.review_id, image.image_id)}
+                              >
+                                ×
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {isMine && (
+                      <div className="review-item-actions">
+                        <label className="text-button">
+                          {uploadingImageReviewId === review.review_id
+                            ? '업로드 중...'
+                            : '이미지 추가'}
+                          <input
+                            type="file"
+                            accept="image/jpeg,image/png,image/webp,image/gif"
+                            hidden
+                            onChange={(event) => handleUploadImage(review.review_id, event)}
+                            disabled={uploadingImageReviewId === review.review_id}
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          className="text-button"
+                          onClick={() => startEdit(review)}
+                        >
+                          수정
+                        </button>
+                        <button
+                          type="button"
+                          className="text-button"
+                          onClick={() => handleDeleteReview(review.review_id)}
+                          disabled={deletingReviewId === review.review_id}
+                        >
+                          {deletingReviewId === review.review_id ? '삭제 중...' : '삭제'}
+                        </button>
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+
+          {!reviewsLoading && reviews.length < reviewsTotal && (
+            <button
+              type="button"
+              className="text-button review-load-more"
+              onClick={handleLoadMoreReviews}
+              disabled={loadingMoreReviews}
+            >
+              {loadingMoreReviews ? '불러오는 중...' : '리뷰 더보기'}
+            </button>
+          )}
+        </div>
       </main>
     </>
   );

@@ -9,6 +9,8 @@ import Login from './pages/Login';
 import MyPage from './pages/MyPage';
 import OAuthCallback from './pages/OAuthCallback';
 import Onboarding from './pages/Onboarding';
+import RecordHistory from './pages/RecordHistory';
+import RecordStart from './pages/RecordStart';
 
 const App = () => {
   return (
@@ -23,6 +25,8 @@ const App = () => {
           <Route path="/mypage" element={<MyPage />} />
           <Route path="/courses" element={<CourseList />} />
           <Route path="/courses/:courseType/:courseId" element={<CourseDetail />} />
+          <Route path="/records" element={<RecordHistory />} />
+          <Route path="/records/start/:courseType/:courseId" element={<RecordStart />} />
         </Routes>
       </UserProvider>
     </BrowserRouter>

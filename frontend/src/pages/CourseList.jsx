@@ -4,9 +4,7 @@ import { Link } from 'react-router-dom';
 import { apiFetch } from '../api';
 import Header from '../components/layout/Header';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
-
-const DIFFICULTY_LABEL = { EASY: '쉬움', NORMAL: '보통', HARD: '어려움' };
-const DIFFICULTY_COLOR = { EASY: 'green', NORMAL: 'blue', HARD: 'red' };
+import { DIFFICULTY_COLOR, DIFFICULTY_LABEL } from '../utils/difficulty';
 
 // TODO: 더보기 버튼이나 무한스크롤로 20~30개씩 끊어 불러오기 (특히 커스텀)
 // 필터 변경하면 페이지 1로 초기화하는 처리도? 더보기 방식이어도?

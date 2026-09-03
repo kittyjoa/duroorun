@@ -384,7 +384,8 @@ async def upload_course_image(
         ) from err
 
     # 여기서부터 락 — 개수 최종 재확인 + 저장을 원자적으로 묶음
-    await _get_custom_course(session, course_id, for_update=True)
+    # (락을 반영한 최신 상태를 명시적으로 가리키도록 재할당)
+    course = await _get_custom_course(session, course_id, for_update=True)
     if await _count_course_images(session, course_id) >= settings.COURSE_IMAGE_MAX_COUNT:
         try:
             await delete_file(image_url)

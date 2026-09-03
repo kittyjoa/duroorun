@@ -5,6 +5,8 @@ import { apiFetch } from '../api';
 import Header from '../components/layout/Header';
 import KakaoMap from '../components/map/KakaoMap';
 import { useUser } from '../contexts/UserContext';
+import { loadGangwonBoundary } from '../lib/gangwonBoundary';
+import { isPointInPolygon } from '../lib/pointInPolygon';
 
 const DIFFICULTY_OPTIONS = [
   { value: 'EASY', label: '쉬움' },
@@ -24,14 +26,13 @@ const EMPTY_FORM = {
   course_description: '',
 };
 
-// 강원도 경계 박스 (안내용 근사치/ 최종 판정 기준은 course/schemas.py의 실제 폴리곤)
-// - 사용자 GPS 위치가 강원도 일때 초기 화면으로 써도 되는지 가늠하는 용도 + 경유지 클릭 시 지역 검증
-// - 사각형 1개로 구현하면 서울도 포함돼서 강원 본토 박스 + 철원군 전용 박스 2개
+// 강원도 대략적인 경계 박스 - 실제 폴리곤(gangwonBoundary state)이 아직 로드 전이거나
+// fetch 실패했을 때만 쓰는 폴백. 정상 케이스엔 아래 isInGangwon이 실제 폴리곤으로 판정.
 const _GANGWON_BOXES = [
   { latMin: 36.9, latMax: 38.7, lngMin: 127.4, lngMax: 129.5 }, // 강원 본토
   { latMin: 37.95, latMax: 38.45, lngMin: 127.0, lngMax: 127.45 }, // 철원군 (38선 이북이라 서울과 안 겹침)
 ];
-const _isNearGangwon = (point) =>
+const _isNearGangwonBox = (point) =>
   _GANGWON_BOXES.some(
     (box) =>
       point.lat >= box.latMin &&
@@ -67,6 +68,10 @@ const _totalDistanceKm = (points) => {
 //   그 다음 값을 인덱스로 - 몇 번째 경유지가 문제인지 붙여줌
 // - pydantic이 커스텀 ValueError 메시지 앞에 자동으로 붙이는 "Value error, " 제거
 const _cleanValidatorMessage = (msg) => msg.replace(/^Value error,\s*/, '');
+
+// 백엔드 422 detail 중 waypoints 항목 검증 실패가 섞여있는지 (loc 기준)
+const _hasWaypointsError = (detail) =>
+  Array.isArray(detail) && detail.some((item) => (item?.loc ?? []).includes('waypoints'));
 
 const _extractErrorMessage = (detail, fallback) => {
   if (typeof detail === 'string') return detail;
@@ -106,6 +111,13 @@ const CustomCourseForm = () => {
   const [saving, setSaving] = useState(false);
   const [uploadingImage, setUploadingImage] = useState(false);
   const [error, setError] = useState('');
+  // 에러가 경유지/지도 클릭 관련이면 'waypoint'(지도 바로 밑에 표시),
+  // 그 외는 'form'(폼 하단)
+  const [errorField, setErrorField] = useState('form');
+  const showError = (message, field = 'form') => {
+    setError(message);
+    setErrorField(field);
+  };
   // 아래 loadError: 코스 조회(GET) 실패 전용 (위의 폼 조작 에러 error 와 분리)
   const [loadError, setLoadError] = useState('');
   const [notice, setNotice] = useState('');
@@ -117,6 +129,10 @@ const CustomCourseForm = () => {
   // 그 외(강원 밖/GPS 거부/GPS 미지원)에는 항상 강원 기본 위치로 엶
   const [locationStatus, setLocationStatus] = useState('requesting'); // requesting|granted|denied|unsupported
   const [userLocation, setUserLocation] = useState(null);
+  // 백엔드와 같은 강원도 경계 geojson(GET /v1/courses/gangwon-boundary)
+  // ㅡ 로드전엔 null 이라 isInGangwon이 그동안은 _isNearGangwonBox 근사치로 대신 판정
+  const [gangwonBoundary, setGangwonBoundary] = useState(null);
+  const [gangwonBoundaryFailed, setGangwonBoundaryFailed] = useState(false);
 
   useEffect(() => {
     if (!navigator.geolocation) {
@@ -132,6 +148,29 @@ const CustomCourseForm = () => {
       { enableHighAccuracy: true, timeout: 10000 },
     );
   }, []);
+
+  useEffect(() => {
+    let ignore = false;
+    loadGangwonBoundary()
+      .then((geometry) => {
+        if (!ignore) setGangwonBoundary(geometry);
+      })
+      .catch((err) => {
+        // 실패해도 폼을 막지 않음
+        // _isNearGangwonBox 근사치로 계속 동작 가능, 안내만 띄움
+        console.error('강원도 경계 데이터 로드 실패:', err);
+        if (!ignore) setGangwonBoundaryFailed(true);
+      });
+    return () => {
+      ignore = true;
+    };
+  }, []);
+
+  // 실제 폴리곤이 로드됐으면 정밀 판정, 아니면 박스 근사치로 판정
+  const isInGangwon = useCallback(
+    (point) => (gangwonBoundary ? isPointInPolygon(point, gangwonBoundary) : _isNearGangwonBox(point)),
+    [gangwonBoundary],
+  );
 
   useEffect(() => {
     if (!isEditMode) return undefined;
@@ -184,19 +223,12 @@ const CustomCourseForm = () => {
     setForm({ ...form, [field]: event.target.value });
   };
 
-  // 지도 클릭/삭제로 경유지가 바뀔 때만 거리 자동계산(재기입) — 수정 모드 진입 시
-  // 서버에서 불러온 기존 waypoints/distance는 이 핸들러를 거치지 않으므로 덮어쓰지 않음
-  const handleMapClick = useCallback((point) => {
-    // 강원도 밖 클릭은 아예 경유지로 추가하지 않음
-    // ㅡ 지도 클릭 시점에 바로 알려줌
-    if (!_isNearGangwon(point)) {
-      setError('강원도 지역 내 좌표만 경유지로 추가할 수 있어요.');
-      return;
-    }
-    setError('');
+  // waypoints를 바꾸는 세 핸들러(클릭 추가/개별 삭제/전체 삭제)가 공유하는 로직
+  // - updater는 setWaypoints처럼 배열 또는 (prev) => next 함수 둘 다 받음.
+  const applyWaypoints = useCallback((updater) => {
     setWaypointsDirty(true);
     setWaypoints((prev) => {
-      const next = [...prev, point];
+      const next = typeof updater === 'function' ? updater(prev) : updater;
       setForm((f) => ({
         ...f,
         distance: next.length >= 2 ? _totalDistanceKm(next).toFixed(1) : '',
@@ -205,25 +237,31 @@ const CustomCourseForm = () => {
     });
   }, []);
 
+  // 지도 클릭/삭제로 경유지가 바뀔 때만 거리 자동계산(재기입) — 수정 모드 진입 시
+  // 서버에서 불러온 기존 waypoints/distance는 이 핸들러를 거치지 않으므로 덮어쓰지 않음
+  const handleMapClick = useCallback(
+    (point) => {
+      // 강원도 밖 클릭은 아예 경유지로 추가하지 않음
+      // ㅡ 지도 클릭 시점에 바로 알려줌
+      if (!isInGangwon(point)) {
+        showError('강원도 지역 내 좌표만 경유지로 추가할 수 있어요.', 'waypoint');
+        return;
+      }
+      setError('');
+      applyWaypoints((prev) => [...prev, point]);
+    },
+    [isInGangwon, applyWaypoints],
+  );
+
   const handleRemoveWaypoint = (index) => {
     // 경유지 순서가 바뀌면 이전에 뜬 "N번째 경유지" 에러의 N이 안 맞을 수 있어 제거
     setError('');
-    setWaypointsDirty(true);
-    setWaypoints((prev) => {
-      const next = prev.filter((_, i) => i !== index);
-      setForm((f) => ({
-        ...f,
-        distance: next.length >= 2 ? _totalDistanceKm(next).toFixed(1) : '',
-      }));
-      return next;
-    });
+    applyWaypoints((prev) => prev.filter((_, i) => i !== index));
   };
 
   const handleClearWaypoints = () => {
     setError('');
-    setWaypointsDirty(true);
-    setWaypoints([]);
-    setForm((f) => ({ ...f, distance: '' }));
+    applyWaypoints([]);
   };
 
   const handleSubmit = async (event) => {
@@ -231,7 +269,7 @@ const CustomCourseForm = () => {
     setError('');
 
     if (waypoints.length < 2) {
-      setError('경유지를 지도에서 2개 이상 클릭해주세요.');
+      showError('경유지를 지도에서 2개 이상 클릭해주세요.', 'waypoint');
       return;
     }
 
@@ -256,7 +294,10 @@ const CustomCourseForm = () => {
 
       if (!res.ok) {
         const data = await res.json().catch(() => null);
-        setError(_extractErrorMessage(data?.detail, '저장에 실패했어요.'));
+        showError(
+          _extractErrorMessage(data?.detail, '저장에 실패했어요.'),
+          _hasWaypointsError(data?.detail) ? 'waypoint' : 'form',
+        );
         return;
       }
 
@@ -270,7 +311,7 @@ const CustomCourseForm = () => {
       }
     } catch (err) {
       console.error('커스텀 코스 저장 실패:', err);
-      setError('서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.');
+      showError('서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.');
     } finally {
       setSaving(false);
     }
@@ -282,12 +323,12 @@ const CustomCourseForm = () => {
     setError('');
 
     if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
-      setError('지원하지 않는 이미지 형식입니다 (jpg, png, webp, gif만 가능)');
+      showError('지원하지 않는 이미지 형식입니다 (jpg, png, webp, gif만 가능)');
       event.target.value = '';
       return;
     }
     if (file.size > COURSE_IMAGE_MAX_SIZE_MB * 1024 * 1024) {
-      setError(`이미지 크기는 최대 ${COURSE_IMAGE_MAX_SIZE_MB}MB까지 업로드 가능합니다`);
+      showError(`이미지 크기는 최대 ${COURSE_IMAGE_MAX_SIZE_MB}MB까지 업로드 가능합니다`);
       event.target.value = '';
       return;
     }
@@ -302,14 +343,14 @@ const CustomCourseForm = () => {
       });
       if (!res.ok) {
         const data = await res.json().catch(() => null);
-        setError(_extractErrorMessage(data?.detail, '이미지 업로드에 실패했어요'));
+        showError(_extractErrorMessage(data?.detail, '이미지 업로드에 실패했어요'));
         return;
       }
       const data = await res.json();
       setImages(data.images ?? []);
     } catch (err) {
       console.error('코스 이미지 업로드 실패:', err);
-      setError('서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.');
+      showError('서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.');
     } finally {
       event.target.value = '';
       setUploadingImage(false);
@@ -323,13 +364,13 @@ const CustomCourseForm = () => {
         method: 'DELETE',
       });
       if (!res.ok) {
-        setError('이미지 삭제에 실패했어요');
+        showError('이미지 삭제에 실패했어요');
         return;
       }
       setImages((prev) => prev.filter((img) => img.image_id !== imageId));
     } catch (err) {
       console.error('코스 이미지 삭제 실패:', err);
-      setError('서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.');
+      showError('서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.');
     }
   };
 
@@ -339,13 +380,13 @@ const CustomCourseForm = () => {
     try {
       const res = await apiFetch(`/v1/courses/custom/${courseId}`, { method: 'DELETE' });
       if (!res.ok) {
-        setError('삭제에 실패했어요');
+        showError('삭제에 실패했어요');
         return;
       }
       navigate('/courses');
     } catch (err) {
       console.error('커스텀 코스 삭제 실패:', err);
-      setError('서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.');
+      showError('서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.');
     }
   };
 
@@ -386,7 +427,7 @@ const CustomCourseForm = () => {
     <>
       <Header />
       <main className="course-detail-page">
-        <h1>{isEditMode ? '커스텀 코스 수정' : '커스텀 코스 만들기'}</h1>
+        <h1 className="course-form-title">{isEditMode ? '커스텀 코스 수정' : '커스텀 코스 생성'}</h1>
         <p className="course-detail-desc">🏃 커스텀 코스는 현재 강원도 지역에서만 만들 수 있어요.</p>
 
         {loading && <p className="course-list-status">불러오는 중...</p>}
@@ -424,6 +465,11 @@ const CustomCourseForm = () => {
               ➡️ 경유지끼리 직선으로 이어 경로를 표시합니다. 실제 도로·트레일과 다를 수 있습니다. 
               촘촘히 찍을수록 실제 경로에 가까워집니다.
             </p>
+            {gangwonBoundaryFailed && (
+              <p className="kakao-map-hint-static">
+                ❗정밀 지역 검증 로드 실패, 대략적인 범위로 판정 중입니다.
+              </p>
+            )}
             {/* GPS는 선택 기능 — 응답을 기다리지 않고 기본(강원) 위치로 지도부터 띄우고,
                 아직 경유지를 안 찍은 상태에서 GPS가 강원 근처로 도착하면 center로 중심만 옮김 */}
             <KakaoMap
@@ -431,12 +477,13 @@ const CustomCourseForm = () => {
               editable
               onMapClick={handleMapClick}
               center={
-                !isEditMode && locationStatus === 'granted' && userLocation && _isNearGangwon(userLocation)
+                !isEditMode && locationStatus === 'granted' && userLocation && isInGangwon(userLocation)
                   ? userLocation
                   : undefined
               }
               emptyHint="지도를 클릭해서 경유지를 추가하세요"
             />
+            {error && errorField === 'waypoint' && <p className="onboarding-error">{error}</p>}
             {waypoints.length > 0 && (
               <>
                 <ul className="waypoint-list">
@@ -519,7 +566,7 @@ const CustomCourseForm = () => {
               </div>
             )}
 
-            {error && <p className="onboarding-error">{error}</p>}
+            {error && errorField !== 'waypoint' && <p className="onboarding-error">{error}</p>}
             {notice && <p className="mypage-success">{notice}</p>}
 
             <div className="course-form-actions">

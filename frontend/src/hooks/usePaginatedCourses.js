@@ -39,8 +39,9 @@ export const usePaginatedCourses = (path, buildQuery, deps) => {
         setCourses(data.items);
         setTotal(data.total);
         setPage(1);
-      } catch {
+      } catch (err) {
         if (requestIdRef.current === myRequestId) {
+          console.error('코스 목록 조회 실패:', err);
           setError('서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.');
         }
       } finally {
@@ -69,8 +70,9 @@ export const usePaginatedCourses = (path, buildQuery, deps) => {
       setCourses((prev) => [...prev, ...data.items]);
       setTotal(data.total);
       setPage(nextPage);
-    } catch {
+    } catch (err) {
       if (requestIdRef.current === myRequestId) {
+        console.error('코스 더보기 조회 실패:', err);
         setLoadMoreError('서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.');
       }
     } finally {

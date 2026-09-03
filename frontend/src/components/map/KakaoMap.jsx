@@ -54,7 +54,8 @@ const KakaoMap = ({
         });
         setStatus('ready');
       })
-      .catch(() => {
+      .catch((err) => {
+        console.error('카카오맵 SDK 로드 실패:', err);
         if (!cancelled) setStatus('error');
       });
 

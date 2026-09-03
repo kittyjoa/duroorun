@@ -1,4 +1,5 @@
-"""커스텀 코스 - 강원도 좌표 경계 검증 / 소유자 권한 테스트."""
+"""커스텀 코스 관련
+ㅡ 코스명 공백 검증 / 강원도 좌표 경계 / 소유자 권한 / 생성 응답 직렬화 테스트."""
 
 import uuid
 
@@ -7,23 +8,55 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 from sqlalchemy import delete
 
-from app.domain.course.models import Course, CourseType
-from app.domain.course.schemas import CourseUpdateRequest, CourseWaypointCreate
-from app.domain.course.service import delete_course, update_course
+from app.domain.course.models import Course, CourseType, CourseWaypoint
+from app.domain.course.schemas import CourseCreateRequest, CourseUpdateRequest, CourseWaypointCreate
+from app.domain.course.service import create_course, delete_course, update_course
 from app.domain.user.models import User
 
 
-# CourseWaypointCreate._validate_gangwon_bounds가 참조하는 두 박스(강원 본토 / 철원군) 경계값
+def _valid_waypoints():
+    return [
+        {"latitude": 37.75, "longitude": 128.9},
+        {"latitude": 37.76, "longitude": 128.91},
+    ]
+
+
+def test_course_create_rejects_blank_course_name():
+    """공백만 있는 코스명("   ")은 생성 요청 검증에서 거부."""
+    with pytest.raises(ValidationError):
+        CourseCreateRequest(
+            course_name="   ",
+            distance=1.0,
+            difficulty="NORMAL",
+            estimated_time=10,
+            waypoints=_valid_waypoints(),
+        )
+
+
+def test_course_create_strips_course_name_whitespace():
+    """코스명 앞뒤 공백은 저장 전에 잘려나감."""
+    request = CourseCreateRequest(
+        course_name="  강릉 바다길  ",
+        distance=1.0,
+        difficulty="NORMAL",
+        estimated_time=10,
+        waypoints=_valid_waypoints(),
+    )
+    assert request.course_name == "강릉 바다길"
+
+
+# _validate_gangwon_bounds가 참조하는 실제 강원도 경계(폴리곤) 안쪽 좌표
 @pytest.mark.parametrize(
     "lat,lng",
     [
-        (37.75, 128.9),  # 강원 본토 박스 내부(강릉 인근)
-        (36.9, 127.4),  # 강원 본토 박스 최소 경계
-        (38.7, 129.5),  # 강원 본토 박스 최대 경계
-        (38.2, 127.2),  # 철원군 박스 내부
+        (37.7519, 128.8761),  # 강릉시청
+        (38.2070, 128.5918),  # 속초해변
+        (37.3422, 127.9202),  # 원주시청
+        (38.1462, 127.3097),  # 철원 - 실제 경계엔 자연히 포함됨
     ],
 )
 def test_waypoint_accepts_gangwon_coords(lat, lng):
+    """강원도 실제 경계(폴리곤) 안쪽 좌표는 경유지로 허용."""
     waypoint = CourseWaypointCreate(latitude=lat, longitude=lng)
     assert waypoint.latitude == lat
     assert waypoint.longitude == lng
@@ -32,20 +65,21 @@ def test_waypoint_accepts_gangwon_coords(lat, lng):
 @pytest.mark.parametrize(
     "lat,lng",
     [
-        (37.5, 130.0),  # 강원 본토 박스 바로 동쪽 바깥(동해 바다)
-        (36.5, 128.0),  # 강원 본토 박스 바로 남쪽 바깥(경북)
-        (37.5, 126.9),  # 강원 본토 박스 바로 서쪽 바깥(경기)
-        (37.5, 129.6),  # 강원 본토 박스 최대 경계 바로 바깥
+        (37.5, 127.5),  # 코드리뷰 반례 - 예전 사각형 박스는 통과시켰지만 실제 강원도는 아님
+        (37.5, 129.3),  # 동해 바다 한가운데 - 예전 박스 안이지만 육지가 아님
+        (37.7, 127.45),  # 경기 가평 인근 - 예전 박스 안이지만 강원도 아님
+        (37.0, 129.2),  # 경북 울진 인근 - 예전 박스 안이지만 강원도 아님
     ],
 )
 def test_waypoint_rejects_non_gangwon_coords(lat, lng):
+    """예전 사각형 박스 안에는 들었지만 실제 강원도 경계 밖인 좌표는 경유지로 거부."""
     with pytest.raises(ValidationError):
         CourseWaypointCreate(latitude=lat, longitude=lng)
 
 
 @pytest.fixture
 async def custom_course_owner(db_session):
-    """CUSTOM 코스 하나 + 작성자 유저를 만들고, 종료 후 정리한다."""
+    """CUSTOM 코스 하나 + 작성자 유저를 만들고, 종료 후 정리."""
     owner = User(nickname=f"pytest-owner-{uuid.uuid4().hex[:12]}")
     db_session.add(owner)
     await db_session.flush()
@@ -74,6 +108,7 @@ async def custom_course_owner(db_session):
 
 
 async def test_update_course_by_non_owner_raises_403(db_session, custom_course_owner):
+    """작성자가 아닌 유저가 수정을 시도하면 403을 반환하고 코스는 그대로 유지."""
     course, owner = custom_course_owner
     other_user = User(nickname=f"pytest-other-{uuid.uuid4().hex[:12]}")
     db_session.add(other_user)
@@ -94,6 +129,7 @@ async def test_update_course_by_non_owner_raises_403(db_session, custom_course_o
 
 
 async def test_update_course_by_owner_succeeds(db_session, custom_course_owner):
+    """작성자 본인이 수정을 요청하면 정상적으로 반영."""
     course, owner = custom_course_owner
 
     result = await update_course(
@@ -106,7 +142,40 @@ async def test_update_course_by_owner_succeeds(db_session, custom_course_owner):
     assert result.course_name == "본인이 바꾼 이름"
 
 
+async def test_create_course_serializes_creator_nickname(db_session):
+    """생성 직후 응답 직렬화까지 확인 - course.creator가 eager load 안 돼있으면
+    creator_nickname 대입 시 lazy load 에러가 남."""
+    owner = User(nickname=f"pytest-creator-{uuid.uuid4().hex[:12]}")
+    db_session.add(owner)
+    await db_session.commit()
+
+    result = None
+    try:
+        result = await create_course(
+            session=db_session,
+            user_id=owner.user_id,
+            body=CourseCreateRequest(
+                course_name="pytest 생성 테스트 코스",
+                distance=1.0,
+                difficulty="NORMAL",
+                estimated_time=10,
+                waypoints=_valid_waypoints(),
+            ),
+        )
+        assert result.creator_nickname == owner.nickname
+        assert result.created_by == owner.user_id
+    finally:
+        if result is not None:
+            await db_session.execute(
+                delete(CourseWaypoint).where(CourseWaypoint.course_id == result.course_id)
+            )
+            await db_session.execute(delete(Course).where(Course.course_id == result.course_id))
+        await db_session.execute(delete(User).where(User.user_id == owner.user_id))
+        await db_session.commit()
+
+
 async def test_delete_course_by_non_owner_raises_403(db_session, custom_course_owner):
+    """작성자가 아닌 유저가 삭제를 시도하면 403을 반환."""
     course, owner = custom_course_owner
     other_user = User(nickname=f"pytest-other-{uuid.uuid4().hex[:12]}")
     db_session.add(other_user)

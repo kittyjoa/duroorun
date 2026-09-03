@@ -168,23 +168,23 @@ button.profile-avatar { border:0; padding:0; font:inherit; cursor:pointer; }
 }
 
 
-/* 코스 목록 / 상세 */
+/* 코스 목록 / 상세
+   ㅡ 폰트를 두 조상에 한 번만 걸고 자식들은 상속받게 함(개별 선언 X) */
+.course-list-page, .course-detail-page { font-family:'Apple SD Gothic Neo',sans-serif; }
 .course-list-page { padding:124px clamp(24px,5vw,76px) 80px; min-height:100vh; }
 .course-list-page .course-card { display:block; }
-.course-list-status { color:#5c706c; font-family:'Apple SD Gothic Neo',sans-serif; font-size:14px; padding:40px 0; text-align:center; }
+.course-list-status { color:#5c706c; font-size:14px; padding:40px 0; text-align:center; }
 .course-list-status.error { color:var(--red); }
 .course-detail-page { max-width:720px; margin:0 auto; padding:124px 24px 80px; min-height:100vh; }
 .course-detail-heading { margin:18px 0 28px; }
 .course-detail-heading h1 { font-size:32px; letter-spacing:-1.5px; margin:8px 0 0; }
-.course-detail-creator { margin:6px 0 0; color:#5c706c; font-family:'Apple SD Gothic Neo',sans-serif; font-size:13px; }
+.course-detail-creator { margin:6px 0 0; color:#5c706c; font-size:13px; }
 .course-detail-info { display:grid; grid-template-columns:repeat(2,1fr); gap:18px; margin:0 0 28px; padding:20px; border:1px solid #e1e7e2; border-radius:10px; }
 .course-detail-info div { display:flex; flex-direction:column; gap:4px; }
-.course-detail-info dt { color:#82928e; font-family:'Apple SD Gothic Neo',sans-serif; font-size:12px; }
-.course-detail-info dd { margin:0; font-size:16px; color:var(--ink); font-family:'Apple SD Gothic Neo',sans-serif; }
-.course-detail-desc { color:#5c706c; font-family:'Apple SD Gothic Neo',sans-serif; font-size:14px; line-height:1.8; white-space:pre-line; }
-.course-detail-source-note { margin:-14px 0 20px; font-size:12px; color:#9aa9a5; font-family:'Apple SD Gothic Neo',sans-serif; }
-.course-detail-page .section-kicker,
-.course-detail-page .text-button { font-family:'Apple SD Gothic Neo',sans-serif; }
+.course-detail-info dt { color:#82928e; font-size:12px; }
+.course-detail-info dd { margin:0; font-size:16px; color:var(--ink); }
+.course-detail-desc { color:#5c706c; font-size:14px; line-height:1.8; white-space:pre-line; }
+.course-detail-source-note { margin:-14px 0 20px; font-size:12px; color:#9aa9a5; }
 @media (max-width:560px) { .course-detail-info { grid-template-columns:1fr; } }
 
 /* 코스 타입 탭 / 필터 바 */
@@ -192,16 +192,16 @@ button.profile-avatar { border:0; padding:0; font:inherit; cursor:pointer; }
 .course-type-tabs button { border:1px solid #e1e7e2; background:#fff; color:#5c706c; padding:10px 18px; border-radius:22px; cursor:pointer; font-size:14px; }
 .course-type-tabs button.active { background:var(--ink); color:#fff; border-color:var(--ink); }
 .course-filter-bar { display:flex; flex-wrap:wrap; gap:10px; margin-bottom:28px; }
-.course-filter-bar input, .course-filter-bar select { border:1px solid #dadce0; border-radius:8px; padding:10px 12px; font-size:13px; font-family:'Apple SD Gothic Neo',sans-serif; }
+.course-filter-bar input, .course-filter-bar select { border:1px solid #dadce0; border-radius:8px; padding:10px 12px; font-size:13px; }
 .course-list-load-more { display:flex; justify-content:center; margin-top:28px; }
-.course-list-load-more button { border:1px solid #dadce0; background:#fff; border-radius:8px; padding:10px 24px; font-size:13px; font-family:'Apple SD Gothic Neo',sans-serif; cursor:pointer; }
+.course-list-load-more button { border:1px solid #dadce0; background:#fff; border-radius:8px; padding:10px 24px; font-size:13px; cursor:pointer; }
 .course-list-load-more button:disabled { opacity:.6; cursor:not-allowed; }
 .course-detail-images { display:flex; flex-wrap:wrap; gap:10px; margin:20px 0 28px; }
 .course-detail-images img { width:160px; height:120px; object-fit:cover; border-radius:8px; }
 
 .kakao-map-wrapper { position:relative; border:1px solid #e1e7e2; border-radius:10px; overflow:hidden; margin:0 0 28px; }
 .kakao-map { width:100%; }
-.kakao-map-status { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; background:#f6f4ec; color:#5c706c; font-family:'Apple SD Gothic Neo',sans-serif; font-size:14px; }
+.kakao-map-status { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; background:#f6f4ec; color:#5c706c; font-size:14px; }
 .kakao-map-status.error { color:var(--red); }
 .kakao-map-status button { margin-left:6px; border:1px solid currentColor; background:transparent; color:inherit; border-radius:6px; padding:2px 8px; font-size:12px; cursor:pointer; }
 .kakao-map-hint { position:absolute; left:12px; bottom:12px; background:rgba(16,42,43,.85); color:#fff; font-size:12px; padding:8px 12px; border-radius:6px; pointer-events:none; }
@@ -213,24 +213,21 @@ button.profile-avatar { border:0; padding:0; font:inherit; cursor:pointer; }
 .course-card-delete { position:absolute; right:13px; top:13px; z-index:3; background:rgba(255,255,255,.9); border:0; padding:5px 10px; border-radius:12px; font-size:11px; color:var(--red); font-weight:600; cursor:pointer; }
 
 .course-form { max-width:520px; margin-top:24px; }
-.course-form label { display:block; font-size:13px; color:#5c706c; margin:20px 0 6px; font-family:'Apple SD Gothic Neo',sans-serif; }
+.course-form label { display:block; font-size:13px; color:#5c706c; margin:20px 0 6px; }
 .course-form label:first-of-type { margin-top:0; }
-.course-form input, .course-form select, .course-form textarea { width:100%; padding:12px 14px; border:1px solid #dadce0; border-radius:8px; font-size:14px; font-family:'Apple SD Gothic Neo',sans-serif; }
+.course-form input, .course-form select, .course-form textarea { width:100%; padding:12px 14px; border:1px solid #dadce0; border-radius:8px; font-size:14px; }
 .course-form textarea { resize:vertical; }
 #course-photos-section > label { margin-top:28px; }
 #course-photos-section .course-detail-images { margin-top:15px; }
-.kakao-map-hint-static { margin:0 0 8px; font-size:12px; color:#8a7a3d; font-family:'Apple SD Gothic Neo',sans-serif; }
+.kakao-map-hint-static { margin:0 0 8px; font-size:12px; color:#8a7a3d; }
 .waypoint-list { list-style:none; margin:12px 0 0; padding:0; display:flex; flex-direction:column; gap:6px; }
-.waypoint-list li { display:flex; justify-content:space-between; align-items:center; padding:8px 12px; border:1px solid #e1e7e2; border-radius:8px; font-size:13px; color:#5c706c; font-family:'Apple SD Gothic Neo',sans-serif; }
+.waypoint-list li { display:flex; justify-content:space-between; align-items:center; padding:8px 12px; border:1px solid #e1e7e2; border-radius:8px; font-size:13px; color:#5c706c; }
 .waypoint-list li button { border:0; background:transparent; color:var(--red); font-size:12px; cursor:pointer; }
 .waypoint-clear-all { display:inline-block; margin-top:8px; font-size:12px; color:var(--red); border-bottom-color:currentColor; }
 .course-form-image { position:relative; }
 .course-form-image img { width:160px; height:120px; object-fit:cover; border-radius:8px; }
 .course-form-image button { position:absolute; top:6px; right:6px; display:flex; align-items:center; justify-content:center; border:0; border-radius:4px; width:22px; height:22px; background:var(--red); color:#fff; font-size:14px; line-height:1; cursor:pointer; }
-.course-detail-page .onboarding-error,
-.course-detail-page .mypage-success,
-.course-detail-page .mypage-image-upload { font-family:'Apple SD Gothic Neo',sans-serif; }
 .course-form-actions { display:flex; align-items:center; gap:20px; margin-top:26px; }
-.course-form-actions .primary-button { border:0; border-radius:8px; cursor:pointer; padding:9px 18px; font-size:13px; box-shadow:none; font-family:'Apple SD Gothic Neo',sans-serif; }
+.course-form-actions .primary-button { border:0; border-radius:8px; cursor:pointer; padding:9px 18px; font-size:13px; box-shadow:none; }
 .course-form-actions .primary-button:disabled { opacity:.6; cursor:not-allowed; }
 .course-form-actions .danger-button { background:var(--red); }

@@ -37,7 +37,15 @@ async def ctx(db_session):
     if context.course_ids:
         await db_session.execute(delete(Record).where(Record.course_id.in_(context.course_ids)))
         await db_session.execute(delete(Review).where(Review.course_id.in_(context.course_ids)))
+    if context.banned_ids:
+        await db_session.execute(
+            delete(BannedAccount).where(BannedAccount.id.in_(context.banned_ids))
+        )
     if context.user_ids:
+        # banned_accounts.banned_by가 user_id를 참조하므로, 유저 삭제 전에 먼저 정리
+        await db_session.execute(
+            delete(BannedAccount).where(BannedAccount.banned_by.in_(context.user_ids))
+        )
         await db_session.execute(
             delete(SocialAccount).where(SocialAccount.user_id.in_(context.user_ids))
         )
@@ -46,19 +54,18 @@ async def ctx(db_session):
         await db_session.execute(delete(User).where(User.user_id.in_(context.user_ids)))
     if context.course_ids:
         await db_session.execute(delete(Course).where(Course.course_id.in_(context.course_ids)))
-    if context.banned_ids:
-        await db_session.execute(
-            delete(BannedAccount).where(BannedAccount.id.in_(context.banned_ids))
-        )
     await db_session.commit()
 
 
 async def _make_user_with_social(
-    db_session, ctx: AdminTestContext, provider_type: ProviderType = ProviderType.KAKAO
+    db_session,
+    ctx: AdminTestContext,
+    provider_type: ProviderType = ProviderType.KAKAO,
+    user_role: UserRole = UserRole.USER,
 ) -> tuple[User, str]:
     """소셜 계정이 연동된 유저 하나를 만들고 (user, provider_uid)를 반환한다."""
     provider_uid = uuid.uuid4().hex
-    user = User(nickname=f"pytest-admin-{uuid.uuid4().hex[:12]}")
+    user = User(nickname=f"pytest-admin-{uuid.uuid4().hex[:12]}", user_role=user_role)
     db_session.add(user)
     await db_session.flush()
     ctx.user_ids.append(user.user_id)
@@ -88,11 +95,13 @@ async def test_general_user_cannot_access_admin():
     assert exc_info.value.status_code == 403
 
 
-# 2. 강제 탈퇴 시 유저 익명화와 밴 정보가 함께 저장됨
+# 2. 강제 탈퇴 시 유저 익명화와 밴 정보(+ 처리한 관리자)가 함께 저장됨
 async def test_force_withdraw_anonymizes_user_and_records_ban(db_session, ctx):
     user, provider_uid = await _make_user_with_social(db_session, ctx)
+    admin_user, _ = await _make_user_with_social(db_session, ctx, user_role=UserRole.ADMIN)
+    admin_id = admin_user.user_id
 
-    await force_withdraw_user(user, "욕설", db_session, _FakeRedis())
+    await force_withdraw_user(user, admin_id, "욕설", db_session, _FakeRedis())
 
     refreshed = (
         await db_session.execute(select(User).where(User.user_id == user.user_id))
@@ -108,12 +117,14 @@ async def test_force_withdraw_anonymizes_user_and_records_ban(db_session, ctx):
     ctx.banned_ids.append(banned.id)
     assert banned.provider_type == ProviderType.KAKAO
     assert banned.reason == "욕설"
+    assert banned.banned_by == admin_id
 
 
 # 3. 강제 탈퇴 중 오류 발생 시 둘 다 롤백됨
 async def test_force_withdraw_rolls_back_on_error(db_session, ctx):
     user, provider_uid = await _make_user_with_social(db_session, ctx)
     user_id = user.user_id  # rollback 후 만료된 속성에 접근하지 않도록 미리 저장
+    admin_user, _ = await _make_user_with_social(db_session, ctx, user_role=UserRole.ADMIN)
 
     # 같은 provider_type+provider_uid로 밴을 미리 만들어둬서, force_withdraw_user가
     # 새 BannedAccount를 insert할 때 UniqueConstraint 위반이 나도록 유도
@@ -125,7 +136,7 @@ async def test_force_withdraw_rolls_back_on_error(db_session, ctx):
     ctx.banned_ids.append(pre_existing.id)
 
     with pytest.raises(IntegrityError):
-        await force_withdraw_user(user, "욕설", db_session, _FakeRedis())
+        await force_withdraw_user(user, admin_user.user_id, "욕설", db_session, _FakeRedis())
     await db_session.rollback()
 
     refreshed = (
@@ -172,9 +183,36 @@ async def test_force_withdraw_already_withdrawn_user_returns_404(db_session, ctx
     await db_session.commit()
 
     with pytest.raises(HTTPException) as exc_info:
-        await admin_service.force_withdraw_user(user.user_id, "욕설", db_session, _FakeRedis())
+        await admin_service.force_withdraw_user(
+            999_001, user.user_id, "욕설", db_session, _FakeRedis()
+        )
 
     assert exc_info.value.status_code == 404
+
+
+# 13. 관리자가 자기 자신을 강제 탈퇴시키면 400
+async def test_force_withdraw_self_returns_400(db_session, ctx):
+    admin_user, _ = await _make_user_with_social(db_session, ctx, user_role=UserRole.ADMIN)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await admin_service.force_withdraw_user(
+            admin_user.user_id, admin_user.user_id, "욕설", db_session, _FakeRedis()
+        )
+
+    assert exc_info.value.status_code == 400
+
+
+# 14. 관리자가 다른 관리자를 강제 탈퇴시키면 403
+async def test_force_withdraw_other_admin_returns_403(db_session, ctx):
+    acting_admin, _ = await _make_user_with_social(db_session, ctx, user_role=UserRole.ADMIN)
+    target_admin, _ = await _make_user_with_social(db_session, ctx, user_role=UserRole.ADMIN)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await admin_service.force_withdraw_user(
+            acting_admin.user_id, target_admin.user_id, "욕설", db_session, _FakeRedis()
+        )
+
+    assert exc_info.value.status_code == 403
 
 
 # 7. 없는 밴 ID 해제 시 404
@@ -337,3 +375,46 @@ async def test_active_users_30d_excludes_withdrawn_users(db_session, ctx):
     after = (await admin_service.get_user_stats(db_session)).active_users_30d
 
     assert after == baseline
+
+
+# 15. 미래 시각의 last_login_at은 활성 유저에 포함되지 않음
+async def test_active_users_30d_excludes_future_last_login(db_session, ctx):
+    baseline = (await admin_service.get_user_stats(db_session)).active_users_30d
+
+    user = User(
+        nickname=f"pytest-admin-{uuid.uuid4().hex[:12]}",
+        last_login_at=datetime.now(UTC) + timedelta(days=1),
+    )
+    db_session.add(user)
+    await db_session.commit()
+    ctx.user_ids.append(user.user_id)
+
+    after = (await admin_service.get_user_stats(db_session)).active_users_30d
+
+    assert after == baseline
+
+
+# 16. 밴 목록은 banned_at이 같아도 id 기준으로 순서가 안정적으로 고정됨
+async def test_banned_accounts_list_tiebreaks_by_id(db_session, ctx):
+    same_time = datetime.now(UTC)
+    older = BannedAccount(
+        provider_type=ProviderType.KAKAO,
+        provider_uid=uuid.uuid4().hex,
+        reason="테스트",
+        banned_at=same_time,
+    )
+    newer = BannedAccount(
+        provider_type=ProviderType.NAVER,
+        provider_uid=uuid.uuid4().hex,
+        reason="테스트",
+        banned_at=same_time,
+    )
+    db_session.add_all([older, newer])
+    await db_session.commit()
+    ctx.banned_ids.extend([older.id, newer.id])
+
+    result = await admin_service.get_banned_accounts(1, 100, db_session)
+    ids_in_order = [item.id for item in result.items if item.id in (older.id, newer.id)]
+
+    # banned_at이 동일하면 id 큰 것(나중에 생성된 것)이 먼저 나와야 함
+    assert ids_in_order.index(newer.id) < ids_in_order.index(older.id)

@@ -28,7 +28,7 @@ async def force_withdraw(
     admin: User = Depends(get_current_admin),
 ) -> MessageResponse:
     """지속적으로 문제가 되는 유저를 강제 탈퇴 처리합니다."""
-    await admin_service.force_withdraw_user(user_id, body.reason, db, redis)
+    await admin_service.force_withdraw_user(admin.user_id, user_id, body.reason, db, redis)
     return MessageResponse(message="유저가 강제 탈퇴 처리되었습니다")
 
 

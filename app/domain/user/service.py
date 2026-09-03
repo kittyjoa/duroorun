@@ -1,5 +1,6 @@
 """회원/인증 - 비즈니스 로직."""
 
+import logging
 import re
 import secrets
 from datetime import UTC, datetime, timedelta
@@ -30,6 +31,8 @@ from app.domain.course.models import Course
 from app.domain.record.models import Record
 from app.domain.review.models import Review
 from app.domain.user.models import BannedAccount, ProviderType, SocialAccount, User
+
+logger = logging.getLogger(__name__)
 
 _KAKAO_AUTH_URL = "https://kauth.kakao.com/oauth/authorize"
 _KAKAO_TOKEN_URL = "https://kauth.kakao.com/oauth/token"
@@ -78,6 +81,7 @@ async def _touch_last_login(user_id: int, db: AsyncSession) -> None:
         await db.commit()
     except SQLAlchemyError:
         await db.rollback()
+        logger.warning("last_login_at 갱신 실패: user_id=%s", user_id)
 
 
 async def _check_not_banned(
@@ -555,6 +559,18 @@ async def refresh_tokens(refresh_token: str, db: AsyncSession, redis: Redis) -> 
             detail="유효하지 않은 토큰입니다",
         )
 
+    # 탈퇴한 유저는 Redis에 옛 refresh token이 남아있어도(정리 실패 등) 재발급을 거부한다
+    active_user = (
+        await db.execute(
+            select(User.user_id).where(User.user_id == user_id, User.deleted_at.is_(None))
+        )
+    ).scalar_one_or_none()
+    if active_user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="탈퇴했거나 존재하지 않는 사용자입니다",
+        )
+
     new_access_token = create_access_token(user_id)
     new_refresh_token, new_jti = create_refresh_token(user_id)
 
@@ -667,7 +683,7 @@ async def upload_profile_image(user: User, file: UploadFile, db: AsyncSession) -
         try:
             await delete_file(new_url)
         except (ClientError, BotoCoreError):
-            pass
+            logger.warning("고아 파일 정리 실패 (R2): user_id=%s, url=%s", user.user_id, new_url)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="이미지 저장에 실패했습니다. 잠시 후 다시 시도해주세요",
@@ -678,7 +694,7 @@ async def upload_profile_image(user: User, file: UploadFile, db: AsyncSession) -
         try:
             await delete_file(old_url)
         except (ClientError, BotoCoreError):
-            pass
+            logger.warning("기존 이미지 정리 실패 (R2): user_id=%s, url=%s", user.user_id, old_url)
 
     return new_url
 
@@ -704,7 +720,7 @@ async def delete_profile_image(user: User, db: AsyncSession) -> None:
     try:
         await delete_file(old_url)
     except (ClientError, BotoCoreError):
-        pass
+        logger.warning("기존 이미지 정리 실패 (R2): user_id=%s, url=%s", user.user_id, old_url)
 
 
 async def _anonymize_user_data(user: User, db: AsyncSession) -> str | None:
@@ -752,21 +768,28 @@ async def withdraw_user(user: User, access_token: str, db: AsyncSession, redis: 
             await add_to_blacklist(jti, redis)
         await delete_refresh_token(user.user_id, redis)
     except RedisError:
-        pass
+        logger.warning("탈퇴 시 refresh token 정리 실패 (Redis): user_id=%s", user.user_id)
 
     # R2 정리 실패해도 탈퇴는 완료 — DB에는 이미 NULL 처리됨(고아 파일로만 남음)
     if old_profile_image_url:
         try:
             await delete_file(old_profile_image_url)
         except (ClientError, BotoCoreError):
-            pass
+            logger.warning(
+                "탈퇴 시 프로필 이미지 정리 실패 (R2): user_id=%s, url=%s",
+                user.user_id,
+                old_profile_image_url,
+            )
 
 
-async def force_withdraw_user(user: User, reason: str, db: AsyncSession, redis: Redis) -> None:
+async def force_withdraw_user(
+    user: User, admin_id: int, reason: str, db: AsyncSession, redis: Redis
+) -> None:
     """유저 강제 탈퇴(관리자) - 단일 트랜잭션 처리.
 
     본인 탈퇴와 달리 access_token이 없어 블랙리스트 등록은 생략하고, 재가입 방지를 위해
     social_accounts를 하드 삭제하기 전에 provider 정보를 banned_accounts에 기록한다.
+    admin_id는 밴 목록에서 동일 사유/날짜의 밴을 구분하고 누가 처리했는지 감사하기 위함.
     """
     result = await db.execute(select(SocialAccount).where(SocialAccount.user_id == user.user_id))
     social = result.scalar_one_or_none()
@@ -778,6 +801,7 @@ async def force_withdraw_user(user: User, reason: str, db: AsyncSession, redis: 
             provider_type=social.provider_type,
             provider_uid=social.provider_uid,
             reason=reason,
+            banned_by=admin_id,
         ))
 
     await db.commit()
@@ -786,11 +810,15 @@ async def force_withdraw_user(user: User, reason: str, db: AsyncSession, redis: 
     try:
         await delete_refresh_token(user.user_id, redis)
     except RedisError:
-        pass
+        logger.warning("강제 탈퇴 시 refresh token 정리 실패 (Redis): user_id=%s", user.user_id)
 
     # R2 정리 실패해도 탈퇴는 완료 — DB에는 이미 NULL 처리됨(고아 파일로만 남음)
     if old_profile_image_url:
         try:
             await delete_file(old_profile_image_url)
         except (ClientError, BotoCoreError):
-            pass
+            logger.warning(
+                "강제 탈퇴 시 프로필 이미지 정리 실패 (R2): user_id=%s, url=%s",
+                user.user_id,
+                old_profile_image_url,
+            )

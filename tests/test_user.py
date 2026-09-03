@@ -10,6 +10,7 @@ import pytest_asyncio
 from fastapi import HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 
 from app.core.security import (
     add_to_blacklist,
@@ -179,6 +180,22 @@ async def test_refresh_tokens_rejects_stale_jti(db_session, ctx, redis_client):
     assert exc_info.value.status_code == 401
 
 
+# 4-1. 탈퇴한 유저는 Redis에 옛 refresh token이 남아있어도 재발급 거부됨
+async def test_refresh_tokens_rejects_withdrawn_user(db_session, ctx, redis_client):
+    user = await _make_user(db_session, ctx)
+    refresh_token, jti = create_refresh_token(user.user_id)
+    await save_refresh_jti(user.user_id, jti, redis_client)
+
+    # Redis 정리가 실패한 상황을 흉내: DB만 탈퇴 처리하고 Redis의 refresh token은 그대로 둠
+    user.deleted_at = datetime.now(UTC)
+    await db_session.commit()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await refresh_tokens(refresh_token, db_session, redis_client)
+
+    assert exc_info.value.status_code == 401
+
+
 # 5. 로그아웃 시 access token 블랙리스트 등록 + refresh token 삭제
 async def test_logout_blacklists_access_and_deletes_refresh(db_session, ctx, redis_client):
     user = await _make_user(db_session, ctx)
@@ -329,3 +346,23 @@ async def test_touch_last_login_skips_recent_update(db_session, ctx):
     ).scalar_one()
 
     assert first == second
+
+
+# 12. 계정당 소셜 연동 1개 정책이 DB 유니크 제약으로 강제됨
+async def test_social_account_user_id_is_unique(db_session, ctx):
+    user = await _make_user(db_session, ctx)
+    db_session.add(
+        SocialAccount(
+            user_id=user.user_id, provider_type=ProviderType.KAKAO, provider_uid=uuid.uuid4().hex
+        )
+    )
+    await db_session.commit()
+
+    db_session.add(
+        SocialAccount(
+            user_id=user.user_id, provider_type=ProviderType.NAVER, provider_uid=uuid.uuid4().hex
+        )
+    )
+    with pytest.raises(IntegrityError):
+        await db_session.commit()
+    await db_session.rollback()

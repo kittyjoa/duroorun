@@ -24,14 +24,22 @@ from app.domain.course.models import Course, CourseType
 from app.domain.facility.models import Facility, FacilityType
 from app.domain.record.models import Record
 from app.domain.review.models import Review
-from app.domain.user.models import BannedAccount, User
+from app.domain.user.models import BannedAccount, User, UserRole
 from app.domain.user.service import force_withdraw_user as _force_withdraw_user
 
 KST = ZoneInfo("Asia/Seoul")
 
 
-async def force_withdraw_user(user_id: int, reason: str, db: AsyncSession, redis: Redis) -> None:
+async def force_withdraw_user(
+    admin_id: int, user_id: int, reason: str, db: AsyncSession, redis: Redis
+) -> None:
     """유저 강제 탈퇴 (관리자 전용)."""
+    if user_id == admin_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="자기 자신은 강제 탈퇴시킬 수 없습니다",
+        )
+
     result = await db.execute(
         select(User).where(User.user_id == user_id, User.deleted_at.is_(None))
     )
@@ -41,8 +49,13 @@ async def force_withdraw_user(user_id: int, reason: str, db: AsyncSession, redis
             status_code=status.HTTP_404_NOT_FOUND,
             detail="존재하지 않거나 이미 탈퇴한 유저입니다",
         )
+    if user.user_role == UserRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="관리자 계정은 강제 탈퇴시킬 수 없습니다",
+        )
 
-    await _force_withdraw_user(user, reason, db, redis)
+    await _force_withdraw_user(user, admin_id, reason, db, redis)
 
 
 async def get_banned_accounts(page: int, size: int, db: AsyncSession) -> BannedAccountListResponse:
@@ -51,7 +64,7 @@ async def get_banned_accounts(page: int, size: int, db: AsyncSession) -> BannedA
 
     result = await db.execute(
         select(BannedAccount)
-        .order_by(BannedAccount.banned_at.desc())
+        .order_by(BannedAccount.banned_at.desc(), BannedAccount.id.desc())
         .offset((page - 1) * size)
         .limit(size)
     )
@@ -142,12 +155,13 @@ async def get_user_stats(db: AsyncSession) -> UserStatsResponse:
         )
     ).scalar_one()
 
+    now = datetime.now(UTC)
     active_users_30d = (
         await db.execute(
             select(func.count())
             .select_from(User)
             .where(
-                User.last_login_at >= datetime.now(UTC) - timedelta(days=30),
+                User.last_login_at.between(now - timedelta(days=30), now),
                 User.deleted_at.is_(None),
             )
         )
@@ -194,6 +208,7 @@ async def _get_popular_courses(
     완주 횟수가 같으면 리뷰 개수가 많은 순으로 2차 정렬해 순서를 안정적으로 고정한다.
     Review는 Record와 별도로 Course에 N:1 관계라, 그냥 join하면 조합이 곱해져
     완주 횟수 집계가 틀어지므로 상관 서브쿼리로 따로 계산한다.
+    완주 횟수·리뷰 개수까지 전부 같으면 course_id로 최종 고정한다.
     """
     review_count_subquery = (
         select(func.count(Review.review_id))
@@ -215,7 +230,11 @@ async def _get_popular_courses(
         query = query.where(Course.course_type == course_type)
     query = (
         query.group_by(Course.course_id, Course.course_name)
-        .order_by(func.count(Record.record_id).desc(), review_count_subquery.desc())
+        .order_by(
+            func.count(Record.record_id).desc(),
+            review_count_subquery.desc(),
+            Course.course_id.asc(),
+        )
         .limit(limit)
     )
 

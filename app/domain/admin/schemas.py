@@ -30,6 +30,7 @@ class BannedAccountResponse(BaseModel):
     id: int
     provider_type: ProviderType
     reason: str
+    banned_by: int | None
     banned_at: datetime
 
 

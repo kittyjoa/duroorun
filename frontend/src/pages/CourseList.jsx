@@ -215,13 +215,13 @@ const CourseList = () => {
                     {courseType === 'custom' && user && course.created_by === user.user_id && (
                       <span className="course-card-mine">내 코스</span>
                     )}
-                    <span className="course-badge">
-                      {DIFFICULTY_LABEL[course.difficulty] ?? '난이도 정보 없음'}
-                    </span>
                   </div>
                   <div className="course-info">
                     <span>
                       {courseType === 'drnb' ? (course.sigun ?? course.brd_div) : '커스텀 코스'}
+                      <span className="course-badge">
+                        {DIFFICULTY_LABEL[course.difficulty] ?? '난이도 정보 없음'}
+                      </span>
                     </span>
                     <h3>{course.course_name}</h3>
                     <p>

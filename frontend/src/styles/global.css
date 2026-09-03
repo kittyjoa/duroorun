@@ -68,7 +68,7 @@ h2 { font-size:36px; letter-spacing:-1.5px; margin:8px 0 0; line-height:1.25; }
 .course-art:before,.course-art:after { content:''; position:absolute; left:-10%; right:-10%; bottom:-55%; height:115%; background:rgba(255,255,255,.45); border-radius:48% 52% 0 0; transform:rotate(5deg); }
 .course-art:after { bottom:-72%; background:rgba(13,177,75,.24); transform:rotate(-5deg); }
 .course-number { position:absolute; left:16px; top:12px; font-size:34px; color:rgba(255,255,255,.8); }
-.course-badge { position:absolute; right:13px; top:13px; background:rgba(255,255,255,.86); padding:5px 9px; border-radius:12px; font-size:10px; color:#45635d; }
+.course-badge { display:inline-block; margin-left:8px; background:#eef3f0; padding:3px 9px; border-radius:12px; font-size:10px; color:#45635d; vertical-align:middle; }
 .course-card-mine { position:absolute; left:13px; top:13px; z-index:3; background:rgba(255,255,255,.9); padding:5px 10px; border-radius:12px; font-size:10px; color:var(--green); font-weight:600; }
 .mini-route { position:absolute; z-index:2; width:110px; height:60px; border:3px dotted white; border-radius:50%; left:35%; top:38%; transform:rotate(-18deg); }
 .course-info { padding:18px; }
@@ -172,13 +172,14 @@ button.profile-avatar { border:0; padding:0; font:inherit; cursor:pointer; }
    ㅡ 폰트를 두 조상에 한 번만 걸고 자식들은 상속받게 함(개별 선언 X) */
 .course-list-page, .course-detail-page { font-family:'Apple SD Gothic Neo',sans-serif; }
 .course-list-page { padding:124px clamp(24px,5vw,76px) 80px; min-height:100vh; }
+.course-list-page h2, .course-form-title { font-family:'Gangwon','Apple SD Gothic Neo',sans-serif; }
 .course-list-page .course-card { display:block; }
 .course-list-status { color:#5c706c; font-size:14px; padding:40px 0; text-align:center; }
 .course-list-status.error { color:var(--red); }
 .course-detail-page { max-width:720px; margin:0 auto; padding:124px 24px 80px; min-height:100vh; }
 .course-detail-heading { margin:18px 0 28px; }
-.course-detail-heading h1 { font-size:32px; letter-spacing:-1.5px; margin:8px 0 0; }
-.course-detail-creator { margin:6px 0 0; color:#5c706c; font-size:13px; }
+.course-detail-heading h1 { font-size:32px; letter-spacing:-1.5px; margin:8px 0 0; font-family:'Gangwon','Apple SD Gothic Neo',sans-serif; }
+.course-detail-creator { margin:12px 0 0; color:#5c706c; font-size:13px; }
 .course-detail-info { display:grid; grid-template-columns:repeat(2,1fr); gap:18px; margin:0 0 28px; padding:20px; border:1px solid #e1e7e2; border-radius:10px; }
 .course-detail-info div { display:flex; flex-direction:column; gap:4px; }
 .course-detail-info dt { color:#82928e; font-size:12px; }
@@ -215,7 +216,7 @@ button.profile-avatar { border:0; padding:0; font:inherit; cursor:pointer; }
 .course-form { max-width:520px; margin-top:24px; }
 .course-form label { display:block; font-size:13px; color:#5c706c; margin:20px 0 6px; }
 .course-form label:first-of-type { margin-top:0; }
-.course-form input, .course-form select, .course-form textarea { width:100%; padding:12px 14px; border:1px solid #dadce0; border-radius:8px; font-size:14px; }
+.course-form input, .course-form select, .course-form textarea { width:100%; padding:12px 14px; border:1px solid #dadce0; border-radius:8px; font-size:14px; font-family:inherit; }
 .course-form textarea { resize:vertical; }
 #course-photos-section > label { margin-top:28px; }
 #course-photos-section .course-detail-images { margin-top:15px; }

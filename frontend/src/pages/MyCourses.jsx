@@ -77,12 +77,14 @@ const MyCourses = () => {
                 >
                   <div className="course-art">
                     <div className="mini-route" />
-                    <span className="course-badge">
-                      {DIFFICULTY_LABEL[course.difficulty] ?? '난이도 정보 없음'}
-                    </span>
                   </div>
                   <div className="course-info">
-                    <span>커스텀 코스</span>
+                    <span>
+                      커스텀 코스
+                      <span className="course-badge">
+                        {DIFFICULTY_LABEL[course.difficulty] ?? '난이도 정보 없음'}
+                      </span>
+                    </span>
                     <h3>{course.course_name}</h3>
                     <p>
                       {course.distance != null && `${course.distance}km · `}

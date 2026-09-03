@@ -8,15 +8,14 @@ export const loadKakaoMaps = () => {
   }
   if (loadPromise) return loadPromise;
 
+  const appKey = import.meta.env.VITE_KAKAO_JS_KEY;
+  if (!appKey) {
+    // 카카오맵 키 없을때 캐시 초기화 로직을 위해 appKey 체크를 Promise 밖으로 뺌
+    return Promise.reject(new Error('VITE_KAKAO_JS_KEY가 설정되지 않았습니다.'));
+  }
+
   // loadPromise: 지금 로드중인/이미끝난 Promise 캐싱
   loadPromise = new Promise((resolve, reject) => {
-    const appKey = import.meta.env.VITE_KAKAO_JS_KEY;
-    if (!appKey) {
-      loadPromise = null; // 실패하면 다음 시도 때 다시 로드하도록 캐시 X
-      reject(new Error('VITE_KAKAO_JS_KEY가 설정되지 않았습니다.'));
-      return;
-    }
-
     const script = document.createElement('script');
     // autoload=false + kakao.maps.load(cb): false로 자동 초기화 끄고
     // 스크립트가 다운로드 완료된뒤(script.onload) 직접 부름 (타이밍 통제)

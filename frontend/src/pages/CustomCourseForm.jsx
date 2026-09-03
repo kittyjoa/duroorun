@@ -24,7 +24,7 @@ const EMPTY_FORM = {
   course_description: '',
 };
 
-// 강원도 대략적인 경계 박스 (app/domain/course/schemas.py의 _GANGWON_MAIN_BOX/_CHEORWON_BOX와 동일)
+// 강원도 경계 박스 (안내용 근사치/ 최종 판정 기준은 course/schemas.py의 실제 폴리곤)
 // - 사용자 GPS 위치가 강원도 일때 초기 화면으로 써도 되는지 가늠하는 용도 + 경유지 클릭 시 지역 검증
 // - 사각형 1개로 구현하면 서울도 포함돼서 강원 본토 박스 + 철원군 전용 박스 2개
 const _GANGWON_BOXES = [

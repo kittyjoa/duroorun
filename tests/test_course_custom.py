@@ -174,6 +174,42 @@ async def test_create_course_serializes_creator_nickname(db_session):
         await db_session.commit()
 
 
+async def test_update_course_replaces_waypoints_and_start_end_coords(db_session, custom_course_owner):
+    """waypoints를 새로 보내면 경유지가 통째로 교체되고 start/end 좌표도 갱신."""
+    course, owner = custom_course_owner
+    new_waypoints = [
+        {"latitude": 38.2070, "longitude": 128.5918},  # 속초해변
+        {"latitude": 37.3422, "longitude": 127.9202},  # 원주시청
+        {"latitude": 37.7519, "longitude": 128.8761},  # 강릉시청
+    ]
+
+    result = await update_course(
+        session=db_session,
+        user_id=owner.user_id,
+        course_id=course.course_id,
+        body=CourseUpdateRequest(waypoints=new_waypoints),
+    )
+
+    assert [(w.latitude, w.longitude) for w in result.waypoints] == [
+        (38.2070, 128.5918),
+        (37.3422, 127.9202),
+        (37.7519, 128.8761),
+    ]
+    assert (result.start_lat, result.start_lng) == (38.2070, 128.5918)
+    assert (result.end_lat, result.end_lng) == (37.7519, 128.8761)
+
+
+def test_update_course_rejects_waypoint_outside_gangwon():
+    """수정 요청 waypoints에 강원도 밖 좌표가 섞이면 요청 검증 단계에서 거부."""
+    with pytest.raises(ValidationError):
+        CourseUpdateRequest(
+            waypoints=[
+                {"latitude": 37.75, "longitude": 128.9},  # 강원 (정상)
+                {"latitude": 37.5, "longitude": 127.5},  # 강원 밖
+            ]
+        )
+
+
 async def test_delete_course_by_non_owner_raises_403(db_session, custom_course_owner):
     """작성자가 아닌 유저가 삭제를 시도하면 403을 반환."""
     course, owner = custom_course_owner

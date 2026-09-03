@@ -28,11 +28,13 @@ const DifficultyPicker = ({ value, onChange }) => (
 const CourseDetail = () => {
   const { courseType, courseId } = useParams();
   const { user } = useUser();
-  // 코스를 빠르게 전환하면(같은 컴포넌트가 재사용되며 courseId만 바뀜) 이전 코스의
-  // 리뷰 응답이 늦게 도착해 최신 코스의 리뷰를 덮어쓸 수 있다 - 매 렌더마다 최신
-  // courseId로 갱신해두고, 응답이 왔을 때 지금도 유효한 요청인지 대조해서 걸러낸다.
-  const activeCourseIdRef = useRef(courseId);
-  activeCourseIdRef.current = courseId;
+  // courseId가 바뀔 때마다 늘어나는 "코스 세대" 번호. courseId 값 자체를 대조하는 대신
+  // 이 번호를 스냅샷 비교하면, "A → B → 다시 A"처럼 결국 같은 값으로 돌아와도 그 사이
+  // 코스가 바뀐 적이 있었다는 걸 정확히 감지할 수 있다.
+  const courseGenerationRef = useRef(0);
+  useEffect(() => {
+    courseGenerationRef.current += 1;
+  }, [courseId]);
   // 코스가 같아도 같은 요청을 여러 번(예: 더보기 도중 코스를 벗어났다 되돌아옴) 보낼 수
   // 있는데, 그중 나중에 시작한 요청보다 먼저 시작한 요청의 응답이 늦게 도착하면 최신
   // 데이터를 덮어쓸 수 있다 - 요청마다 일련번호를 매겨서 가장 최근 요청의 응답만 반영한다.
@@ -74,16 +76,25 @@ const CourseDetail = () => {
     };
   }, []);
 
-  // fetchReviews/checkMyReview가 공통으로 쓰는 staleness 체크. 호출 시점의 courseId와
-  // 일련번호를 캡처해두고, 응답이 왔을 때 그 사이 언마운트/코스 변경/더 최신 요청 발생
-  // 중 하나라도 있었으면 true를 반환한다.
+  // fetchReviews/checkMyReview가 공통으로 쓰는 staleness 체크. 호출 시점의 코스 세대와
+  // 같은 종류 요청의 일련번호를 캡처해두고, 응답이 왔을 때 그 사이 언마운트/코스 변경/더
+  // 최신 같은-종류 요청 발생 중 하나라도 있었으면 true를 반환한다.
   const createStaleChecker = (seqRef) => {
-    const requestedCourseId = courseId;
+    const requestedGeneration = courseGenerationRef.current;
     const requestSeq = ++seqRef.current;
     return () =>
       unmountedRef.current ||
-      activeCourseIdRef.current !== requestedCourseId ||
+      courseGenerationRef.current !== requestedGeneration ||
       seqRef.current !== requestSeq;
+  };
+
+  // 리뷰 작성/수정/삭제/이미지 변경이 공통으로 쓰는 staleness 체크. 이 요청들은 서로 다른
+  // 리뷰를 대상으로 동시에 진행될 수 있어(예: 리뷰A 삭제 중 리뷰B에 이미지 추가) 하나의
+  // 일련번호를 공유하면 서로 무관한 요청끼리 상대방을 stale로 오판해 정상 응답을 버리게
+  // 된다 - 그래서 같은-종류 요청 순서는 신경쓰지 않고, 코스가 바뀌었는지만 확인한다.
+  const createMutationStaleChecker = () => {
+    const requestedGeneration = courseGenerationRef.current;
+    return () => unmountedRef.current || courseGenerationRef.current !== requestedGeneration;
   };
 
   useEffect(() => {
@@ -164,6 +175,13 @@ const CourseDetail = () => {
   };
 
   useEffect(() => {
+    // 코스를 바꿨는데 이전 코스에서 "수정" 중이던 상태(editingReviewId)가 남아있으면,
+    // 이 코스에서 "리뷰 작성" 폼을 새로 제출해도 실제로는 handleSubmitReview가 여전히
+    // 수정 모드로 판단해 이전 코스의 리뷰를 덮어써버린다 - 그걸 막기 위해 초기화한다
+    setEditingReviewId(null);
+    setReviewContent('');
+    setReviewDifficulty('NORMAL');
+    setReviewFormError('');
     fetchReviews(0);
   }, [courseId]);
 
@@ -215,7 +233,7 @@ const CourseDetail = () => {
 
   const handleSubmitReview = async (event) => {
     event.preventDefault();
-    const requestedCourseId = courseId;
+    const isStale = createMutationStaleChecker();
     setReviewFormError('');
     setReviewSaving(true);
     try {
@@ -225,16 +243,14 @@ const CourseDetail = () => {
         method: isEditing ? 'PATCH' : 'POST',
         body: JSON.stringify({ content: reviewContent, difficulty: reviewDifficulty }),
       });
-      // 응답을 기다리는 사이 다른 코스로 이동했을 수 있다(같은 컴포넌트가 재사용되므로) -
-      // 그러면 지금 보고 있는 코스의 리뷰 상태를 이 응답으로 건드리지 않는다
-      if (activeCourseIdRef.current !== requestedCourseId) return;
+      if (isStale()) return;
       if (!res.ok) {
         const data = await res.json().catch(() => null);
         setReviewFormError(data?.detail ?? '리뷰 저장에 실패했어요.');
         return;
       }
       const saved = await res.json();
-      if (activeCourseIdRef.current !== requestedCourseId) return;
+      if (isStale()) return;
       setReviewContent('');
       setReviewDifficulty('NORMAL');
       setEditingReviewId(null);
@@ -254,20 +270,19 @@ const CourseDetail = () => {
       // 작성/수정 성공은 곧 "내 리뷰가 존재함"이므로, 서버에 다시 물어보지 않고 바로 반영한다
       setHasMyReview(true);
     } catch {
-      if (activeCourseIdRef.current === requestedCourseId) setReviewFormError('서버에 연결할 수 없어요.');
+      if (!isStale()) setReviewFormError('서버에 연결할 수 없어요.');
     } finally {
       setReviewSaving(false);
     }
   };
 
   const handleDeleteReview = async (reviewId) => {
-    const requestedCourseId = courseId;
+    const isStale = createMutationStaleChecker();
     setReviewActionError('');
     setDeletingReviewId(reviewId);
     try {
       const res = await apiFetch(`/v1/reviews/${reviewId}`, { method: 'DELETE' });
-      // 응답을 기다리는 사이 다른 코스로 이동했을 수 있다 - 그 코스의 리뷰 상태를 건드리지 않는다
-      if (activeCourseIdRef.current !== requestedCourseId) return;
+      if (isStale()) return;
       if (!res.ok) {
         const data = await res.json().catch(() => null);
         setReviewActionError(data?.detail ?? '리뷰 삭제에 실패했어요.');
@@ -279,7 +294,7 @@ const CourseDetail = () => {
       // 코스당 리뷰 1개 제한이라, 삭제 성공은 곧 "내 리뷰가 더 이상 없음"이므로 바로 반영한다
       setHasMyReview(false);
     } catch {
-      if (activeCourseIdRef.current === requestedCourseId) setReviewActionError('서버에 연결할 수 없어요.');
+      if (!isStale()) setReviewActionError('서버에 연결할 수 없어요.');
     } finally {
       setDeletingReviewId(null);
     }
@@ -288,7 +303,7 @@ const CourseDetail = () => {
   const handleUploadImage = async (reviewId, event) => {
     const file = event.target.files[0];
     if (!file) return;
-    const requestedCourseId = courseId;
+    const isStale = createMutationStaleChecker();
     setReviewActionError('');
     setUploadingImageReviewId(reviewId);
     try {
@@ -298,19 +313,18 @@ const CourseDetail = () => {
         method: 'POST',
         body: formData,
       });
-      // 업로드 도중 다른 코스로 이동했을 수 있다 - 그 코스의 리뷰 목록을 건드리지 않는다
-      if (activeCourseIdRef.current !== requestedCourseId) return;
+      if (isStale()) return;
       if (!res.ok) {
         const data = await res.json().catch(() => null);
         setReviewActionError(data?.detail ?? '이미지 업로드에 실패했어요.');
         return;
       }
       const saved = await res.json();
-      if (activeCourseIdRef.current !== requestedCourseId) return;
+      if (isStale()) return;
       // 이미지가 반영된 리뷰 전체(images 포함)를 그대로 받아서 그 항목만 바꿔치기한다
       setReviews((prev) => prev.map((r) => (r.review_id === saved.review_id ? saved : r)));
     } catch {
-      if (activeCourseIdRef.current === requestedCourseId) setReviewActionError('서버에 연결할 수 없어요.');
+      if (!isStale()) setReviewActionError('서버에 연결할 수 없어요.');
     } finally {
       event.target.value = '';
       setUploadingImageReviewId(null);
@@ -318,14 +332,13 @@ const CourseDetail = () => {
   };
 
   const handleDeleteImage = async (reviewId, imageId) => {
-    const requestedCourseId = courseId;
+    const isStale = createMutationStaleChecker();
     setReviewActionError('');
     try {
       const res = await apiFetch(`/v1/reviews/${reviewId}/images/${imageId}`, {
         method: 'DELETE',
       });
-      // 삭제 도중 다른 코스로 이동했을 수 있다 - 그 코스의 리뷰 목록을 건드리지 않는다
-      if (activeCourseIdRef.current !== requestedCourseId) return;
+      if (isStale()) return;
       if (!res.ok) {
         const data = await res.json().catch(() => null);
         setReviewActionError(data?.detail ?? '이미지 삭제에 실패했어요.');
@@ -340,7 +353,7 @@ const CourseDetail = () => {
         )
       );
     } catch {
-      if (activeCourseIdRef.current === requestedCourseId) setReviewActionError('서버에 연결할 수 없어요.');
+      if (!isStale()) setReviewActionError('서버에 연결할 수 없어요.');
     }
   };
 

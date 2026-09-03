@@ -527,6 +527,10 @@ async def get_reviews(
     """코스 리뷰 목록 조회 (탈퇴 유저 리뷰는 노출 제외, 최신순으로 조회)"""
     if offset is None:
         offset = (page - 1) * size
+    else:
+        # offset이 page 경계에 안 맞을 수 있으므로(예: 로컬 삭제 후 다음 offset), 응답의
+        # page가 실제로 사용한 offset과 어긋나지 않도록 offset 기준으로 다시 계산한다
+        page = offset // size + 1
     total_result = await session.execute(
         select(func.count())
         .select_from(Review)

@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 
 import { apiFetch } from '../api';
 import Header from '../components/layout/Header';
+import { useUser } from '../contexts/UserContext';
 import { formatElapsed, formatPace } from '../utils/format';
 
 const formatDate = (isoString) => {
@@ -13,6 +14,8 @@ const formatDate = (isoString) => {
 const RECORD_PAGE_SIZE = 20;
 
 const RecordHistory = () => {
+  const navigate = useNavigate();
+  const { user, isLoading: userLoading } = useUser();
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -76,6 +79,13 @@ const RecordHistory = () => {
   };
 
   useEffect(() => {
+    if (!userLoading && !user) {
+      navigate('/login', { replace: true });
+    }
+  }, [userLoading, user, navigate]);
+
+  useEffect(() => {
+    if (userLoading || !user) return undefined;
     // StrictMode(개발 모드)가 effect를 마운트→클린업→마운트 순으로 두 번 실행하므로,
     // 매 실행 시작 시점에 반드시 false로 되돌려야 두 번째 실행의 응답이 무시되지 않는다
     unmountedRef.current = false;
@@ -83,7 +93,7 @@ const RecordHistory = () => {
     return () => {
       unmountedRef.current = true;
     };
-  }, []);
+  }, [userLoading, user]);
 
   const handleLoadMore = () => {
     fetchRecords(page + 1, { append: true });
@@ -116,9 +126,15 @@ const RecordHistory = () => {
                 <div className="record-history-stats">
                   <span>{formatElapsed(record.duration_seconds)}</span>
                   <span>{formatPace(record.pace)}</span>
-                  <span className={record.is_completed ? 'record-badge success' : 'record-badge'}>
-                    {record.is_completed ? '완주' : '미완주'}
-                  </span>
+                  {record.ended_at ? (
+                    <span className={record.is_completed ? 'record-badge success' : 'record-badge'}>
+                      {record.is_completed ? '완주' : '미완주'}
+                    </span>
+                  ) : (
+                    // 아직 종료되지 않은(다른 탭/기기에서 진행 중이거나, 종료 전 페이지를
+                    // 나간) 기록은 미완주가 아니라 진행 중이라고 보여줘야 한다
+                    <span className="record-badge">진행 중</span>
+                  )}
                 </div>
               </li>
             ))}

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 
 import { apiFetch, clearAccessToken } from '../../api';
 import { useUser } from '../../contexts/UserContext';
@@ -49,7 +49,7 @@ const Header = () => {
       </a>
       <nav aria-label="주요 메뉴">
         <a href="/#courses">코스 찾기</a>
-        <a href="/records">러닝 기록</a>
+        <Link to="/records">러닝 기록</Link>
         <a href="/#custom">나만의 코스</a>
       </nav>
       <div className="header-actions">

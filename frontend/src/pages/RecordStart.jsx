@@ -33,6 +33,10 @@ const RecordStart = () => {
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [error, setError] = useState('');
   const [blockedMessage, setBlockedMessage] = useState('');
+  // end_failed 화면에서 "기록이 저장되지 않았어요"를 보여줄지 판단하는 데 쓴다. GPS
+  // 실패는 서버에 종료 요청 자체가 안 나간 것이라 기록이 여전히 멀쩡히 진행 중이므로,
+  // 저장 실패와 다른 안내를 보여준다.
+  const [endFailedIsGps, setEndFailedIsGps] = useState(false);
   // 다른 코스에서 진행 중인 기록이 있을 때, 그 기록 화면으로 바로 이동할 수 있게 위치를 기억해둔다
   const [blockedRecordTarget, setBlockedRecordTarget] = useState(null);
 
@@ -41,6 +45,11 @@ const RecordStart = () => {
   // 서버가 내려주는 total_paused_seconds로 이 값을 다시 채워넣는다.
   const pausedAccumMsRef = useRef(0);
   const pausedAtRef = useRef(null);
+  // 이 라우트는 courseId만 바뀌며 같은 컴포넌트가 재사용된다(SPA 내비게이션, 브라우저
+  // 뒤로가기 등) - GPS 응답을 기다리는 동안 다른 코스 화면으로 넘어갔는지 대조하기 위해
+  // 매 렌더마다 최신 courseId로 갱신해둔다.
+  const activeCourseIdRef = useRef(courseId);
+  activeCourseIdRef.current = courseId;
 
   useEffect(() => {
     if (!userLoading && !user) {
@@ -72,12 +81,21 @@ const RecordStart = () => {
   // 새로고침 등으로 다시 들어왔을 때, 이미 진행 중인(종료 안 된) 기록이 있으면
   // 이어서 보여준다 (같은 유저는 진행 중 기록을 최대 1개만 가질 수 있음).
   useEffect(() => {
+    // 인증 정보가 아직 로딩 중이면 accessToken 없이 요청이 나가 401을 받고 조용히
+    // 무시되어(catch에서 잡히지 않고 !res.ok로 return), 실제로 진행 중인 기록이 있어도
+    // 잠깐 "idle" 화면으로 보일 수 있다 - user가 확정된 뒤에 실행한다
+    if (userLoading || !user) return undefined;
     let ignore = false;
     const checkActiveRecord = async () => {
-      // courseId가 바뀌어 effect가 재실행될 때(SPA 내비게이션, 새로고침 없이), 이전
-      // courseId에서 떴던 차단 메시지가 상황이 해소된 뒤에도 남아있지 않도록 초기화한다
+      // courseId가 바뀌어 effect가 재실행될 때(SPA 내비게이션, 브라우저 뒤로가기 등) 이전
+      // courseId에서 떴던 차단 메시지/진행 화면이 상황이 해소된 뒤에도 남아있지 않도록
+      // 초기화한다 - phase/record를 안 지우면, "B에서 진행 중인 A로 이동 → 뒤로가기로
+      // B로 복귀"처럼 두 코스를 오갈 때 B 화면인데 A의 타이머가 계속 보이는 문제가 있었다
       setBlockedMessage('');
       setBlockedRecordTarget(null);
+      setError('');
+      setPhase('idle');
+      setRecord(null);
       try {
         const res = await apiFetch('/v1/records/?page=1&size=1');
         if (ignore || !res.ok) return;
@@ -117,7 +135,7 @@ const RecordStart = () => {
     return () => {
       ignore = true;
     };
-  }, [courseId]);
+  }, [courseId, userLoading, user]);
 
   // 진행 중일 때만 1초마다 경과시간 갱신
   useEffect(() => {
@@ -134,6 +152,11 @@ const RecordStart = () => {
   }, [phase, record]);
 
   const handleStart = async () => {
+    // GPS 응답을 기다리는 동안(최대 10초) 다른 코스 화면으로 이동했을 수 있다 - 같은
+    // 컴포넌트가 재사용되므로, 그 사이 이동했다면 지금 보고 있는 화면을 이 요청의
+    // 결과로 건드리지 않는다 (요청 자체도 더 이상 보낼 필요가 없어 취소한다)
+    const requestedCourseId = courseId;
+    const isStale = () => activeCourseIdRef.current !== requestedCourseId;
     setError('');
     setPhase('starting');
 
@@ -141,10 +164,13 @@ const RecordStart = () => {
     try {
       position = await getPosition();
     } catch {
-      setError('위치 정보를 가져올 수 없어요. 위치 권한을 확인해주세요.');
-      setPhase('idle');
+      if (!isStale()) {
+        setError('위치 정보를 가져올 수 없어요. 위치 권한을 확인해주세요.');
+        setPhase('idle');
+      }
       return;
     }
+    if (isStale()) return;
 
     try {
       const res = await apiFetch('/v1/records/start', {
@@ -155,6 +181,7 @@ const RecordStart = () => {
           user_start_lng: position.coords.longitude,
         }),
       });
+      if (isStale()) return;
       if (!res.ok) {
         const data = await res.json().catch(() => null);
         setError(data?.detail ?? '러닝을 시작하지 못했어요.');
@@ -162,21 +189,29 @@ const RecordStart = () => {
         return;
       }
       const data = await res.json();
+      if (isStale()) return;
       pausedAccumMsRef.current = 0;
       pausedAtRef.current = null;
       setRecord(data);
       setElapsedSeconds(0);
       setPhase('running');
     } catch {
-      setError('서버에 연결할 수 없어요.');
-      setPhase('idle');
+      if (!isStale()) {
+        setError('서버에 연결할 수 없어요.');
+        setPhase('idle');
+      }
     }
   };
 
   const handlePause = async () => {
+    // 응답을 기다리는 사이 다른 코스 화면으로 이동했을 수 있다(같은 컴포넌트가 재사용되므로) -
+    // 그러면 지금 보고 있는 화면을 이 응답으로 건드리지 않는다
+    const requestedCourseId = courseId;
+    const isStale = () => activeCourseIdRef.current !== requestedCourseId;
     setError('');
     try {
       const res = await apiFetch(`/v1/records/${record.record_id}/pause`, { method: 'PATCH' });
+      if (isStale()) return;
       if (!res.ok) {
         const data = await res.json().catch(() => null);
         setError(data?.detail ?? '일시정지에 실패했어요.');
@@ -185,14 +220,17 @@ const RecordStart = () => {
       pausedAtRef.current = Date.now();
       setPhase('paused');
     } catch {
-      setError('서버에 연결할 수 없어요.');
+      if (!isStale()) setError('서버에 연결할 수 없어요.');
     }
   };
 
   const handleResume = async () => {
+    const requestedCourseId = courseId;
+    const isStale = () => activeCourseIdRef.current !== requestedCourseId;
     setError('');
     try {
       const res = await apiFetch(`/v1/records/${record.record_id}/resume`, { method: 'PATCH' });
+      if (isStale()) return;
       if (!res.ok) {
         const data = await res.json().catch(() => null);
         setError(data?.detail ?? '재시작에 실패했어요.');
@@ -204,7 +242,7 @@ const RecordStart = () => {
       }
       setPhase('running');
     } catch {
-      setError('서버에 연결할 수 없어요.');
+      if (!isStale()) setError('서버에 연결할 수 없어요.');
     }
   };
 
@@ -236,10 +274,14 @@ const RecordStart = () => {
     try {
       position = await getPosition();
     } catch {
+      // GPS 실패는 서버에 종료 요청 자체가 안 나간 것이라, 기록은 여전히 서버에서
+      // 정상적으로 진행 중이다 - "저장 안 됨"이 아니라 위치 확인 실패로 안내한다
       setError('위치 정보를 가져올 수 없어요. 위치 권한을 확인해주세요.');
+      setEndFailedIsGps(true);
       setPhase('end_failed');
       return;
     }
+    setEndFailedIsGps(false);
 
     try {
       const res = await apiFetch(`/v1/records/${record.record_id}/end`, {
@@ -385,7 +427,9 @@ const RecordStart = () => {
         {phase === 'end_failed' && (
           <div className="record-start-panel record-result">
             <div className="record-timer">{formatElapsed(elapsedSeconds)}</div>
-            <p className="record-hint">기록이 저장되지 않았어요</p>
+            <p className="record-hint">
+              {endFailedIsGps ? '위치 확인에 실패했어요. 기록은 계속 진행 중이에요.' : '기록이 저장되지 않았어요'}
+            </p>
             <div className="review-item-actions">
               <button type="button" className="primary-button record-end-button" onClick={handleEnd}>
                 다시 시도

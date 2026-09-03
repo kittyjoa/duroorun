@@ -174,7 +174,9 @@ async def test_create_course_serializes_creator_nickname(db_session):
         await db_session.commit()
 
 
-async def test_update_course_replaces_waypoints_and_start_end_coords(db_session, custom_course_owner):
+async def test_update_course_replaces_waypoints_and_start_end_coords(
+    db_session, custom_course_owner
+):
     """waypoints를 새로 보내면 경유지가 통째로 교체되고 start/end 좌표도 갱신."""
     course, owner = custom_course_owner
     new_waypoints = [

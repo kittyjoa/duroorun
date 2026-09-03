@@ -67,6 +67,16 @@ def _build_waypoints(waypoints: list[CourseWaypointCreate]) -> list[CourseWaypoi
     ]
 
 
+async def _attach_custom_course_extras(session: AsyncSession, course: Course) -> None:
+    """Course 모델 컬럼이 아니라 상세 응답 한정으로만 붙이는 값들 (DB엔 미저장).
+
+    ㅡ course.creator는 호출 전에 eager load(selectinload)돼 있어야 함
+    """
+    course.average_difficulty = await get_average_difficulty(session, course.course_id)
+    course.review_summary = await get_review_summary(session, course.course_id)
+    course.creator_nickname = course.creator.nickname if course.creator else None
+
+
 async def get_drnb_courses(
     session: AsyncSession,
     page: int,
@@ -187,21 +197,15 @@ async def create_course(
     session.add(course)
     await session.commit()
     course = await _get_custom_course(session, course.course_id)
-    # Course 모델의 실제 컬럼이 아니라 이 응답 한정으로만 붙이는 값 - DB에는 저장되지 않는다.
     # (방금 생성된 코스라 리뷰가 없어 항상 None이지만, 나머지 3곳과 패턴을 맞춰둔다)
-    course.average_difficulty = await get_average_difficulty(session, course.course_id)
-    course.review_summary = await get_review_summary(session, course.course_id)
-    course.creator_nickname = course.creator.nickname if course.creator else None
+    await _attach_custom_course_extras(session, course)
     return CustomCourseDetailResponse.model_validate(course)
 
 
 async def get_custom_course(session: AsyncSession, course_id: int) -> CustomCourseDetailResponse:
     """커스텀 코스 상세를 조회합니다 (경유지/이미지 포함)."""
     course = await _get_custom_course(session, course_id)
-    # Course 모델의 실제 컬럼이 아니라 이 응답 한정으로만 붙이는 값 - DB에는 저장되지 않는다.
-    course.average_difficulty = await get_average_difficulty(session, course_id)
-    course.review_summary = await get_review_summary(session, course_id)
-    course.creator_nickname = course.creator.nickname if course.creator else None
+    await _attach_custom_course_extras(session, course)
     return CustomCourseDetailResponse.model_validate(course)
 
 
@@ -300,10 +304,7 @@ async def update_course(
 
     await session.commit()
     course = await _get_custom_course(session, course_id)
-    # Course 모델의 실제 컬럼이 아니라 이 응답 한정으로만 붙이는 값 - DB에는 저장되지 않는다.
-    course.average_difficulty = await get_average_difficulty(session, course_id)
-    course.review_summary = await get_review_summary(session, course_id)
-    course.creator_nickname = course.creator.nickname if course.creator else None
+    await _attach_custom_course_extras(session, course)
     return CustomCourseDetailResponse.model_validate(course)
 
 
@@ -406,10 +407,7 @@ async def upload_course_image(
         raise
 
     course = await _get_custom_course(session, course_id)
-    # Course 모델의 실제 컬럼이 아니라 이 응답 한정으로만 붙이는 값 - DB에는 저장되지 않는다.
-    course.average_difficulty = await get_average_difficulty(session, course_id)
-    course.review_summary = await get_review_summary(session, course_id)
-    course.creator_nickname = course.creator.nickname if course.creator else None
+    await _attach_custom_course_extras(session, course)
     return CustomCourseDetailResponse.model_validate(course)
 
 

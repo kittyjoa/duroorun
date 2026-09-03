@@ -1,8 +1,9 @@
 """코스 (DRNB + 커스텀) - Pydantic 스키마 (요청/응답 검증)."""
 
 from datetime import datetime
+from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
 from app.domain.course.models import Difficulty
 from app.domain.review.schemas import ReviewSummaryResponse
@@ -65,10 +66,22 @@ _DISTANCE_MAX_KM = 500.0
 _ESTIMATED_TIME_MAX_MINUTES = 10000
 
 
+def _strip_and_reject_blank(value: str) -> str:
+    """앞뒤 공백을 지우고, 공백만 있던 경우를 거부합니다."""
+    stripped = value.strip()
+    if not stripped:
+        raise ValueError("공백만으로는 입력할 수 없습니다.")
+    return stripped
+
+
+# min_length=1은 raw 길이만 보므로 공백 같은 값도 통과시킴 - strip 후 재검증 필요
+_NonBlankStr = Annotated[str, AfterValidator(_strip_and_reject_blank)]
+
+
 class CourseCreateRequest(BaseModel):
     """커스텀 코스 등록 - 로그인 유저 전용. course_type은 CUSTOM 고정"""
 
-    course_name: str = Field(min_length=1, max_length=_COURSE_NAME_MAX_LENGTH)
+    course_name: _NonBlankStr = Field(min_length=1, max_length=_COURSE_NAME_MAX_LENGTH)
     distance: float = Field(gt=0, le=_DISTANCE_MAX_KM)
     difficulty: Difficulty
     estimated_time: int = Field(gt=0, le=_ESTIMATED_TIME_MAX_MINUTES)
@@ -81,7 +94,9 @@ class CourseCreateRequest(BaseModel):
 class CourseUpdateRequest(BaseModel):
     """커스텀 코스 수정 - 작성자 본인 전용. 부분 수정이므로 전달된 필드만 반영"""
 
-    course_name: str | None = Field(default=None, min_length=1, max_length=_COURSE_NAME_MAX_LENGTH)
+    course_name: _NonBlankStr | None = Field(
+        default=None, min_length=1, max_length=_COURSE_NAME_MAX_LENGTH
+    )
     distance: float | None = Field(default=None, gt=0, le=_DISTANCE_MAX_KM)
     difficulty: Difficulty | None = None
     estimated_time: int | None = Field(default=None, gt=0, le=_ESTIMATED_TIME_MAX_MINUTES)

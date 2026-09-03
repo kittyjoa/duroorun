@@ -27,6 +27,14 @@ class ReviewTestCourse:
     user_ids: list[int] = field(default_factory=list)
 
 
+class FakeBackgroundTasks:
+    """review_service의 update_review/delete_review 등에 넘길 BackgroundTasks 대역 -
+    실제로 백그라운드 태스크(AI 요약 재생성)를 실행하지 않고 그냥 무시한다."""
+
+    def add_task(self, fn, *args, **kwargs):
+        pass
+
+
 @pytest_asyncio.fixture
 async def db_session():
     async with AsyncSessionLocal() as session:

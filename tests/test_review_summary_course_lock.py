@@ -17,12 +17,7 @@ from app.domain.course.models import Course
 from app.domain.review.models import Review
 from app.domain.review.schemas import ReviewUpdateRequest
 from app.domain.review.service import update_review
-from tests.conftest import add_completed_reviews
-
-
-class _FakeBackgroundTasks:
-    def add_task(self, fn, *args, **kwargs):
-        pass
+from tests.conftest import FakeBackgroundTasks, add_completed_reviews
 
 
 async def test_course_lock_blocks_concurrent_review_update(db_session, review_test_course):
@@ -55,7 +50,7 @@ async def test_course_lock_blocks_concurrent_review_update(db_session, review_te
                 user_id=user_id,
                 review_id=review_id,
                 body=ReviewUpdateRequest(content="동시 수정된 내용", difficulty=None),
-                background_tasks=_FakeBackgroundTasks(),
+                background_tasks=FakeBackgroundTasks(),
             )
         timeline["update_finished"] = time.monotonic()
 

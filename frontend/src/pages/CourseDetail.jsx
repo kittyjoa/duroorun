@@ -158,18 +158,26 @@ const CourseDetail = () => {
       }
       const data = await res.json();
       if (isStale()) return;
-      setReviews((prev) => (append ? [...prev, ...data.items] : data.items));
+      setReviews((prev) => {
+        if (!append) return data.items;
+        // offset 기반 페이지네이션은 다른 유저가 그사이 리뷰를 추가/삭제하면 경계에서
+        // 항목이 겹칠 수 있다 - review_id 기준으로 걸러서 중복 렌더링을 막는다
+        const existingIds = new Set(prev.map((r) => r.review_id));
+        return [...prev, ...data.items.filter((r) => !existingIds.has(r.review_id))];
+      });
       setReviewsTotal(data.total);
     } catch {
       if (!isStale()) setReviewsError('서버에 연결할 수 없어요.');
     } finally {
-      // 로딩 플래그는 staleness와 무관하게 항상 풀어준다 - 여기서도 isStale()로
-      // 막으면, 코스를 바꿔서 이 요청이 stale해진 뒤엔 아무도 이 플래그를 되돌려주지
-      // 않아 "더보기" 버튼이 다른 코스에서도 계속 disabled로 멈춰버린다.
+      // stale 요청의 finally가 무조건 실행되면, 다른(더 최신) 요청이 아직 진행 중인데도
+      // 로딩 플래그를 꺼버려 "더보기" 버튼이 잠깐 다시 눌리거나 인디케이터가 깜빡일 수
+      // 있다 - 이 요청 자신이 stale하지 않을 때만 끈다. 코스가 바뀌어 더보기 요청 자체가
+      // stale해진 경우엔, 아래 courseId 변경 effect에서 loadingMoreReviews를 명시적으로
+      // 리셋해주므로 여기서 무조건 꺼줄 필요가 없다.
       if (append) {
-        setLoadingMoreReviews(false);
+        if (!isStale()) setLoadingMoreReviews(false);
       } else {
-        setReviewsLoading(false);
+        if (!isStale()) setReviewsLoading(false);
       }
     }
   };
@@ -182,6 +190,10 @@ const CourseDetail = () => {
     setReviewContent('');
     setReviewDifficulty('NORMAL');
     setReviewFormError('');
+    // 이전 코스에서 "더보기" 진행 중이었다면(응답 전 코스 이동), 위 fetchReviews의
+    // finally는 이제 stale 요청에 대해선 안 꺼주므로 여기서 명시적으로 리셋한다 -
+    // 안 그러면 "더보기" 버튼이 새 코스에서도 계속 disabled로 남는다.
+    setLoadingMoreReviews(false);
     fetchReviews(0);
   }, [courseId]);
 

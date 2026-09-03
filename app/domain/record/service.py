@@ -322,7 +322,10 @@ async def get_records(
         select(Record, Course.course_name, Course.course_type)
         .join(Course, Course.course_id == Record.course_id)
         .where(Record.user_id == user_id)
-        .order_by(Record.created_at.desc())
+        # created_at만으로 정렬하면 같은 시각에 생성된 행끼리는 순서가 DB 실행마다
+        # 달라질 수 있어(정렬 안정성 보장 안 됨), 페이지 경계에서 항목이 중복되거나
+        # 누락될 수 있다 - PK를 보조 정렬 기준으로 추가해 항상 동일한 순서를 보장한다.
+        .order_by(Record.created_at.desc(), Record.record_id.desc())
         .offset(offset)
         .limit(size)
     )

@@ -135,7 +135,7 @@ const RecordStart = () => {
     return () => {
       ignore = true;
     };
-  }, [courseId, userLoading, user]);
+  }, [courseId, courseType, userLoading, user]);
 
   // 진행 중일 때만 1초마다 경과시간 갱신
   useEffect(() => {
@@ -249,11 +249,15 @@ const RecordStart = () => {
   // "이미 종료된 기록입니다" 실패는 이 record_id에 대해 종료 요청이 이전에 이미 서버에
   // 성공적으로 처리됐다는 뜻이다(네트워크 에러로 그 응답을 못 받고 "저장 안 됨"으로 표시된 뒤
   // "다시 시도"를 눌렀을 때 등). 실제 저장된 결과를 조회해서 보여준다. 성공하면 true.
-  const tryShowActualResult = async () => {
+  // isStale은 호출한 쪽(handleEnd)의 코스 staleness 체크를 그대로 넘겨받아, 조회하는
+  // 사이 다른 코스 화면으로 이동했으면 그 결과로 지금 화면을 건드리지 않는다.
+  const tryShowActualResult = async (recordId, isStale) => {
     try {
-      const checkRes = await apiFetch(`/v1/records/${record.record_id}`);
+      const checkRes = await apiFetch(`/v1/records/${recordId}`);
+      if (isStale()) return true;
       if (checkRes.ok) {
         const checkData = await checkRes.json();
+        if (isStale()) return true;
         if (checkData.ended_at) {
           setResult(checkData);
           setPhase('finished');
@@ -267,6 +271,13 @@ const RecordStart = () => {
   };
 
   const handleEnd = async () => {
+    // handlePause/handleResume와 동일하게, 응답을 기다리는 사이 다른 코스로 이동했을 수
+    // 있다(같은 컴포넌트가 재사용되므로) - 그러면 지금 보고 있는 화면을 이 요청의 결과로
+    // 건드리지 않는다. record는 비동기 처리 중 바뀔 수 있으니 시작 시점 값을 캡처해둔다.
+    const requestedCourseId = courseId;
+    const requestedRecordId = record.record_id;
+    const isStale = () => activeCourseIdRef.current !== requestedCourseId;
+
     setError('');
     setPhase('ending');
 
@@ -274,44 +285,57 @@ const RecordStart = () => {
     try {
       position = await getPosition();
     } catch {
-      // GPS 실패는 서버에 종료 요청 자체가 안 나간 것이라, 기록은 여전히 서버에서
-      // 정상적으로 진행 중이다 - "저장 안 됨"이 아니라 위치 확인 실패로 안내한다
+      if (isStale()) return;
+      // GPS 실패 자체는 이번 시도가 서버에 안 나간 것이지만, "다시 시도" 흐름에서는
+      // 이전 시도가 이미 서버에 성공했을 수 있다(응답만 유실됐던 경우) - 그 경우까지
+      // "기록은 계속 진행 중"이라고 잘못 안내하지 않도록 먼저 실제 결과를 확인한다
+      if (await tryShowActualResult(requestedRecordId, isStale)) return;
       setError('위치 정보를 가져올 수 없어요. 위치 권한을 확인해주세요.');
       setEndFailedIsGps(true);
       setPhase('end_failed');
       return;
     }
+    if (isStale()) return;
     setEndFailedIsGps(false);
 
     try {
-      const res = await apiFetch(`/v1/records/${record.record_id}/end`, {
+      const res = await apiFetch(`/v1/records/${requestedRecordId}/end`, {
         method: 'PATCH',
         body: JSON.stringify({
           user_end_lat: position.coords.latitude,
           user_end_lng: position.coords.longitude,
         }),
       });
+      if (isStale()) return;
       if (!res.ok) {
         const data = await res.json().catch(() => null);
         // "이미 종료된 기록"은 실패가 아니라, 이전 시도가 실제로는 성공했다는 뜻이다 -
         // (예: 네트워크 에러로 "저장 안 됨"이 떴던 걸 "다시 시도"로 재요청한 경우) 그
         // 이전 결과를 그대로 보여준다.
-        if (data?.detail === '이미 종료된 기록입니다.' && (await tryShowActualResult())) {
+        if (
+          data?.detail === '이미 종료된 기록입니다.' &&
+          (await tryShowActualResult(requestedRecordId, isStale))
+        ) {
           return;
         }
+        if (isStale()) return;
         // 종료 버튼을 누른 시점에 사용자 의도상 러닝은 끝난 것으로 본다 - 저장에
         // 실패해도(너무 짧음 등) 진행 중이던 화면(타이머)으로 되돌리지 않는다.
         setError(data?.detail ?? '러닝을 종료하지 못했어요.');
         setPhase('end_failed');
         return;
       }
-      setResult(await res.json());
+      const finished = await res.json();
+      if (isStale()) return;
+      setResult(finished);
       setPhase('finished');
     } catch {
+      if (isStale()) return;
       // 네트워크 에러(응답 자체를 못 받음)일 수 있어, 실제로 서버에 저장됐는지 다시
       // 확인한다 - 요청은 서버에 도달해 처리됐는데 응답만 유실된 경우 "저장 안 됨"으로
       // 잘못 안내하는 걸 방지하기 위함
-      if (await tryShowActualResult()) return;
+      if (await tryShowActualResult(requestedRecordId, isStale)) return;
+      if (isStale()) return;
       setError('서버에 연결할 수 없어요.');
       setPhase('end_failed');
     }

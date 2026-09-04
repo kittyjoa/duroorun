@@ -14,6 +14,8 @@ const DIFFICULTY_OPTIONS = [
   { value: 'HARD', label: '어려움' },
 ];
 
+// config.py의 COURSE_IMAGE_MAX_COUNT / COURSE_IMAGE_MAX_SIZE_MB와 값이 같아야 함
+// — 바꿀 때 백/프론트 다 같이 수정
 const COURSE_IMAGE_MAX_COUNT = 3;
 const COURSE_IMAGE_MAX_SIZE_MB = 5;
 const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
@@ -462,7 +464,7 @@ const CustomCourseForm = () => {
             <label>경유지 (지도를 클릭해서 순서대로 추가)</label>
             <p className="kakao-map-hint-static">⚠️ 지도가 제대로 표시되지 않으면 새로고침을 한번 해주세요</p>
             <p className="kakao-map-hint-static">
-              ➡️ 경유지끼리 직선으로 이어 경로를 표시합니다. 실제 도로·트레일과 다를 수 있습니다. 
+              ➡️ 경유지끼리 직선으로 이어 경로를 표시합니다. 실제 도로·트레일과 다를 수 있습니다.
               촘촘히 찍을수록 실제 경로에 가까워집니다.
             </p>
             {gangwonBoundaryFailed && (

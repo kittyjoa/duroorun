@@ -3,10 +3,12 @@
 let loadPromise = null;
 
 export const loadKakaoMaps = () => {
+  // loadPromise를 먼저 확인
+  // ㅡ 두번째 이후 호출이 성급하게 응답하지 않고 같이 기다리게
+  if (loadPromise) return loadPromise;
   if (window.kakao?.maps) {
     return Promise.resolve(window.kakao);
   }
-  if (loadPromise) return loadPromise;
 
   const appKey = import.meta.env.VITE_KAKAO_JS_KEY;
   if (!appKey) {

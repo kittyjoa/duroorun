@@ -1,15 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 
-import { apiFetch } from '../api';
 import Header from '../components/layout/Header';
+import { useUser } from '../contexts/UserContext';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
+import { usePaginatedCourses } from '../hooks/usePaginatedCourses';
 
 const DIFFICULTY_LABEL = { EASY: '쉬움', NORMAL: '보통', HARD: '어려움' };
 const DIFFICULTY_COLOR = { EASY: 'green', NORMAL: 'blue', HARD: 'red' };
-
-// TODO: 더보기 버튼이나 무한스크롤로 20~30개씩 끊어 불러오기 (특히 커스텀)
-// 필터 변경하면 페이지 1로 초기화하는 처리도? 더보기 방식이어도?
 
 // 해파랑길 강원 구간(29~50코스)이 지나는 시/군, 삼척→고성 순 (남→북)
 // DB에 저장된 sigun 값과 정확히 일치해야 필터가 걸림 (백엔드가 == 비교)
@@ -25,8 +23,8 @@ const GANGWON_SIGUN_OPTIONS = [
 const DRNB_INITIAL_FILTERS = {
   sigun: '',
   difficulty: '',
-  estimatedTimeMin: '',
-  estimatedTimeMax: '',
+  distanceMin: '',
+  distanceMax: '',
 };
 
 const CUSTOM_INITIAL_FILTERS = {
@@ -35,78 +33,54 @@ const CUSTOM_INITIAL_FILTERS = {
   distanceMax: '',
 };
 
-const PAGE_SIZE = 100;
+const PAGE_SIZE = 20;
 
-const buildDrnbQuery = (filters) => {
+// page/size/difficulty/distance는 공통, sigun은 아직 DRNB만 있어서 먼저 세팅
+const buildCommonParams = (page, filters) => {
   const params = new URLSearchParams();
-  params.set('page', '1');
-  params.set('size', String(PAGE_SIZE));
-  if (filters.sigun) params.set('sigun', filters.sigun);
-  if (filters.difficulty) params.set('difficulty', filters.difficulty);
-  if (filters.estimatedTimeMin) params.set('estimated_time_min', filters.estimatedTimeMin);
-  if (filters.estimatedTimeMax) params.set('estimated_time_max', filters.estimatedTimeMax);
-  return params.toString();
-};
-
-const buildCustomQuery = (filters) => {
-  const params = new URLSearchParams();
-  params.set('page', '1');
+  params.set('page', String(page));
   params.set('size', String(PAGE_SIZE));
   if (filters.difficulty) params.set('difficulty', filters.difficulty);
   if (filters.distanceMin) params.set('distance_min', filters.distanceMin);
   if (filters.distanceMax) params.set('distance_max', filters.distanceMax);
+  return params;
+};
+
+const buildDrnbQuery = (filters, page) => {
+  const params = buildCommonParams(page, filters);
+  if (filters.sigun) params.set('sigun', filters.sigun);
   return params.toString();
 };
 
+const buildCustomQuery = (filters, page) => buildCommonParams(page, filters).toString();
+
 const CourseList = () => {
+  const { user } = useUser();
   const [courseType, setCourseType] = useState('drnb');
   const [drnbFilters, setDrnbFilters] = useState(DRNB_INITIAL_FILTERS);
   const [customFilters, setCustomFilters] = useState(CUSTOM_INITIAL_FILTERS);
-  const [courses, setCourses] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
 
   // 입력창에는 즉시 반영하되, 실제 API 호출은 타이핑이 멈춘 뒤에만 나가도록 지연
   const debouncedDrnbFilters = useDebouncedValue(drnbFilters);
   const debouncedCustomFilters = useDebouncedValue(customFilters);
   // 현재 선택된 코스 유형의 필터만 요청에 태우기 위한 파생값: activeDebouncedFilters
-  // 반대쪽 탭의 debounce 값(필터값)이 바뀌어도 파생값의 참조는 유지되고 effect 재실행 X
+  // 반대쪽 탭의 debounce 값(필터값)이 바뀌어도 파생값 참조는 유지되고 훅 내부 effect 재실행 X
   const activeDebouncedFilters =
     courseType === 'drnb' ? debouncedDrnbFilters : debouncedCustomFilters;
 
-  useEffect(() => {
-    // 이 effect가 재실행된 뒤(= 더 최신 요청이 시작된 뒤) 도착하는 이전 응답은 무시
-    let ignore = false;
+  const path = courseType === 'drnb' ? '/v1/courses/drnb' : '/v1/courses/custom';
+  const buildQuery = (targetPage) =>
+    courseType === 'drnb'
+      ? buildDrnbQuery(activeDebouncedFilters, targetPage)
+      : buildCustomQuery(activeDebouncedFilters, targetPage);
 
-    const fetchCourses = async () => {
-      setLoading(true);
-      setError('');
-      try {
-        const query =
-          courseType === 'drnb'
-            ? buildDrnbQuery(activeDebouncedFilters)
-            : buildCustomQuery(activeDebouncedFilters);
-        const path = courseType === 'drnb' ? '/v1/courses/drnb' : '/v1/courses/custom';
-        const res = await apiFetch(query ? `${path}?${query}` : path);
-        if (ignore) return;
-        if (!res.ok) {
-          setError('코스 목록을 불러오지 못했어요.');
-          return;
-        }
-        const data = await res.json();
-        setCourses(data.items);
-      } catch {
-        if (!ignore) setError('서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.');
-      } finally {
-        if (!ignore) setLoading(false);
-      }
-    };
-    fetchCourses();
-
-    return () => {
-      ignore = true;
-    };
-  }, [courseType, activeDebouncedFilters]);
+  // 탭 전환/필터 변경 시 1페이지부터 다시 조회(목록 교체), "더보기"는 다음 페이지를 이어 붙임
+  // ㅡ 훅 내부에서 요청 세대를 관리해 늦게 도착한 응답(예: 더보기 도중 탭 전환)은 버림
+  const { courses, total, loading, loadingMore, error, loadMoreError, loadMore } = usePaginatedCourses(
+    path,
+    buildQuery,
+    [courseType, activeDebouncedFilters],
+  );
 
   return (
     <>
@@ -117,6 +91,11 @@ const CourseList = () => {
             <span className="section-kicker">코스 찾기</span>
             <h2>어떤 길을 달려볼까요?</h2>
           </div>
+          {courseType === 'custom' && user && (
+            <Link to="/courses/custom/new" className="primary-button">
+              코스 만들기
+            </Link>
+          )}
         </div>
 
         <div className="course-type-tabs">
@@ -163,21 +142,21 @@ const CourseList = () => {
             <input
               type="number"
               min="0"
-              placeholder="최소 소요시간(분)"
-              aria-label="최소 소요시간(분)"
-              value={drnbFilters.estimatedTimeMin}
+              placeholder="최소 거리(km)"
+              aria-label="최소 거리(km)"
+              value={drnbFilters.distanceMin}
               onChange={(e) =>
-                setDrnbFilters({ ...drnbFilters, estimatedTimeMin: e.target.value })
+                setDrnbFilters({ ...drnbFilters, distanceMin: e.target.value })
               }
             />
             <input
               type="number"
               min="0"
-              placeholder="최대 소요시간(분)"
-              aria-label="최대 소요시간(분)"
-              value={drnbFilters.estimatedTimeMax}
+              placeholder="최대 거리(km)"
+              aria-label="최대 거리(km)"
+              value={drnbFilters.distanceMax}
               onChange={(e) =>
-                setDrnbFilters({ ...drnbFilters, estimatedTimeMax: e.target.value })
+                setDrnbFilters({ ...drnbFilters, distanceMax: e.target.value })
               }
             />
           </div>
@@ -226,33 +205,47 @@ const CourseList = () => {
         {!loading && !error && courses.length > 0 && (
           <div className="course-grid">
             {courses.map((course) => (
-              <Link
-                to={`/courses/${courseType}/${course.course_id}`}
-                className={`course-card ${DIFFICULTY_COLOR[course.difficulty] ?? 'green'}`}
-                key={course.course_id}
-              >
-                <div className="course-art">
-                  <div className="mini-route" />
-                  <span className="course-badge">
-                    {DIFFICULTY_LABEL[course.difficulty] ?? '난이도 정보 없음'}
-                  </span>
-                </div>
-                <div className="course-info">
-                  <span>
-                    {courseType === 'drnb' ? (course.sigun ?? course.brd_div) : '커스텀 코스'}
-                  </span>
-                  <h3>{course.course_name}</h3>
-                  <p>
-                    {courseType === 'custom' &&
-                      course.distance != null &&
-                      `${course.distance}km · `}
-                    {course.estimated_time != null
-                      ? `약 ${course.estimated_time}분`
-                      : '소요시간 정보 없음'}
-                  </p>
-                </div>
-              </Link>
+              <div className="course-card-wrapper" key={course.course_id}>
+                <Link
+                  to={`/courses/${courseType}/${course.course_id}`}
+                  className={`course-card ${DIFFICULTY_COLOR[course.difficulty] ?? 'green'}`}
+                >
+                  <div className="course-art">
+                    <div className="mini-route" />
+                    {courseType === 'custom' && user && course.created_by === user.user_id && (
+                      <span className="course-card-mine">내 코스</span>
+                    )}
+                  </div>
+                  <div className="course-info">
+                    <span>
+                      {courseType === 'drnb' ? (course.sigun ?? course.brd_div) : '커스텀 코스'}
+                      <span className="course-badge">
+                        {DIFFICULTY_LABEL[course.difficulty] ?? '난이도 정보 없음'}
+                      </span>
+                    </span>
+                    <h3>{course.course_name}</h3>
+                    <p>
+                      {course.distance != null && `${course.distance}km · `}
+                      {course.estimated_time != null
+                        ? `약 ${course.estimated_time}분`
+                        : '소요시간 정보 없음'}
+                    </p>
+                    {courseType === 'custom' && (
+                      <p>제작자: {course.creator_nickname ?? '알 수 없음'}</p>
+                    )}
+                  </div>
+                </Link>
+              </div>
             ))}
+          </div>
+        )}
+
+        {!loading && !error && courses.length < total && (
+          <div className="course-list-load-more">
+            {loadMoreError && <p className="course-list-status error">{loadMoreError}</p>}
+            <button type="button" onClick={loadMore} disabled={loadingMore}>
+              {loadingMore ? '불러오는 중...' : loadMoreError ? '다시 시도' : '더보기'}
+            </button>
           </div>
         )}
       </main>

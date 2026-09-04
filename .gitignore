@@ -59,6 +59,13 @@ yarn-error.log*
 # Docker
 *.pid
 
+# 불필요한 강원도 경계 원본 shapefile 제외, 결과물인 geojson만 커밋
+app/domain/course/gangwon_boundary/*.shp
+app/domain/course/gangwon_boundary/*.shx
+app/domain/course/gangwon_boundary/*.dbf
+app/domain/course/gangwon_boundary/*.prj
+app/domain/course/gangwon_boundary/*.cpg
+
 # 기타
 *.bak
 .cache/

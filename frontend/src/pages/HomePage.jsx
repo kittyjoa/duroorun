@@ -1,3 +1,5 @@
+import { Link } from 'react-router-dom';
+
 import Header from '../components/layout/Header';
 
 const courses = [
@@ -19,8 +21,8 @@ export default function Home() {
           <h1>바다를 따라,<br /><em>나답게 달려요</em></h1>
           <p>두루누비의 아름다운 해안길부터 러너들이 만든 특별한 코스까지.<br />오늘 달리고 싶은 길을 발견해보세요.</p>
           <div className="hero-buttons">
-            <a className="primary-button" href="#courses">내 코스 찾기 <span>→</span></a>
-            <a className="text-button" href="#how">두루런 둘러보기 <span>↘</span></a>
+            <a className="primary-button" href="#courses">코스 둘러보기 <span>→</span></a>
+            <a className="text-button" href="#how">두루런 사용법 <span>↘</span></a>
           </div>
           <div className="quick-stats" aria-label="서비스 통계">
             <div><strong>50+</strong><span>공식 해안 코스</span></div>
@@ -43,7 +45,7 @@ export default function Home() {
       <section className="discovery" id="courses">
         <div className="section-heading">
           <div><span className="section-kicker">이번 주 추천</span><h2>어떤 길을 달려볼까요?</h2></div>
-          <a href="#all">전체 코스 보기 <span>→</span></a>
+          <Link to="/courses">전체 코스 보기 <span>→</span></Link>
         </div>
         <div className="course-grid">
           {courses.map((course, index) => (

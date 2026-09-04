@@ -1,13 +1,16 @@
 """코스 (DRNB + 커스텀) - API 엔드포인트 (APIRouter)."""
 
 from fastapi import APIRouter, Depends, Query, UploadFile, status
+from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.rate_limit import rate_limit_per_request
 from app.core.security import get_current_user
 from app.database import get_db
 from app.domain.course import service as course_service
 from app.domain.course.models import Difficulty
 from app.domain.course.schemas import (
+    GANGWON_BOUNDARY_PATH,
     CourseCreateRequest,
     CourseUpdateRequest,
     CustomCourseDetailResponse,
@@ -19,6 +22,26 @@ from app.domain.user.models import User
 
 router = APIRouter(prefix="/courses", tags=["courses"])
 
+# 유저당 코스 생성: 1시간에 15번 한도
+_CREATE_RATE_LIMIT_MAX_REQUESTS = 15
+_CREATE_RATE_LIMIT_WINDOW_SECONDS = 3600
+
+# 유저당 이미지 업로드/삭제 한도: 10분에 20번 — 업로드와 key_prefix 공유
+_IMAGE_RATE_LIMIT_MAX_REQUESTS = 20
+_IMAGE_RATE_LIMIT_WINDOW_SECONDS = 600
+
+
+@router.get("/gangwon-boundary")
+async def get_gangwon_boundary():
+    """강원도 경계 geojson 원본 그대로 반환 (프론트 커스텀 코스 폼이 경유지 지역을
+    백엔드와 동일한 폴리곤으로 검증하는 데 사용). 정적 공개 데이터라 인증 불필요.
+    ㅡ 도 경계는 거의 안 바뀌므로 캐시 헤더를 길게 둠"""
+    return FileResponse(
+        GANGWON_BOUNDARY_PATH,
+        media_type="application/geo+json",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
 
 @router.get("/drnb", response_model=DrnbCourseListResponse)
 async def get_drnb_courses(
@@ -27,12 +50,12 @@ async def get_drnb_courses(
     brd_div: str | None = Query(default=None),
     sigun: str | None = Query(default=None),
     difficulty: Difficulty | None = Query(default=None),
-    estimated_time_min: int | None = Query(default=None, ge=0),
-    estimated_time_max: int | None = Query(default=None, ge=0),
+    distance_min: float | None = Query(default=None, ge=0),
+    distance_max: float | None = Query(default=None, ge=0),
     session: AsyncSession = Depends(get_db),
 ):
-    """DRNB(두루누비) 코스 목록 조회 (구간/지역/난이도/소요시간 필터 지원)
-    ㅡ 소요시간 필터는 프론트에서 범위 UI 가능"""
+    """DRNB(두루누비) 코스 목록 조회 (구간/지역/난이도/거리 필터 지원)
+    ㅡ 거리 필터는 프론트에서 범위 UI 가능"""
     return await course_service.get_drnb_courses(
         session=session,
         page=page,
@@ -40,8 +63,8 @@ async def get_drnb_courses(
         brd_div=brd_div,
         sigun=sigun,
         difficulty=difficulty,
-        estimated_time_min=estimated_time_min,
-        estimated_time_max=estimated_time_max,
+        distance_min=distance_min,
+        distance_max=distance_max,
     )
 
 
@@ -52,7 +75,16 @@ async def get_drnb_course(course_id: int, session: AsyncSession = Depends(get_db
 
 
 @router.post(
-    "/custom", response_model=CustomCourseDetailResponse, status_code=status.HTTP_201_CREATED
+    "/custom",
+    response_model=CustomCourseDetailResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[
+        Depends(
+            rate_limit_per_request(
+                "course_create", _CREATE_RATE_LIMIT_MAX_REQUESTS, _CREATE_RATE_LIMIT_WINDOW_SECONDS
+            )
+        )
+    ],
 )
 async def create_course(
     body: CourseCreateRequest,
@@ -123,6 +155,13 @@ async def delete_course(
     "/custom/{course_id}/images",
     response_model=CustomCourseDetailResponse,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[
+        Depends(
+            rate_limit_per_request(
+                "course_image", _IMAGE_RATE_LIMIT_MAX_REQUESTS, _IMAGE_RATE_LIMIT_WINDOW_SECONDS
+            )
+        )
+    ],
 )
 async def upload_course_image(
     course_id: int,
@@ -136,7 +175,18 @@ async def upload_course_image(
     )
 
 
-@router.delete("/custom/{course_id}/images/{image_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/custom/{course_id}/images/{image_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[
+        Depends(
+            # 업로드와 key_prefix 공유 — 업로드/삭제 번갈아 반복하는 남용도 방지
+            rate_limit_per_request(
+                "course_image", _IMAGE_RATE_LIMIT_MAX_REQUESTS, _IMAGE_RATE_LIMIT_WINDOW_SECONDS
+            )
+        )
+    ],
+)
 async def delete_course_image(
     course_id: int,
     image_id: int,

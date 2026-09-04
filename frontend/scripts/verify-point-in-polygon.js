@@ -42,6 +42,21 @@ const HOLE_CASES = [
   [37.438091, 129.18947, '구멍2(수역)'],
 ];
 
+// 코드리뷰 - "경계선 위 점"이 실제로 어떻게 판정되는지 확인
+// 백엔드 shapely covers()는 경계 포함(inside), 이 셋은 백엔드와 그대로 일치.
+const BOUNDARY_MATCH_CASES = [
+  [38.61345573508535, 128.35615584937682, '외곽 링 변 위(꼭짓점 두 개의 정중앙)'],
+  [37.74382897339144, 128.98191615064763, '구멍1 링 꼭짓점(정확히 그 점)'],
+  [37.74418359723995, 128.98144838421598, '구멍1 링 변 위(꼭짓점 두 개의 정중앙)'],
+];
+
+// 실측 결과 백엔드와 유일하게 어긋나는 케이스:
+// 실사용 버그로 보진 않지만, pointInPolygon.js를 나중에 고칠 때
+// 이 케이스가 조용히 다른 방향으로 깨지지 않도록 false 그대로 기대값 고정.
+const KNOWN_DIVERGENCE_CASES = [
+  [38.61357533263314, 128.35715799005047, '외곽 링 꼭짓점(정확히 그 점) - 백엔드는 포함, 프론트는 제외'],
+];
+
 let allPass = true;
 
 const check = (cases, expected, label) => {
@@ -56,6 +71,8 @@ const check = (cases, expected, label) => {
 check(ACCEPT_CASES, true, 'accept');
 check(REJECT_CASES, false, 'reject');
 check(HOLE_CASES, false, 'hole');
+check(BOUNDARY_MATCH_CASES, true, 'boundary-match');
+check(KNOWN_DIVERGENCE_CASES, false, 'known-divergence');
 
 console.log(allPass ? '\n=== ALL PASS ===' : '\n=== SOME FAILED ===');
 process.exit(allPass ? 0 : 1);

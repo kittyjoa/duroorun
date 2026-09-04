@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Query, UploadFile, status
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.rate_limit import rate_limit_per_request
 from app.core.security import get_current_user
 from app.database import get_db
 from app.domain.course import service as course_service
@@ -20,6 +21,14 @@ from app.domain.course.schemas import (
 from app.domain.user.models import User
 
 router = APIRouter(prefix="/courses", tags=["courses"])
+
+# 유저당 코스 생성: 1시간에 15번 한도
+_CREATE_RATE_LIMIT_MAX_REQUESTS = 15
+_CREATE_RATE_LIMIT_WINDOW_SECONDS = 3600
+
+# 유저당 이미지 업로드/삭제 한도: 10분에 20번 — 업로드와 key_prefix 공유
+_IMAGE_RATE_LIMIT_MAX_REQUESTS = 20
+_IMAGE_RATE_LIMIT_WINDOW_SECONDS = 600
 
 
 @router.get("/gangwon-boundary")
@@ -66,7 +75,16 @@ async def get_drnb_course(course_id: int, session: AsyncSession = Depends(get_db
 
 
 @router.post(
-    "/custom", response_model=CustomCourseDetailResponse, status_code=status.HTTP_201_CREATED
+    "/custom",
+    response_model=CustomCourseDetailResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[
+        Depends(
+            rate_limit_per_request(
+                "course_create", _CREATE_RATE_LIMIT_MAX_REQUESTS, _CREATE_RATE_LIMIT_WINDOW_SECONDS
+            )
+        )
+    ],
 )
 async def create_course(
     body: CourseCreateRequest,
@@ -137,6 +155,13 @@ async def delete_course(
     "/custom/{course_id}/images",
     response_model=CustomCourseDetailResponse,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[
+        Depends(
+            rate_limit_per_request(
+                "course_image", _IMAGE_RATE_LIMIT_MAX_REQUESTS, _IMAGE_RATE_LIMIT_WINDOW_SECONDS
+            )
+        )
+    ],
 )
 async def upload_course_image(
     course_id: int,
@@ -150,7 +175,18 @@ async def upload_course_image(
     )
 
 
-@router.delete("/custom/{course_id}/images/{image_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/custom/{course_id}/images/{image_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[
+        Depends(
+            # 업로드와 key_prefix 공유 — 업로드/삭제 번갈아 반복하는 남용도 방지
+            rate_limit_per_request(
+                "course_image", _IMAGE_RATE_LIMIT_MAX_REQUESTS, _IMAGE_RATE_LIMIT_WINDOW_SECONDS
+            )
+        )
+    ],
+)
 async def delete_course_image(
     course_id: int,
     image_id: int,

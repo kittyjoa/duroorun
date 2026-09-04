@@ -383,28 +383,30 @@ async def upload_course_image(
             detail="이미지 업로드에 실패했습니다.",
         ) from err
 
-    # 여기서부터 락 — 개수 최종 재확인 + 저장을 원자적으로 묶음
+    # 여기서부터 락 — 개수 최종 재확인 + 저장을 한 덩어리로 묶음
     # (락을 반영한 최신 상태를 명시적으로 가리키도록 재할당)
-    course = await _get_custom_course(session, course_id, for_update=True)
-    if await _count_course_images(session, course_id) >= settings.COURSE_IMAGE_MAX_COUNT:
-        try:
-            await delete_file(image_url)
-        except (ClientError, BotoCoreError):
-            logger.exception("최대 개수 재확인 탈락 후 R2 롤백 삭제 실패: image_url=%s", image_url)
-        raise _max_image_count_error()
-
-    # course.images 컬렉션도 append 해야 프론트에서 업로드한 이미지 잘 보임
-    image = CourseImage(course_id=course_id, image_url=image_url)
-    course.images.append(image)
+    # ㅡ DB에 반영되지 않았다면 R2 파일을 반드시 되돌려 지운다.
+    saved = False
     try:
+        course = await _get_custom_course(session, course_id, for_update=True)
+        if await _count_course_images(session, course_id) >= settings.COURSE_IMAGE_MAX_COUNT:
+            raise _max_image_count_error()
+
+        # course.images 컬렉션도 append 해야 프론트에서 업로드한 이미지 잘 보임
+        image = CourseImage(course_id=course_id, image_url=image_url)
+        course.images.append(image)
         await session.commit()
+        saved = True
     except Exception:
-        await session.rollback()
-        try:
-            await delete_file(image_url)
-        # 보상 삭제: db 저장 실패했으니 방금 r2에 올린 파일도 도로 삭제(보상 트랜잭션)
-        except (ClientError, BotoCoreError):
-            logger.exception("DB commit 실패 후 R2 보상 삭제도 실패: image_url=%s", image_url)
+        if not saved:
+            await session.rollback()
+            try:
+                await delete_file(image_url)
+            # db 반영 실패했으니 방금 r2에 올린 파일도 도로 삭제
+            except (ClientError, BotoCoreError):
+                logger.exception(
+                    "이미지 업로드 DB 반영 실패 후 R2 보상 삭제도 실패: image_url=%s", image_url
+                )
         raise
 
     course = await _get_custom_course(session, course_id)

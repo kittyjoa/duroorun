@@ -67,6 +67,16 @@ def _build_waypoints(waypoints: list[CourseWaypointCreate]) -> list[CourseWaypoi
     ]
 
 
+async def _attach_custom_course_extras(session: AsyncSession, course: Course) -> None:
+    """Course 모델 컬럼이 아니라 상세 응답 한정으로만 붙이는 값들 (DB엔 미저장).
+
+    ㅡ course.creator는 호출 전에 eager load(selectinload)돼 있어야 함
+    """
+    course.average_difficulty = await get_average_difficulty(session, course.course_id)
+    course.review_summary = await get_review_summary(session, course.course_id)
+    course.creator_nickname = course.creator.nickname if course.creator else None
+
+
 async def get_drnb_courses(
     session: AsyncSession,
     page: int,
@@ -74,16 +84,16 @@ async def get_drnb_courses(
     brd_div: str | None = None,
     sigun: str | None = None,
     difficulty: Difficulty | None = None,
-    estimated_time_min: int | None = None,
-    estimated_time_max: int | None = None,
+    distance_min: float | None = None,
+    distance_max: float | None = None,
 ) -> DrnbCourseListResponse:
     """DRNB 코스 목록을 조회합니다. 시드 스크립트로 저장된 DB 정보만 사용 (배치 갱신).
 
-    ㅡ brd_div/sigun/difficulty는 정확히 일치, estimated_time은 min/max 범위로 필터링
+    ㅡ brd_div/sigun/difficulty는 정확히 일치, distance는 min/max 범위로 필터링
     ㅡ 현재 시드 스크립트가 강원 코스만 적재하므로 DB엔 강원 코스만 존재.
     추후 다른 지역까지 시드 대상이 넓어져도 이 필터로 그대로 좁혀볼 수 있음.
     """
-    _validate_range(estimated_time_min, estimated_time_max, "estimated_time")
+    _validate_range(distance_min, distance_max, "distance")
 
     base_query = select(Course).where(
         Course.course_type == CourseType.DRNB,
@@ -96,10 +106,10 @@ async def get_drnb_courses(
         base_query = base_query.where(Course.sigun == sigun)
     if difficulty is not None:
         base_query = base_query.where(Course.difficulty == difficulty)
-    if estimated_time_min is not None:
-        base_query = base_query.where(Course.estimated_time >= estimated_time_min)
-    if estimated_time_max is not None:
-        base_query = base_query.where(Course.estimated_time <= estimated_time_max)
+    if distance_min is not None:
+        base_query = base_query.where(Course.distance >= distance_min)
+    if distance_max is not None:
+        base_query = base_query.where(Course.distance <= distance_max)
 
     total = (
         await session.execute(select(func.count()).select_from(base_query.subquery()))
@@ -146,7 +156,11 @@ async def _get_custom_course(
     query = (
         select(Course)
         .where(Course.course_id == course_id, Course.course_type == CourseType.CUSTOM)
-        .options(selectinload(Course.waypoints), selectinload(Course.images))
+        .options(
+            selectinload(Course.waypoints),
+            selectinload(Course.images),
+            selectinload(Course.creator),
+        )
     )
     if for_update:
         # for_update 스위치로 수정/삭제할때만 True (같은 코스 건드리는 다른 요청 끼어들지 못하게)
@@ -183,19 +197,15 @@ async def create_course(
     session.add(course)
     await session.commit()
     course = await _get_custom_course(session, course.course_id)
-    # Course 모델의 실제 컬럼이 아니라 이 응답 한정으로만 붙이는 값 - DB에는 저장되지 않는다.
     # (방금 생성된 코스라 리뷰가 없어 항상 None이지만, 나머지 3곳과 패턴을 맞춰둔다)
-    course.average_difficulty = await get_average_difficulty(session, course.course_id)
-    course.review_summary = await get_review_summary(session, course.course_id)
+    await _attach_custom_course_extras(session, course)
     return CustomCourseDetailResponse.model_validate(course)
 
 
 async def get_custom_course(session: AsyncSession, course_id: int) -> CustomCourseDetailResponse:
     """커스텀 코스 상세를 조회합니다 (경유지/이미지 포함)."""
     course = await _get_custom_course(session, course_id)
-    # Course 모델의 실제 컬럼이 아니라 이 응답 한정으로만 붙이는 값 - DB에는 저장되지 않는다.
-    course.average_difficulty = await get_average_difficulty(session, course_id)
-    course.review_summary = await get_review_summary(session, course_id)
+    await _attach_custom_course_extras(session, course)
     return CustomCourseDetailResponse.model_validate(course)
 
 
@@ -234,8 +244,12 @@ async def get_custom_courses(
         base_query.order_by(Course.created_at.desc(), Course.course_id.desc())
         .offset((page - 1) * size)
         .limit(size)
+        .options(selectinload(Course.creator))
     )
     courses = (await session.execute(list_query)).scalars().all()
+    for c in courses:
+        # Course 모델의 실제 컬럼이 아니라 이 응답 한정으로만 붙이는 값 - DB에는 저장되지 않는다.
+        c.creator_nickname = c.creator.nickname if c.creator else None
 
     return CustomCourseListResponse(
         items=[CustomCourseSummary.model_validate(c) for c in courses],
@@ -290,9 +304,7 @@ async def update_course(
 
     await session.commit()
     course = await _get_custom_course(session, course_id)
-    # Course 모델의 실제 컬럼이 아니라 이 응답 한정으로만 붙이는 값 - DB에는 저장되지 않는다.
-    course.average_difficulty = await get_average_difficulty(session, course_id)
-    course.review_summary = await get_review_summary(session, course_id)
+    await _attach_custom_course_extras(session, course)
     return CustomCourseDetailResponse.model_validate(course)
 
 
@@ -371,32 +383,34 @@ async def upload_course_image(
             detail="이미지 업로드에 실패했습니다.",
         ) from err
 
-    # 여기서부터 락 — 개수 최종 재확인 + 저장을 원자적으로 묶음
-    await _get_custom_course(session, course_id, for_update=True)
-    if await _count_course_images(session, course_id) >= settings.COURSE_IMAGE_MAX_COUNT:
-        try:
-            await delete_file(image_url)
-        except (ClientError, BotoCoreError):
-            logger.exception("최대 개수 재확인 탈락 후 R2 롤백 삭제 실패: image_url=%s", image_url)
-        raise _max_image_count_error()
-
-    image = CourseImage(course_id=course_id, image_url=image_url)
-    session.add(image)
+    # 여기서부터 락 — 개수 최종 재확인 + 저장을 한 덩어리로 묶음
+    # (락을 반영한 최신 상태를 명시적으로 가리키도록 재할당)
+    # ㅡ DB에 반영되지 않았다면 R2 파일을 반드시 되돌려 지운다.
+    saved = False
     try:
+        course = await _get_custom_course(session, course_id, for_update=True)
+        if await _count_course_images(session, course_id) >= settings.COURSE_IMAGE_MAX_COUNT:
+            raise _max_image_count_error()
+
+        # course.images 컬렉션도 append 해야 프론트에서 업로드한 이미지 잘 보임
+        image = CourseImage(course_id=course_id, image_url=image_url)
+        course.images.append(image)
         await session.commit()
+        saved = True
     except Exception:
-        await session.rollback()
-        try:
-            await delete_file(image_url)
-        # 보상 삭제: db 저장 실패했으니 방금 r2에 올린 파일도 도로 삭제(보상 트랜잭션)
-        except (ClientError, BotoCoreError):
-            logger.exception("DB commit 실패 후 R2 보상 삭제도 실패: image_url=%s", image_url)
+        if not saved:
+            await session.rollback()
+            try:
+                await delete_file(image_url)
+            # db 반영 실패했으니 방금 r2에 올린 파일도 도로 삭제
+            except (ClientError, BotoCoreError):
+                logger.exception(
+                    "이미지 업로드 DB 반영 실패 후 R2 보상 삭제도 실패: image_url=%s", image_url
+                )
         raise
 
     course = await _get_custom_course(session, course_id)
-    # Course 모델의 실제 컬럼이 아니라 이 응답 한정으로만 붙이는 값 - DB에는 저장되지 않는다.
-    course.average_difficulty = await get_average_difficulty(session, course_id)
-    course.review_summary = await get_review_summary(session, course_id)
+    await _attach_custom_course_extras(session, course)
     return CustomCourseDetailResponse.model_validate(course)
 
 

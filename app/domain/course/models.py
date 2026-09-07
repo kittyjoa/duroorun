@@ -22,6 +22,7 @@ from app.database import Base
 
 if TYPE_CHECKING:
     from app.domain.facility.models import CourseFacility
+    from app.domain.user.models import User
 
 
 class CourseType(enum.StrEnum):
@@ -61,7 +62,7 @@ class Course(Base):
     course_name: Mapped[str] = mapped_column(String, nullable=False)
     created_by: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("users.user_id", ondelete="SET NULL"), nullable=True, index=True
-    ) # 탈퇴 유저의 커스텀 코스는 created_by=NULL 처리 후 서비스에 계속 노출
+    )  # 탈퇴 유저의 커스텀 코스는 created_by=NULL 처리 후 서비스에 계속 노출
     # 주의: User는 soft-delete(deleted_at)만 사용해 실제 행 삭제가 없으므로
     # 이 ondelete=SET NULL은 DB 레벨에서 발동하지 않음
     # — 탈퇴 로직 구현 시 애플리케이션 코드에서 직접 created_by를 NULL로 갱신해야 함
@@ -103,6 +104,8 @@ class Course(Base):
         back_populates="course",
         cascade="all, delete-orphan",
     )
+    # 커스텀 코스 제작자 표시용 (목록/상세 카드) — User 쪽엔 역참조 안 둠, 조회 전용
+    creator: Mapped["User | None"] = relationship(viewonly=True)
 
     @property
     def has_verification_coords(self) -> bool:

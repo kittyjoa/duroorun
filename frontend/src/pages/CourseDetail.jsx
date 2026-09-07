@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 
 import { apiFetch } from '../api';
 import Header from '../components/layout/Header';
+import KakaoMap from '../components/map/KakaoMap';
 
 const DIFFICULTY_LABEL = { EASY: '쉬움', NORMAL: '보통', HARD: '어려움' };
 
@@ -36,7 +37,8 @@ const CourseDetail = () => {
         }
         const data = await res.json();
         setCourse(data);
-      } catch {
+      } catch (err) {
+        console.error('코스 상세 조회 실패:', err);
         if (!ignore) setError('서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.');
       } finally {
         if (!ignore) setLoading(false);
@@ -84,6 +86,9 @@ const CourseDetail = () => {
             {courseType === 'drnb' ? (course.sigun ?? course.brd_div) : '커스텀 코스'}
           </span>
           <h1>{course.course_name}</h1>
+          {courseType === 'custom' && (
+            <p className="course-detail-creator">제작자: {course.creator_nickname ?? '알 수 없음'}</p>
+          )}
         </div>
 
         <dl className="course-detail-info">
@@ -97,7 +102,7 @@ const CourseDetail = () => {
           </div>
           <div>
             <dt>거리</dt>
-            <dd>{course.distance != null ? `${course.distance}km` : '정보 없음'}</dd>
+            <dd>{course.distance != null ? `약 ${course.distance}km` : '정보 없음'}</dd>
           </div>
           <div>
             <dt>예상 소요시간</dt>
@@ -105,12 +110,10 @@ const CourseDetail = () => {
               {course.estimated_time != null ? `약 ${course.estimated_time}분` : '정보 없음'}
             </dd>
           </div>
-          {courseType === 'drnb' && (
-            <div>
-              <dt>완주 인증</dt>
-              <dd>{course.has_verification_coords ? '가능' : '불가 (좌표 정보 없음)'}</dd>
-            </div>
-          )}
+          <div>
+            <dt>완주 인증</dt>
+            <dd>{course.has_verification_coords ? '가능' : '불가 (좌표 정보 없음)'}</dd>
+          </div>
           {courseType === 'custom' && (
             <div>
               <dt>경유지 수</dt>
@@ -119,8 +122,16 @@ const CourseDetail = () => {
           )}
         </dl>
 
+        <p className="course-detail-source-note">
+          {courseType === 'drnb'
+            ? '※ 난이도, 거리, 소요시간은 두루누비 공식 API 기준입니다.'
+            : '※ 난이도, 거리, 소요시간은 코스 제작자 기준입니다.'}
+        </p>
+
         {course.course_description && (
-          <p className="course-detail-desc">{course.course_description}</p>
+          <p className="course-detail-desc">
+            {course.course_description.replace(/<br\s*\/?>/gi, '\n')}
+          </p>
         )}
 
         {courseType === 'custom' && course.images?.length > 0 && (
@@ -129,6 +140,39 @@ const CourseDetail = () => {
               <img key={image.image_id} src={image.image_url} alt={course.course_name} />
             ))}
           </div>
+        )}
+
+        {/* DRNB는 시작/종료 좌표만 DB에 있고 전체 경로가 없어서 마커만 표시(직선 경로선은
+            실제 트레일과 무관해 오해를 줄 수 있음). 커스텀은 경유지가 다 있어 경로선까지 표시 */}
+        {courseType === 'drnb' && course.has_verification_coords && (
+          <KakaoMap
+            markers={[
+              { lat: course.start_lat, lng: course.start_lng, label: '시작' },
+              { lat: course.end_lat, lng: course.end_lng, label: '종료' },
+            ]}
+          />
+        )}
+        {courseType === 'custom' && course.waypoints?.length > 0 && (
+          <>
+            <p className="kakao-map-hint-static">
+              경유지끼리 직선으로 이은 참고 경로입니다. 실제 도로·트레일과 다를 수 있습니다.
+            </p>
+            <KakaoMap
+              path={course.waypoints.map((w) => ({ lat: w.latitude, lng: w.longitude }))}
+              markers={[
+                {
+                  lat: course.waypoints[0].latitude,
+                  lng: course.waypoints[0].longitude,
+                  label: '시작',
+                },
+                {
+                  lat: course.waypoints.at(-1).latitude,
+                  lng: course.waypoints.at(-1).longitude,
+                  label: '종료',
+                },
+              ]}
+            />
+          </>
         )}
       </main>
     </>

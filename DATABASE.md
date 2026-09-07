@@ -35,10 +35,15 @@ alembic upgrade head  # 로컬 반영
 | 서비스 | 용도 | 비고 |
 |--------|------|------|
 | 두루누비 API (공공데이터포털) | DRNB 코스 목록/상세정보 (GPX 좌표, 거리, 난이도 등) 배치 조회 | 시드 스크립트가 `crsKorNm`/`sigun` 필터로 호출, DB에 저장 |
-| 카카오맵 API | 편의시설 지도 표시, 장소 상세정보 연동 | `kakao_place_id`로 연동 |
+| 카카오맵 API | 편의시설 지도 표시, 장소 상세정보 연동, 코스 경로/경유지 지도 표시 | `kakao_place_id`로 연동. 프론트는 `VITE_KAKAO_JS_KEY`(JS SDK), 백엔드는 `KAKAO_MAP_API_KEY`(REST, 좌표→행정구역 변환 등) |
 | 소셜 로그인 (Google / Kakao / Naver) | OAuth 2.0 인증 | `social_accounts` 테이블 |
 | Cloudflare R2 | 이미지 파일 저장 (리뷰 이미지 / 프로필 이미지 / 코스 이미지) | 확정 |
-| Gemini API (Google) | AI 리뷰 요약 생성 | 모델: Gemini 2.5 Flash-Lite (개발 시작 시 최신 모델명 재확인) |
+| Gemini API (Google) | AI 리뷰 요약 생성, AI 코스 날씨·안전 브리핑 문구 생성 | 모델: Gemini 2.5 Flash-Lite (두 기능이 같은 클라이언트/모델 공유) |
+| 기상청 단기예보 조회서비스 (공공데이터포털) | AI 코스 날씨·안전 브리핑 — 좌표 기준 날씨 | 위경도 → 격자좌표(nx/ny) 변환 필요. 3시간 주기 갱신, 지역 단위 캐싱 예정 |
+| 기상청 기상특보 조회서비스 (공공데이터포털) | AI 코스 날씨·안전 브리핑 — 안전(특보) 정보 | 특보구역코드 기준. 좌표 → 행정구역(시군) 변환 필요 |
+| 한국관광공사 국문 관광정보 서비스 (공공데이터포털) | 코스 시작/종료점 주변 관광지 추천 카드 | 위치기반 관광정보 조회 |
+
+> **data.go.kr 활용신청 승인 목록**: 위 표에 없는 승인된 API 전체 목록(관광사진 정보, 공중화장실정보, 주차정보 등)은 `FEATURES.md` 외부 서비스 연동 섹션 참고 — 승인만 받아두고 아직 안 쓰는 것도 포함된 목록이라 이 표(실제 연동 중)와는 다름
 
 > **두루누비 코스 저장 전략 (배치 갱신)**
 > - DRNB 코스는 `courses` 테이블에 `course_id`, `dmb_id`, `course_name`, `difficulty`, `estimated_time`, `sigun`, `brd_div`, `distance`, `course_description`, `start_lat/lng`, `end_lat/lng`까지 시드 스크립트가 전부 저장
@@ -303,6 +308,8 @@ reviews        ──< review_images
 | ~~두루누비 코스 이미지~~ |`courseList` 응답 필드 실측 확인 결과 이미지 필드 없음. DRNB 코스 이미지는 API 미제공 — 일단 `course_images`는 CUSTOM 코스 전용 유지 |
 | GPX URL 접근 방식 | 시드 스크립트 작성 시 `gpxpath` URL에 직접 GET 가능한지 / 별도 인증 헤더 필요한지 확인 필요 |
 | 인덱스 추가 | 각 도메인 작업 시 조회 패턴에 맞춰 인덱스 추가 검토 (예: `records.user_id`, `records.course_id`, `records.is_completed`, `courses.course_type/sigun/difficulty`) |
+| `facilities.facility_type` 데이터 소스 | `RESTROOM`/`PARKING`은 공공 API로 채울 예정. `LOCKER`/`OTHERS`는 대응하는 공공 API가 없어 소스 미정 |
+| AI 날씨·안전 브리핑 캐시 저장 위치 | Redis(기존 세션/OAuth용 인스턴스 재사용) vs 별도 테이블 — 캐시 키(지역 단위)/TTL(3시간) 설계와 함께 구현 시 결정 필요 |
 
 ---
 

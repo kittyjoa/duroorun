@@ -1,13 +1,11 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 
+import CourseCard from '../components/CourseCard';
 import Header from '../components/layout/Header';
 import { useUser } from '../contexts/UserContext';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { usePaginatedCourses } from '../hooks/usePaginatedCourses';
-
-const DIFFICULTY_LABEL = { EASY: '쉬움', NORMAL: '보통', HARD: '어려움' };
-const DIFFICULTY_COLOR = { EASY: 'green', NORMAL: 'blue', HARD: 'red' };
 
 // 해파랑길 강원 구간(29~50코스)이 지나는 시/군, 삼척→고성 순 (남→북)
 // DB에 저장된 sigun 값과 정확히 일치해야 필터가 걸림 (백엔드가 == 비교)
@@ -36,23 +34,25 @@ const CUSTOM_INITIAL_FILTERS = {
 const PAGE_SIZE = 20;
 
 // page/size/difficulty/distance는 공통, sigun은 아직 DRNB만 있어서 먼저 세팅
-const buildCommonParams = (page, filters) => {
+// ㅡ size는 원래 기본값(20)인데, 더보기 공통 훅에서 reload() 경우처럼 
+// 삭제 후 재조회할 때만 기본값 20 말고 현재 화면에 보이던 개수 넘겨줌.
+const buildCommonParams = (page, size, filters) => {
   const params = new URLSearchParams();
   params.set('page', String(page));
-  params.set('size', String(PAGE_SIZE));
+  params.set('size', String(size));
   if (filters.difficulty) params.set('difficulty', filters.difficulty);
   if (filters.distanceMin) params.set('distance_min', filters.distanceMin);
   if (filters.distanceMax) params.set('distance_max', filters.distanceMax);
   return params;
 };
 
-const buildDrnbQuery = (filters, page) => {
-  const params = buildCommonParams(page, filters);
+const buildDrnbQuery = (filters, page, size) => {
+  const params = buildCommonParams(page, size, filters);
   if (filters.sigun) params.set('sigun', filters.sigun);
   return params.toString();
 };
 
-const buildCustomQuery = (filters, page) => buildCommonParams(page, filters).toString();
+const buildCustomQuery = (filters, page, size) => buildCommonParams(page, size, filters).toString();
 
 const CourseList = () => {
   const { user } = useUser();
@@ -69,10 +69,10 @@ const CourseList = () => {
     courseType === 'drnb' ? debouncedDrnbFilters : debouncedCustomFilters;
 
   const path = courseType === 'drnb' ? '/v1/courses/drnb' : '/v1/courses/custom';
-  const buildQuery = (targetPage) =>
+  const buildQuery = (targetPage, size = PAGE_SIZE) =>
     courseType === 'drnb'
-      ? buildDrnbQuery(activeDebouncedFilters, targetPage)
-      : buildCustomQuery(activeDebouncedFilters, targetPage);
+      ? buildDrnbQuery(activeDebouncedFilters, targetPage, size)
+      : buildCustomQuery(activeDebouncedFilters, targetPage, size);
 
   // 탭 전환/필터 변경 시 1페이지부터 다시 조회(목록 교체), "더보기"는 다음 페이지를 이어 붙임
   // ㅡ 훅 내부에서 요청 세대를 관리해 늦게 도착한 응답(예: 더보기 도중 탭 전환)은 버림
@@ -205,37 +205,14 @@ const CourseList = () => {
         {!loading && !error && courses.length > 0 && (
           <div className="course-grid">
             {courses.map((course) => (
-              <div className="course-card-wrapper" key={course.course_id}>
-                <Link
-                  to={`/courses/${courseType}/${course.course_id}`}
-                  className={`course-card ${DIFFICULTY_COLOR[course.difficulty] ?? 'green'}`}
-                >
-                  <div className="course-art">
-                    <div className="mini-route" />
-                    {courseType === 'custom' && user && course.created_by === user.user_id && (
-                      <span className="course-card-mine">내 코스</span>
-                    )}
-                  </div>
-                  <div className="course-info">
-                    <span>
-                      {courseType === 'drnb' ? (course.sigun ?? course.brd_div) : '커스텀 코스'}
-                      <span className="course-badge">
-                        {DIFFICULTY_LABEL[course.difficulty] ?? '난이도 정보 없음'}
-                      </span>
-                    </span>
-                    <h3>{course.course_name}</h3>
-                    <p>
-                      {course.distance != null && `${course.distance}km · `}
-                      {course.estimated_time != null
-                        ? `약 ${course.estimated_time}분`
-                        : '소요시간 정보 없음'}
-                    </p>
-                    {courseType === 'custom' && (
-                      <p>제작자: {course.creator_nickname ?? '알 수 없음'}</p>
-                    )}
-                  </div>
-                </Link>
-              </div>
+              <CourseCard
+                key={course.course_id}
+                course={course}
+                to={`/courses/${courseType}/${course.course_id}`}
+                badgeText={courseType === 'drnb' ? (course.sigun ?? course.brd_div) : '커스텀 코스'}
+                showMineBadge={courseType === 'custom' && user && course.created_by === user.user_id}
+                showCreator={courseType === 'custom'}
+              />
             ))}
           </div>
         )}

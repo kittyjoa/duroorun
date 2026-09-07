@@ -17,7 +17,7 @@ export const usePaginatedCourses = (path, buildQuery, deps) => {
 
   useEffect(() => {
     // path 아직 없으면 loading 상태 그대로 둔 채 대기 — 준비되면 deps 변경으로 재실행
-    if (!path) return;
+    if (!path) return undefined;
     const myRequestId = ++requestIdRef.current;
     // 새 1페이지 요청은 진행 중이던 "더보기" 요청을 무효화함
     // ㅡ 새 요청 시작되면 전 요청은 여기서 직접 초기화(finally가 request ID 가드에 막혀서)
@@ -36,6 +36,9 @@ export const usePaginatedCourses = (path, buildQuery, deps) => {
           return;
         }
         const data = await res.json();
+        // res.json()도 비동기라 그 사이에 탭/필터가 바뀌었을 수 있음
+        // ㅡ 상태 바꾸기 직전 재확인
+        if (requestIdRef.current !== myRequestId) return;
         setCourses(data.items);
         setTotal(data.total);
         setPage(1);
@@ -48,6 +51,13 @@ export const usePaginatedCourses = (path, buildQuery, deps) => {
         if (requestIdRef.current === myRequestId) setLoading(false);
       }
     })();
+
+    // path가 null로 바뀌는 경우엔 카운터 못 올리기 때문에
+    // 밑의 cleanup 함수 추가해서 카운터 올려서 확실히 무효화시킴.
+    // (탭, 필터 변경 후 이전 응답이 목록에 반영되지 않도록)
+    return () => {
+      requestIdRef.current += 1;
+    };
     // buildQuery: 이 페이지 요청하려면 url 뒤에 뭐 붙여야 하는지 만들어줌
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path, ...deps]);
@@ -67,6 +77,7 @@ export const usePaginatedCourses = (path, buildQuery, deps) => {
         return;
       }
       const data = await res.json();
+      if (requestIdRef.current !== myRequestId) return;
       setCourses((prev) => [...prev, ...data.items]);
       setTotal(data.total);
       setPage(nextPage);
@@ -80,11 +91,36 @@ export const usePaginatedCourses = (path, buildQuery, deps) => {
     }
   };
 
-  // 목록에서 항목 하나를 즉시 제거(삭제 성공 후 반영용) — total도 같이 맞춰서
-  // "더보기" 노출 조건(courses.length < total) 정확히 유지되도록
-  const removeCourse = (courseId) => {
-    setCourses((prev) => prev.filter((c) => c.course_id !== courseId));
-    setTotal((prev) => prev - 1);
+  // 삭제 등으로 서버 쪽 정렬이 틀어졌을 때 쓰는 전체 재조회.
+  // ㅡ 더보기(UI)는 offset 방식 위에서 동작하고 있음. 
+  // ㅡ 코스 삭제 후 더보기 시 항목 누락될 수 있어서: 
+  //   예전 로컬 필터링 대신 서버한테 새로 요청하는 방식으로 변경(reload),
+  //   page는 그대로 둠(다음 '더보기'가 요청할 위치 계산이 안 어긋나서)
+  // ㅡ 성공/실패는 값만 반환하고 에러 메시지는
+  //   삭제 자체 실패와 새로고침 실패 구분하기 위해 여기서 안 띄움. 
+  const reload = async () => {
+    if (!path) return false;
+    const myRequestId = ++requestIdRef.current;
+    setLoadingMore(false);
+    setLoadMoreError('');
+    // 백엔드 size 상한(le=100, course/router.py Query 제약)을 넘지 않게
+    const size = Math.min(Math.max(courses.length, 1), 100);
+    try {
+      const query = buildQuery(1, size);
+      const res = await apiFetch(query ? `${path}?${query}` : path);
+      if (requestIdRef.current !== myRequestId) return true; // 그 사이 더 최신 요청이 덮어씀
+      if (!res.ok) return false;
+      const data = await res.json();
+      if (requestIdRef.current !== myRequestId) return true;
+      setCourses(data.items);
+      setTotal(data.total);
+      return true;
+    } catch (err) {
+      if (requestIdRef.current === myRequestId) {
+        console.error('코스 목록 재조회 실패:', err);
+      }
+      return false;
+    }
   };
 
   return {
@@ -97,6 +133,6 @@ export const usePaginatedCourses = (path, buildQuery, deps) => {
     loadMoreError,
     setError,
     loadMore,
-    removeCourse,
+    reload,
   };
 };

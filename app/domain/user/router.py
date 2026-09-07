@@ -187,6 +187,7 @@ async def google_callback(
 async def token_refresh(
     response: Response,
     refresh_token: str | None = Cookie(default=None),
+    db: AsyncSession = Depends(get_db),
     redis: Redis = Depends(get_redis),
 ) -> TokenResponse:
     """Refresh Token 쿠키로 새 Access Token과 Refresh Token을 발급합니다."""
@@ -196,7 +197,7 @@ async def token_refresh(
             detail="Refresh Token이 없습니다",
         )
 
-    new_access_token, new_refresh_token = await refresh_tokens(refresh_token, redis)
+    new_access_token, new_refresh_token = await refresh_tokens(refresh_token, db, redis)
 
     response.set_cookie(
         key="refresh_token",

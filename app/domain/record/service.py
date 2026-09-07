@@ -180,6 +180,10 @@ async def end_record(
         course_end_lat=course.end_lat if course_verifiable else None,
         course_end_lng=course.end_lng if course_verifiable else None,
     )
+    # 완주 시점의 코스 거리를 스냅샷으로 고정 — 이후 courses.distance가 수정돼도
+    # 이미 완주한 기록의 누적 거리 통계가 소급으로 바뀌지 않게 하기 위함
+    if record.is_completed and course is not None:
+        record.distance_km = course.distance
     # 완주 인증이 안 된 이유가 유저 잘못이 아니라 코스 쪽 문제(비활성화/좌표 없음)일 때만
     # 안내 문구를 채운다. Record 모델의 실제 컬럼이 아니라 이 응답 한정으로만 붙이는 값 -
     # DB에는 저장되지 않는다.

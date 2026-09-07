@@ -135,6 +135,26 @@ async def delete_refresh_token(user_id: int, redis: Redis) -> None:
 # FastAPI 의존성 — 다른 도메인에서 import해서 씀
 # ──────────────────────────────────────────
 
+async def get_active_user(
+    user_id: int, db: AsyncSession, *, for_update: bool = False
+) -> User | None:
+    """user_id로 활성(탈퇴하지 않은) 유저를 조회합니다. 없거나 탈퇴했으면 None.
+
+    get_current_user/refresh_tokens/force_withdraw_user가 공통으로 쓰는 "탈퇴 여부"
+    판정 기준을 한 곳에 모아둔 것 — 나중에 판정 조건이 바뀔 때 여러 곳을 놓치지 않기 위함.
+
+    for_update=True면 행 잠금을 걸어, 조회 이후 처리가 끝나기 전까지 다른 트랜잭션이
+    같은 유저 행을 먼저 바꾸지 못하게 한다 (예: 강제 탈퇴 처리 도중 본인 탈퇴가 끼어들어
+    밴 등록 없이 강제 탈퇴가 "성공"해버리는 경쟁 상태 방지). 매 요청마다 거는 게 아니라
+    이런 경쟁이 실제 문제가 되는 곳에서만 켜서 쓴다.
+    """
+    query = select(User).where(User.user_id == user_id, User.deleted_at.is_(None))
+    if for_update:
+        query = query.with_for_update()
+    result = await db.execute(query)
+    return result.scalar_one_or_none()
+
+
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     db: AsyncSession = Depends(get_db),
@@ -162,10 +182,7 @@ async def get_current_user(
         )
 
     user_id = int(payload["sub"])
-    result = await db.execute(
-        select(User).where(User.user_id == user_id, User.deleted_at.is_(None))
-    )
-    user = result.scalar_one_or_none()
+    user = await get_active_user(user_id, db)
 
     if user is None:
         raise HTTPException(

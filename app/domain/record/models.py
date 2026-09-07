@@ -40,6 +40,9 @@ class Record(Base):
     is_completed: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false", nullable=False, index=True
     )  # 완주인증시 true로 바뀜
+    # 완주 처리 시점의 코스 거리 스냅샷 (km). 이후 courses.distance가 수정돼도 과거
+    # 완주 기록의 누적 거리 통계가 소급으로 바뀌지 않도록 고정해두는 값 (관리자 통계 리뷰에서 지적)
+    distance_km: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

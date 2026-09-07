@@ -3,7 +3,7 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, UniqueConstraint, func
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, UniqueConstraint, func, text
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -23,6 +23,14 @@ class ProviderType(enum.StrEnum):
 
 class User(Base):
     __tablename__ = "users"
+    __table_args__ = (
+        # 활성 유저(탈퇴 안 함) 대상 last_login_at 범위 조회(대시보드 activeUsers)용 부분 인덱스
+        Index(
+            "ix_users_last_login_at_active",
+            "last_login_at",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+    )
 
     user_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_role: Mapped[UserRole] = mapped_column(

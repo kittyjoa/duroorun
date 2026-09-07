@@ -24,6 +24,7 @@ from app.core.security import (
     decode_token,
     decode_token_ignore_exp,
     delete_refresh_token,
+    get_active_user,
     rotate_refresh_jti,
     save_refresh_jti,
 )
@@ -62,8 +63,9 @@ async def _touch_last_login(user_id: int, db: AsyncSession) -> None:
     """로그인/토큰 재발급 시 last_login_at을 갱신합니다.
 
     - 통계용 부가 작업이라 실패해도 로그인/재발급 자체를 막지 않도록 예외를 흡수한다.
-    - 최근 _LAST_LOGIN_UPDATE_THRESHOLD 이내에 이미 갱신됐으면 쓰기를 생략해, Access
-      Token 만료 주기(30분)마다 반복되는 재발급 요청이 매번 DB write를 유발하지 않게 한다.
+    - 최근 _LAST_LOGIN_UPDATE_THRESHOLD(5분) 이내에 이미 갱신됐으면 쓰기를 생략한다.
+      Access Token 만료 주기(30분)는 이 임계값보다 길어서 정상적인 재발급 주기 자체는
+      막지 못하고, 다중 탭·재시도 등으로 짧은 간격에 몰리는 중복 write만 걸러진다.
     """
     now = datetime.now(UTC)
     try:
@@ -243,11 +245,15 @@ async def kakao_login(
         result = await db.execute(select(User).where(User.user_id == social.user_id))
         user = result.scalar_one()
 
-    await _touch_last_login(user.user_id, db)
+    # _touch_last_login 내부에서 rollback이 나면 이 세션에 속한 user 객체의 속성이
+    # 전부 만료되어, 이후 user.user_id처럼 다시 접근하는 순간 동기 컨텍스트에서 지연 로딩이
+    # 시도되며 MissingGreenlet 에러로 이어질 수 있음 — 정수로 미리 꺼내 그 위험을 없앤다.
+    user_id = user.user_id
+    await _touch_last_login(user_id, db)
 
-    access_token = create_access_token(user.user_id)
-    refresh_token, refresh_jti = create_refresh_token(user.user_id)
-    await save_refresh_jti(user.user_id, refresh_jti, redis)
+    access_token = create_access_token(user_id)
+    refresh_token, refresh_jti = create_refresh_token(user_id)
+    await save_refresh_jti(user_id, refresh_jti, redis)
 
     return access_token, refresh_token
 
@@ -391,11 +397,15 @@ async def naver_login(
         result = await db.execute(select(User).where(User.user_id == social.user_id))
         user = result.scalar_one()
 
-    await _touch_last_login(user.user_id, db)
+    # _touch_last_login 내부에서 rollback이 나면 이 세션에 속한 user 객체의 속성이
+    # 전부 만료되어, 이후 user.user_id처럼 다시 접근하는 순간 동기 컨텍스트에서 지연 로딩이
+    # 시도되며 MissingGreenlet 에러로 이어질 수 있음 — 정수로 미리 꺼내 그 위험을 없앤다.
+    user_id = user.user_id
+    await _touch_last_login(user_id, db)
 
-    access_token = create_access_token(user.user_id)
-    refresh_token, refresh_jti = create_refresh_token(user.user_id)
-    await save_refresh_jti(user.user_id, refresh_jti, redis)
+    access_token = create_access_token(user_id)
+    refresh_token, refresh_jti = create_refresh_token(user_id)
+    await save_refresh_jti(user_id, refresh_jti, redis)
 
     return access_token, refresh_token
 
@@ -532,11 +542,15 @@ async def google_login(
         result = await db.execute(select(User).where(User.user_id == social.user_id))
         user = result.scalar_one()
 
-    await _touch_last_login(user.user_id, db)
+    # _touch_last_login 내부에서 rollback이 나면 이 세션에 속한 user 객체의 속성이
+    # 전부 만료되어, 이후 user.user_id처럼 다시 접근하는 순간 동기 컨텍스트에서 지연 로딩이
+    # 시도되며 MissingGreenlet 에러로 이어질 수 있음 — 정수로 미리 꺼내 그 위험을 없앤다.
+    user_id = user.user_id
+    await _touch_last_login(user_id, db)
 
-    access_token = create_access_token(user.user_id)
-    refresh_token, refresh_jti = create_refresh_token(user.user_id)
-    await save_refresh_jti(user.user_id, refresh_jti, redis)
+    access_token = create_access_token(user_id)
+    refresh_token, refresh_jti = create_refresh_token(user_id)
+    await save_refresh_jti(user_id, refresh_jti, redis)
 
     return access_token, refresh_token
 
@@ -560,12 +574,7 @@ async def refresh_tokens(refresh_token: str, db: AsyncSession, redis: Redis) -> 
         )
 
     # 탈퇴한 유저는 Redis에 옛 refresh token이 남아있어도(정리 실패 등) 재발급을 거부한다
-    active_user = (
-        await db.execute(
-            select(User.user_id).where(User.user_id == user_id, User.deleted_at.is_(None))
-        )
-    ).scalar_one_or_none()
-    if active_user is None:
+    if await get_active_user(user_id, db) is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="탈퇴했거나 존재하지 않는 사용자입니다",

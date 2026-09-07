@@ -10,7 +10,7 @@ import pytest_asyncio
 from fastapi import HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy import delete, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from app.core.security import (
     add_to_blacklist,
@@ -366,3 +366,34 @@ async def test_social_account_user_id_is_unique(db_session, ctx):
     with pytest.raises(IntegrityError):
         await db_session.commit()
     await db_session.rollback()
+
+
+# 13. last_login_at 갱신이 내부에서 실패해도 로그인 자체는 성공함
+async def test_kakao_login_succeeds_even_if_last_login_update_fails(db_session, ctx, redis_client):
+    """_touch_last_login이 내부 rollback을 타도, 로그인 함수는 user_id를 정수로 미리
+    꺼내둔 값만 쓰므로 만료된 user 객체를 다시 건드리다 MissingGreenlet로 깨지지 않는다.
+    """
+    provider_uid = uuid.uuid4().hex
+    state = uuid.uuid4().hex
+    await redis_client.setex(f"oauth:state:kakao:{state}", 300, "1")
+
+    original_commit = db_session.commit
+    call_count = {"n": 0}
+
+    async def flaky_commit():
+        call_count["n"] += 1
+        if call_count["n"] == 1:  # 유저+소셜계정 생성 커밋은 정상 통과
+            return await original_commit()
+        raise SQLAlchemyError("boom")  # _touch_last_login의 커밋만 실패시킴
+
+    with (
+        patch("httpx.AsyncClient", return_value=_fake_kakao_client(provider_uid)),
+        patch.object(db_session, "commit", side_effect=flaky_commit),
+    ):
+        access_token, refresh_token = await kakao_login(
+            code="fake-code", state=state, cookie_state=state, db=db_session, redis=redis_client
+        )
+
+    assert access_token
+    assert refresh_token
+    ctx.user_ids.append(int(decode_token(access_token)["sub"]))

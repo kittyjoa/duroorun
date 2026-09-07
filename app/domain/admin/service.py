@@ -6,9 +6,11 @@ from zoneinfo import ZoneInfo
 from fastapi import HTTPException, status
 from redis.asyncio import Redis
 from sqlalchemy import case, delete, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
+from app.core.security import get_active_user
 from app.domain.admin.schemas import (
     BannedAccountListResponse,
     BannedAccountResponse,
@@ -40,10 +42,9 @@ async def force_withdraw_user(
             detail="자기 자신은 강제 탈퇴시킬 수 없습니다",
         )
 
-    result = await db.execute(
-        select(User).where(User.user_id == user_id, User.deleted_at.is_(None))
-    )
-    user = result.scalar_one_or_none()
+    # 잠금 없이 조회하면, 이 조회와 아래 소셜 계정 조회 사이에 본인 탈퇴가 끼어들어
+    # 밴 등록 없이 강제 탈퇴가 "성공"해버릴 수 있음 — 행 잠금으로 그 틈을 없앤다
+    user = await get_active_user(user_id, db, for_update=True)
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -55,7 +56,15 @@ async def force_withdraw_user(
             detail="관리자 계정은 강제 탈퇴시킬 수 없습니다",
         )
 
-    await _force_withdraw_user(user, admin_id, reason, db, redis)
+    try:
+        await _force_withdraw_user(user, admin_id, reason, db, redis)
+    except IntegrityError:
+        await db.rollback()
+        # 동시에 들어온 중복 강제 탈퇴 요청 등으로 밴 등록이 충돌한 경우
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="이미 처리된 요청입니다",
+        ) from None
 
 
 async def get_banned_accounts(page: int, size: int, db: AsyncSession) -> BannedAccountListResponse:
@@ -99,26 +108,37 @@ def _period_boundaries(now: datetime) -> tuple[datetime, datetime, datetime, dat
     return today_start, week_start, month_start, year_start
 
 
-async def _get_period_counts(
-    db: AsyncSession, timestamp_column: ColumnElement[datetime | None]
-) -> PeriodCountResponse:
-    """주어진 시각 컬럼 기준으로 오늘/이번주/이번달/올해 카운트를 한 번의 쿼리로 집계합니다.
+async def _count_by_boundaries(
+    db: AsyncSession,
+    timestamp_column: ColumnElement[datetime | None],
+    boundaries: tuple[datetime, ...],
+    now: datetime,
+    extra_where: ColumnElement[bool] | None = None,
+) -> tuple[int, ...]:
+    """주어진 시각 경계들(오늘/이번주/... 시작 시각) 각각을 하한으로, 현재 시각을 상한으로 하는
+    카운트를 한 번의 쿼리로 집계합니다. 잘못 저장된 미래 시각 데이터가 섞이지 않도록 상한도 검사.
 
-    잘못 저장된 미래 시각 데이터가 통계에 섞이지 않도록 현재 시각을 상한으로도 검사한다.
+    extra_where로 넘긴 조건은 이 쿼리 자체를 필터링해 인덱스를 태울 수 있게 한다
+    (timestamp_column을 CASE 안에서만 쓰면 조건이 있어도 인덱스를 못 탐).
     """
-    now = datetime.now(UTC)
-    today_start, week_start, month_start, year_start = _period_boundaries(now)
+    query = select(
+        *[func.count(case((timestamp_column.between(b, now), 1))) for b in boundaries]
+    )
+    if extra_where is not None:
+        query = query.where(extra_where)
+    return (await db.execute(query)).one()
 
-    result = (
-        await db.execute(
-            select(
-                func.count(case((timestamp_column.between(today_start, now), 1))),
-                func.count(case((timestamp_column.between(week_start, now), 1))),
-                func.count(case((timestamp_column.between(month_start, now), 1))),
-                func.count(case((timestamp_column.between(year_start, now), 1))),
-            )
-        )
-    ).one()
+
+async def _get_period_counts(
+    db: AsyncSession,
+    timestamp_column: ColumnElement[datetime | None],
+    extra_where: ColumnElement[bool] | None = None,
+) -> PeriodCountResponse:
+    """주어진 시각 컬럼 기준으로 오늘/이번주/이번달/올해 카운트를 집계합니다."""
+    now = datetime.now(UTC)
+    boundaries = _period_boundaries(now)
+
+    result = await _count_by_boundaries(db, timestamp_column, boundaries, now, extra_where)
 
     return PeriodCountResponse(
         today=result[0], this_week=result[1], this_month=result[2], this_year=result[3]
@@ -128,21 +148,11 @@ async def _get_period_counts(
 async def _get_monthly_yearly_counts(
     db: AsyncSession, timestamp_column: ColumnElement[datetime | None]
 ) -> MonthlyYearlyCountResponse:
-    """주어진 시각 컬럼 기준으로 이번달/올해 카운트를 한 번의 쿼리로 집계합니다.
-
-    잘못 저장된 미래 시각 데이터가 통계에 섞이지 않도록 현재 시각을 상한으로도 검사한다.
-    """
+    """주어진 시각 컬럼 기준으로 이번달/올해 카운트를 집계합니다."""
     now = datetime.now(UTC)
     _, _, month_start, year_start = _period_boundaries(now)
 
-    result = (
-        await db.execute(
-            select(
-                func.count(case((timestamp_column.between(month_start, now), 1))),
-                func.count(case((timestamp_column.between(year_start, now), 1))),
-            )
-        )
-    ).one()
+    result = await _count_by_boundaries(db, timestamp_column, (month_start, year_start), now)
 
     return MonthlyYearlyCountResponse(this_month=result[0], this_year=result[1])
 
@@ -177,20 +187,22 @@ async def get_user_stats(db: AsyncSession) -> UserStatsResponse:
 
 async def get_record_stats(db: AsyncSession) -> RecordStatsResponse:
     """대시보드 - 러닝 기록 통계."""
+    # 완주 시점에 스냅샷 저장된 distance_km을 합산 — Course.distance를 그때그때 합산하면
+    # 나중에 코스 거리가 수정될 때 과거 완주 기록의 누적 거리까지 소급으로 바뀌어버림
     total_distance_km, total_completions = (
         await db.execute(
             select(
-                func.coalesce(func.sum(Course.distance), 0),
+                func.coalesce(func.sum(Record.distance_km), 0),
                 func.count(Record.record_id),
             )
             .select_from(Record)
-            .join(Course, Record.course_id == Course.course_id)
             .where(Record.is_completed.is_(True))
         )
     ).one()
 
+    # is_completed를 CASE 안이 아니라 WHERE로 먼저 걸러야 ix_records_is_completed를 탐
     completions = await _get_period_counts(
-        db, case((Record.is_completed.is_(True), Record.ended_at))
+        db, Record.ended_at, extra_where=Record.is_completed.is_(True)
     )
 
     return RecordStatsResponse(

@@ -225,6 +225,9 @@ async def test_unban_nonexistent_id_returns_404(db_session):
 
 # 8. 완료하지 않은 기록은 완주 통계에서 제외
 async def test_incomplete_records_excluded_from_completion_stats(db_session, ctx):
+    # 기존 데이터가 있어도(공용 테스트 DB) 항상 정확히 검증되도록 절대값이 아닌 증분으로 비교
+    before = await admin_service.get_record_stats(db_session)
+
     course = Course(
         course_type=CourseType.CUSTOM,
         course_name=f"pytest-course-{uuid.uuid4().hex[:8]}",
@@ -246,6 +249,7 @@ async def test_incomplete_records_excluded_from_completion_stats(db_session, ctx
             started_at=datetime.now(UTC),
             ended_at=datetime.now(UTC),
             is_completed=True,
+            distance_km=course.distance,
         ),
         Record(
             user_id=user.user_id,
@@ -257,18 +261,11 @@ async def test_incomplete_records_excluded_from_completion_stats(db_session, ctx
     ])
     await db_session.commit()
 
-    stats = await admin_service.get_record_stats(db_session)
+    after = await admin_service.get_record_stats(db_session)
 
-    # 이 코스는 커스텀 코스라 완주 1건분 거리(10.0)만 총 거리에 반영돼야 함
-    assert stats.total_distance_km >= 10.0
-    completed_records_for_course = (
-        await db_session.execute(
-            select(Record).where(
-                Record.course_id == course.course_id, Record.is_completed.is_(True)
-            )
-        )
-    ).scalars().all()
-    assert len(completed_records_for_course) == 1
+    # 완주(1건)만 총 완주 횟수/거리에 반영되고, 미완료 기록은 어디에도 안 잡혀야 함
+    assert after.total_completions == before.total_completions + 1
+    assert after.total_distance_km == pytest.approx(before.total_distance_km + 10.0)
 
 
 # 9. 일·주·월·연도 경계 시각 집계 (KST 기준)
@@ -418,3 +415,63 @@ async def test_banned_accounts_list_tiebreaks_by_id(db_session, ctx):
 
     # banned_at이 동일하면 id 큰 것(나중에 생성된 것)이 먼저 나와야 함
     assert ids_in_order.index(newer.id) < ids_in_order.index(older.id)
+
+
+# 17. 동시 강제 탈퇴 요청 등으로 밴 등록이 충돌하면 500이 아니라 409로 응답
+async def test_force_withdraw_via_admin_returns_409_on_conflict(db_session, ctx):
+    user, provider_uid = await _make_user_with_social(db_session, ctx)
+    admin_user, _ = await _make_user_with_social(db_session, ctx, user_role=UserRole.ADMIN)
+
+    pre_existing = BannedAccount(
+        provider_type=ProviderType.KAKAO, provider_uid=provider_uid, reason="pre-existing"
+    )
+    db_session.add(pre_existing)
+    await db_session.commit()
+    ctx.banned_ids.append(pre_existing.id)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await admin_service.force_withdraw_user(
+            admin_user.user_id, user.user_id, "욕설", db_session, _FakeRedis()
+        )
+
+    assert exc_info.value.status_code == 409
+
+
+# 18. 완주 후 코스 거리가 수정돼도, 이미 완주한 기록의 누적 거리 통계는 스냅샷 그대로 유지됨
+async def test_total_distance_uses_snapshot_not_live_course_distance(db_session, ctx):
+    before = await admin_service.get_record_stats(db_session)
+
+    course = Course(
+        course_type=CourseType.CUSTOM,
+        course_name=f"pytest-course-{uuid.uuid4().hex[:8]}",
+        distance=10.0,
+    )
+    db_session.add(course)
+    await db_session.flush()
+    ctx.course_ids.append(course.course_id)
+
+    user = User(nickname=f"pytest-admin-{uuid.uuid4().hex[:12]}")
+    db_session.add(user)
+    await db_session.flush()
+    ctx.user_ids.append(user.user_id)
+
+    db_session.add(
+        Record(
+            user_id=user.user_id,
+            course_id=course.course_id,
+            started_at=datetime.now(UTC),
+            ended_at=datetime.now(UTC),
+            is_completed=True,
+            distance_km=course.distance,  # 완주 당시 스냅샷
+        )
+    )
+    await db_session.commit()
+
+    # 완주 이후 코스 거리가 재측정 등으로 수정됨
+    course.distance = 999.0
+    await db_session.commit()
+
+    after = await admin_service.get_record_stats(db_session)
+
+    # 코스 거리가 바뀌어도 이미 완주한 기록의 통계 기여분은 스냅샷(10.0) 그대로여야 함
+    assert after.total_distance_km == pytest.approx(before.total_distance_km + 10.0)

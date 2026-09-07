@@ -40,6 +40,10 @@ const CourseDetail = () => {
   // 데이터를 덮어쓸 수 있다 - 요청마다 일련번호를 매겨서 가장 최근 요청의 응답만 반영한다.
   const reviewsRequestSeqRef = useRef(0);
   const myReviewRequestSeqRef = useRef(0);
+  // loadingMoreReviews(state)는 setState 직후 리렌더 전까지 반영되지 않아, "더보기" 버튼이
+  // disabled 되기 전에 연달아 두 번 클릭되면 fetchReviews가 중복 실행될 수 있다 - ref는
+  // 동기적으로 바로 갱신되므로 클릭 시점에 즉시 막을 수 있다 (RecordHistory.jsx와 동일 패턴).
+  const loadingMoreReviewsRef = useRef(false);
   const [course, setCourse] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -139,6 +143,10 @@ const CourseDetail = () => {
   // 자체는 바꾸지 않으므로 - 작성은 맨 앞에 추가, 삭제는 그 자리에서만 제거 - reviews.length를
   // 그대로 다음 offset으로 써도 서버 쪽 실제 위치와 어긋나지 않는다.
   const fetchReviews = async (offset = 0, { append = false } = {}) => {
+    if (append) {
+      if (loadingMoreReviewsRef.current) return;
+      loadingMoreReviewsRef.current = true;
+    }
     const isStale = createStaleChecker(reviewsRequestSeqRef);
 
     if (append) {
@@ -169,6 +177,11 @@ const CourseDetail = () => {
     } catch {
       if (!isStale()) setReviewsError('서버에 연결할 수 없어요.');
     } finally {
+      // 이 요청이 stale해진 뒤에(코스가 바뀐 뒤에) 늦게 끝나면 ref를 여기서 풀지 않는다 -
+      // 코스가 바뀐 시점에 courseId effect가 이미 ref를 리셋했고, 그 이후 새 코스에서
+      // 시작된 "더보기" 요청이 아직 진행 중일 수 있는데, 여기서 무조건 풀면 그 진행 중인
+      // 요청의 중복 클릭 방지가 풀려버린다.
+      if (append && !isStale()) loadingMoreReviewsRef.current = false;
       // stale 요청의 finally가 무조건 실행되면, 다른(더 최신) 요청이 아직 진행 중인데도
       // 로딩 플래그를 꺼버려 "더보기" 버튼이 잠깐 다시 눌리거나 인디케이터가 깜빡일 수
       // 있다 - 이 요청 자신이 stale하지 않을 때만 끈다. 코스가 바뀌어 더보기 요청 자체가
@@ -194,6 +207,7 @@ const CourseDetail = () => {
     // finally는 이제 stale 요청에 대해선 안 꺼주므로 여기서 명시적으로 리셋한다 -
     // 안 그러면 "더보기" 버튼이 새 코스에서도 계속 disabled로 남는다.
     setLoadingMoreReviews(false);
+    loadingMoreReviewsRef.current = false;
     fetchReviews(0);
   }, [courseId]);
 

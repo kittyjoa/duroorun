@@ -91,9 +91,10 @@ const RecordHistory = () => {
         }
       }
     } finally {
-      // 중복 클릭 방지용 ref는 staleness와 무관하게 이 요청이 끝나면 바로 풀어준다 -
-      // 화면에 반영되든 안 되든, "지금 진행 중인 더보기 요청"은 끝난 것이기 때문이다.
-      if (append) loadingMoreRef.current = false;
+      // 이 요청이 stale해진 뒤에 늦게 끝나면 ref를 여기서 풀지 않는다 - stale해진
+      // 시점에 effect가 이미 ref를 리셋했고, 그 이후 시작된 요청이 아직 진행 중일 수
+      // 있는데 여기서 무조건 풀면 그 진행 중인 요청의 중복 클릭 방지가 풀려버린다.
+      if (append && !isStale()) loadingMoreRef.current = false;
       // 로딩 플래그는 이 요청 자신이 최신일 때만 끈다 - append(더보기) 쪽은 CourseDetail의
       // fetchReviews와 동일하게, effect가 다시 실행될 때(아래) 명시적으로 리셋해준다.
       if (!isStale()) {

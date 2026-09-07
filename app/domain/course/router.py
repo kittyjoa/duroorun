@@ -26,6 +26,11 @@ router = APIRouter(prefix="/courses", tags=["courses"])
 _CREATE_RATE_LIMIT_MAX_REQUESTS = 15
 _CREATE_RATE_LIMIT_WINDOW_SECONDS = 3600
 
+# 유저당 코스 수정: 1시간에 30번 한도 — 생성보다 자주 일어날 수 있어서 넉넉히.
+# waypoints도 생성과 동일하게 최대 500개까지
+_UPDATE_RATE_LIMIT_MAX_REQUESTS = 30
+_UPDATE_RATE_LIMIT_WINDOW_SECONDS = 3600
+
 # 유저당 이미지 업로드/삭제 한도: 10분에 20번 — 업로드와 key_prefix 공유
 _IMAGE_RATE_LIMIT_MAX_REQUESTS = 20
 _IMAGE_RATE_LIMIT_WINDOW_SECONDS = 600
@@ -126,7 +131,17 @@ async def get_custom_course(course_id: int, session: AsyncSession = Depends(get_
     return await course_service.get_custom_course(session=session, course_id=course_id)
 
 
-@router.patch("/custom/{course_id}", response_model=CustomCourseDetailResponse)
+@router.patch(
+    "/custom/{course_id}",
+    response_model=CustomCourseDetailResponse,
+    dependencies=[
+        Depends(
+            rate_limit_per_request(
+                "course_update", _UPDATE_RATE_LIMIT_MAX_REQUESTS, _UPDATE_RATE_LIMIT_WINDOW_SECONDS
+            )
+        )
+    ],
+)
 async def update_course(
     course_id: int,
     body: CourseUpdateRequest,

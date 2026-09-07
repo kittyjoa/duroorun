@@ -11,6 +11,8 @@ import MyCourses from './pages/MyCourses';
 import MyPage from './pages/MyPage';
 import OAuthCallback from './pages/OAuthCallback';
 import Onboarding from './pages/Onboarding';
+import RecordHistory from './pages/RecordHistory';
+import RecordStart from './pages/RecordStart';
 
 const App = () => {
   return (
@@ -28,6 +30,8 @@ const App = () => {
           <Route path="/courses/custom/new" element={<CustomCourseForm />} />
           <Route path="/courses/custom/:courseId/edit" element={<CustomCourseForm />} />
           <Route path="/courses/:courseType/:courseId" element={<CourseDetail />} />
+          <Route path="/records" element={<RecordHistory />} />
+          <Route path="/records/start/:courseType/:courseId" element={<RecordStart />} />
         </Routes>
       </UserProvider>
     </BrowserRouter>

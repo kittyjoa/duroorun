@@ -49,7 +49,7 @@ const Header = () => {
       </a>
       <nav aria-label="주요 메뉴">
         <Link to="/courses">코스 찾기</Link>
-        <a href="/#records">러닝 기록</a>
+        <Link to="/records">러닝 기록</Link>
         <Link to="/courses/custom/mine">나만의 코스</Link>
       </nav>
       <div className="header-actions">

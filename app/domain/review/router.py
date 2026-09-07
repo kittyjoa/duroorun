@@ -111,12 +111,13 @@ async def delete_review(
 async def get_my_reviews(
     page: int = Query(default=1, ge=1),
     size: int = Query(default=20, ge=1, le=100),
+    course_id: int | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """마이페이지 - 내가 작성한 리뷰 목록 조회"""
+    """마이페이지 - 내가 작성한 리뷰 목록 조회 (course_id를 주면 그 코스 리뷰만 필터링)"""
     return await review_service.get_my_reviews(
-        session=session, user_id=current_user.user_id, page=page, size=size
+        session=session, user_id=current_user.user_id, page=page, size=size, course_id=course_id
     )
 
 
@@ -125,12 +126,17 @@ async def get_reviews(
     course_id: int,
     page: int = Query(default=1, ge=1),
     size: int = Query(default=20, ge=1, le=100),
+    offset: int | None = Query(default=None, ge=0),
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),  # 로그인 확인용, 유저정보 사용X
 ):
-    """코스 리뷰 목록 조회"""
+    """코스 리뷰 목록 조회 (코스 상세와 동일하게 로그인 없이도 공개).
+
+    offset을 주면 page 대신 그 값을 그대로 오프셋으로 쓴다 - "더보기"가 이미 불러온
+    개수만큼만 offset으로 넘겨 다음 항목만 받아올 수 있도록(프론트가 매번 전체를
+    다시 받지 않도록) 페이지 경계에 안 맞는 임의의 오프셋을 지원하기 위함.
+    """
     return await review_service.get_reviews(
-        session=session, course_id=course_id, page=page, size=size
+        session=session, course_id=course_id, page=page, size=size, offset=offset
     )
 
 

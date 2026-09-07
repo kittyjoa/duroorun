@@ -1,8 +1,6 @@
 import { Link } from 'react-router-dom';
 
-// CourseList/MyCourses 공통 난이도 표시 — 두 페이지에 중복 정의돼 있던 걸 여기로 통합
-export const DIFFICULTY_LABEL = { EASY: '쉬움', NORMAL: '보통', HARD: '어려움' };
-export const DIFFICULTY_COLOR = { EASY: 'green', NORMAL: 'blue', HARD: 'red' };
+import { DIFFICULTY_COLOR, DIFFICULTY_LABEL } from '../utils/difficulty';
 
 // 코스 목록(전체 코스/나만의 코스)에서 공통으로 쓰는 카드.
 // 두 페이지가 다른 부분(링크 대상, 뱃지 문구, 제작자 표시, 수정/삭제 버튼)만

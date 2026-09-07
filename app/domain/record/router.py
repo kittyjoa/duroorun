@@ -7,8 +7,8 @@ from app.core.security import get_current_user
 from app.database import get_db
 from app.domain.record import service as record_service
 from app.domain.record.schemas import (
+    MyRecordListResponse,
     RecordEndRequest,
-    RecordListResponse,
     RecordResponse,
     RecordStartRequest,
 )
@@ -54,7 +54,7 @@ async def get_record(
     )
 
 
-@router.get("/", response_model=RecordListResponse)
+@router.get("/", response_model=MyRecordListResponse)
 async def get_records(
     page: int = Query(default=1, ge=1),
     size: int = Query(default=20, ge=1, le=100),

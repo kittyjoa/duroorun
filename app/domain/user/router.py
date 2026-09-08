@@ -16,6 +16,7 @@ from app.domain.user.models import User
 from app.domain.user.schemas import (
     MessageResponse,
     ProfileImageResponse,
+    PublicProfileResponse,
     TokenResponse,
     UserOnboardingRequest,
     UserProfileUpdate,
@@ -26,6 +27,7 @@ from app.domain.user.service import (
     get_google_auth_url,
     get_kakao_auth_url,
     get_naver_auth_url,
+    get_public_profile,
     google_login,
     kakao_login,
     logout,
@@ -327,3 +329,12 @@ async def withdraw(
     )
 
     return MessageResponse(message="회원 탈퇴가 완료되었습니다")
+
+
+@router.get("/users/{user_id}", response_model=PublicProfileResponse, summary="공개 프로필 조회")
+async def get_user_public_profile(
+    user_id: int, db: AsyncSession = Depends(get_db)
+) -> PublicProfileResponse:
+    """다른 유저의 공개 프로필(닉네임, 거주지)을 조회합니다. 로그인 불필요."""
+    user = await get_public_profile(user_id, db)
+    return PublicProfileResponse.model_validate(user)

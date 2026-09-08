@@ -27,6 +27,7 @@ from app.domain.review.models import Review
 from app.domain.user.models import ProviderType, SocialAccount, User
 from app.domain.user.service import (
     _touch_last_login,
+    get_public_profile,
     kakao_login,
     logout,
     refresh_tokens,
@@ -397,3 +398,30 @@ async def test_kakao_login_succeeds_even_if_last_login_update_fails(db_session, 
     assert access_token
     assert refresh_token
     ctx.user_ids.append(int(decode_token(access_token)["sub"]))
+
+
+# 14. 공개 프로필 조회 - 활성 유저는 정상 조회됨
+async def test_get_public_profile_returns_active_user(db_session, ctx):
+    user = await _make_user(db_session, ctx)
+    user.location = "강원 속초시"
+    await db_session.commit()
+
+    profile = await get_public_profile(user.user_id, db_session)
+
+    assert profile.user_id == user.user_id
+    assert profile.location == "강원 속초시"
+
+
+# 15. 공개 프로필 조회 - 탈퇴했거나 존재하지 않는 유저는 404
+async def test_get_public_profile_rejects_withdrawn_or_missing_user(db_session, ctx):
+    user = await _make_user(db_session, ctx)
+    user.deleted_at = datetime.now(UTC)
+    await db_session.commit()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_public_profile(user.user_id, db_session)
+    assert exc_info.value.status_code == 404
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_public_profile(999_999_999, db_session)
+    assert exc_info.value.status_code == 404

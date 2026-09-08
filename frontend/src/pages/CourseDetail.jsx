@@ -421,7 +421,14 @@ const CourseDetail = () => {
           </span>
           <h1>{course.course_name}</h1>
           {courseType === 'custom' && (
-            <p className="course-detail-creator">제작자: {course.creator_nickname ?? '알 수 없음'}</p>
+            <p className="course-detail-creator">
+              제작자:{' '}
+              {course.created_by != null ? (
+                <Link to={`/users/${course.created_by}`}>{course.creator_nickname ?? '알 수 없음'}</Link>
+              ) : (
+                course.creator_nickname ?? '알 수 없음'
+              )}
+            </p>
           )}
           {/* 러닝 시작 버튼 */}
           <Link
@@ -596,6 +603,11 @@ const CourseDetail = () => {
                       <span className="record-hint">
                         {new Date(review.created_at).toLocaleDateString('ko-KR')}
                       </span>
+                      {review.user_id != null && (
+                        <Link to={`/users/${review.user_id}`} className="text-button review-author-link">
+                          작성자 프로필 보기
+                        </Link>
+                      )}
                     </div>
                     <p className="review-item-content">{review.content}</p>
 

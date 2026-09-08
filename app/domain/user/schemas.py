@@ -2,6 +2,8 @@
 
 from pydantic import BaseModel, ConfigDict
 
+from app.domain.user.models import UserRole
+
 
 class TokenResponse(BaseModel):
     """소셜 로그인 성공 응답."""
@@ -47,3 +49,15 @@ class UserResponse(BaseModel):
     nickname: str | None
     profile_image_url: str | None
     location: str | None
+    user_role: UserRole
+
+
+class PublicProfileResponse(BaseModel):
+    """다른 유저의 공개 프로필 조회 응답 (마이페이지보다 훨씬 적은 정보만 노출)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    user_id: int
+    nickname: str | None
+    location: str | None
+    profile_image_url: str | None

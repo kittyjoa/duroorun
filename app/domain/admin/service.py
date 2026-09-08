@@ -20,6 +20,7 @@ from app.domain.admin.schemas import (
     MonthlyYearlyCountResponse,
     PeriodCountResponse,
     RecordStatsResponse,
+    UserSearchListResponse,
     UserStatsResponse,
 )
 from app.domain.course.models import Course, CourseType
@@ -27,6 +28,7 @@ from app.domain.facility.models import Facility, FacilityType
 from app.domain.record.models import Record
 from app.domain.review.models import Review
 from app.domain.user.models import BannedAccount, User, UserRole
+from app.domain.user.schemas import PublicProfileResponse
 from app.domain.user.service import force_withdraw_user as _force_withdraw_user
 
 KST = ZoneInfo("Asia/Seoul")
@@ -96,6 +98,37 @@ async def unban_account(banned_id: int, db: AsyncSession) -> None:
             detail="존재하지 않는 밴 계정입니다",
         )
     await db.commit()
+
+
+async def search_users(
+    nickname: str, page: int, size: int, db: AsyncSession
+) -> UserSearchListResponse:
+    """닉네임으로 유저를 검색합니다 (부분일치, 관리자 등급 제외).
+
+    강제 탈퇴 대상을 다른 관리자에게 전달받았을 때 프로필을 찾아가기 위한 용도.
+    탈퇴한 유저는 익명화로 nickname이 NULL이라 조건상 자동으로 제외된다.
+    """
+    where_clause = (User.user_role != UserRole.ADMIN) & User.nickname.ilike(f"%{nickname}%")
+
+    total = (
+        await db.execute(select(func.count()).select_from(User).where(where_clause))
+    ).scalar_one()
+
+    result = await db.execute(
+        select(User)
+        .where(where_clause)
+        .order_by(User.nickname.asc(), User.user_id.asc())
+        .offset((page - 1) * size)
+        .limit(size)
+    )
+    items = result.scalars().all()
+
+    return UserSearchListResponse(
+        items=[PublicProfileResponse.model_validate(u) for u in items],
+        total=total,
+        page=page,
+        size=size,
+    )
 
 
 def _period_boundaries(now: datetime) -> tuple[datetime, datetime, datetime, datetime]:
@@ -233,6 +266,7 @@ async def _get_popular_courses(
         select(
             Course.course_id,
             Course.course_name,
+            Course.course_type,
             func.count(Record.record_id).label("completion_count"),
         )
         .join(Record, Record.course_id == Course.course_id)
@@ -241,7 +275,7 @@ async def _get_popular_courses(
     if course_type is not None:
         query = query.where(Course.course_type == course_type)
     query = (
-        query.group_by(Course.course_id, Course.course_name)
+        query.group_by(Course.course_id, Course.course_name, Course.course_type)
         .order_by(
             func.count(Record.record_id).desc(),
             review_count_subquery.desc(),
@@ -255,6 +289,7 @@ async def _get_popular_courses(
         CoursePopularityItem(
             course_id=row.course_id,
             course_name=row.course_name,
+            course_type=row.course_type,
             completion_count=row.completion_count,
         )
         for row in rows

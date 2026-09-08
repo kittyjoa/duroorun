@@ -94,6 +94,9 @@ class BannedAccount(Base):
     banned_by: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("users.user_id"), nullable=True
     )
+    # 익명화 직전 닉네임 스냅샷 - 관리자 밴 목록에서 "이게 누구였는지" 구분하기 위한 용도.
+    # 공개 화면엔 노출 안 함(관리자 전용), 탈퇴 유저 본인의 익명화 정책과는 별개
+    banned_nickname: Mapped[str | None] = mapped_column(String(30), nullable=True)
     banned_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

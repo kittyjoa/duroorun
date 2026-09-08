@@ -608,6 +608,17 @@ async def logout(access_token: str, redis: Redis) -> None:
     await delete_refresh_token(user_id, redis)
 
 
+async def get_public_profile(user_id: int, db: AsyncSession) -> User:
+    """다른 유저의 공개 프로필 정보를 조회합니다. 탈퇴했거나 없는 유저는 404."""
+    user = await get_active_user(user_id, db)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="존재하지 않는 사용자입니다",
+        )
+    return user
+
+
 async def update_profile(
     user: User, nickname: str | None, location: str | None, db: AsyncSession
 ) -> User:
@@ -803,6 +814,9 @@ async def force_withdraw_user(
     result = await db.execute(select(SocialAccount).where(SocialAccount.user_id == user.user_id))
     social = result.scalar_one_or_none()
 
+    # 익명화로 지워지기 전에 닉네임을 캡처 - 밴 목록에서 관리자가 식별할 수 있게 하기 위함
+    nickname_before_anonymize = user.nickname
+
     old_profile_image_url = await _anonymize_user_data(user, db)
 
     if social is not None:
@@ -811,6 +825,7 @@ async def force_withdraw_user(
             provider_uid=social.provider_uid,
             reason=reason,
             banned_by=admin_id,
+            banned_nickname=nickname_before_anonymize,
         ))
 
     await db.commit()

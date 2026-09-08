@@ -4,8 +4,10 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.domain.course.models import CourseType
 from app.domain.facility.models import FacilityType
 from app.domain.user.models import ProviderType
+from app.domain.user.schemas import PublicProfileResponse
 
 
 class ForceWithdrawRequest(BaseModel):
@@ -31,6 +33,7 @@ class BannedAccountResponse(BaseModel):
     provider_type: ProviderType
     reason: str
     banned_by: int | None
+    banned_nickname: str | None
     banned_at: datetime
 
 
@@ -38,6 +41,15 @@ class BannedAccountListResponse(BaseModel):
     """밴 목록 조회 응답 - offset 페이지네이션"""
 
     items: list[BannedAccountResponse]
+    total: int
+    page: int
+    size: int
+
+
+class UserSearchListResponse(BaseModel):
+    """관리자 - 닉네임으로 유저 검색 응답 (관리자 계정/탈퇴 유저 제외) - offset 페이지네이션"""
+
+    items: list[PublicProfileResponse]
     total: int
     page: int
     size: int
@@ -60,10 +72,15 @@ class MonthlyYearlyCountResponse(BaseModel):
 
 
 class CoursePopularityItem(BaseModel):
-    """인기 코스 랭킹 항목 (완주 횟수 기준)."""
+    """인기 코스 랭킹 항목 (완주 횟수 기준).
+
+    course_type은 "전체" 랭킹(DRNB+커스텀 혼합)에서 프론트가 코스 상세 경로
+    (/courses/{course_type}/{course_id})를 조립할 때 필요해서 포함한다.
+    """
 
     course_id: int
     course_name: str
+    course_type: CourseType
     completion_count: int
 
 

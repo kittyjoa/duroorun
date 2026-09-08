@@ -53,7 +53,6 @@ const Header = () => {
         <Link to="/courses/custom/mine">나만의 코스</Link>
       </nav>
       <div className="header-actions">
-        <button className="icon-button" aria-label="검색"><span className="search-icon" /></button>
         {user ? (
           <div className="profile-menu" ref={profileMenuRef}>
             <div className="profile-avatar" aria-hidden="true">
@@ -80,6 +79,18 @@ const Header = () => {
                 >
                   마이페이지
                 </button>
+                {user.user_role === 'ADMIN' && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      navigate('/admin');
+                    }}
+                  >
+                    관리자 페이지
+                  </button>
+                )}
                 <button type="button" role="menuitem" onClick={handleLogout}>
                   로그아웃
                 </button>

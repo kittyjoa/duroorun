@@ -90,14 +90,14 @@ def get_latest_base_datetime(now: datetime) -> tuple[str, str]:
 
 
 async def get_short_term_forecast(nx: int, ny: int) -> list[dict]:
-    """오늘 하루치 단기예보(기온/강수확률/강수형태/하늘상태)를 조회.
+    """단기예보(기온/강수확률/강수형태/하늘상태)를 조회 - 가장 가까운 미래 하루치만 반환.
 
     ㅡ 원본 API: 발표시각 기준 최대 약 3일치를 1~3시간 간격으로 줌
-    ㅡ 우리 서비스: 러너가 오늘 코스 괜찮은지 확인 목적이라 오늘 날짜 슬롯만 걸러서 반환.
-    """
+    ㅡ 우리 서비스: 러너가 "지금부터 당분간" 코스 괜찮은지 확인 목적.
+    응답에 실제로 담긴 가장 가까운 날짜 하루치만 걸러서 반환.
+    23시 발표 예보는 다음날부터 시작해서 '오늘' 날짜로 고정하면 X."""
     now = datetime.now(KST)
     base_date, base_time = get_latest_base_datetime(now)
-    today = now.strftime("%Y%m%d")
     params = {
         "serviceKey": settings.KMA_API_KEY,
         "pageNo": 1,
@@ -134,11 +134,11 @@ async def get_short_term_forecast(nx: int, ny: int) -> list[dict]:
     except (KeyError, TypeError) as e:
         raise KmaAPIError(f"기상청 단기예보 API 응답 구조가 예상과 다릅니다: {e}") from None
 
-    return [
-        item
-        for item in items
-        if item.get("fcstDate") == today and item.get("category") in _FORECAST_CATEGORIES
-    ]
+    relevant = [item for item in items if item.get("category") in _FORECAST_CATEGORIES]
+    if not relevant:
+        return []
+    earliest_date = min(item["fcstDate"] for item in relevant)
+    return [item for item in relevant if item["fcstDate"] == earliest_date]
 
 
 # ===== 기상특보 (강원 전체, stnId=105 고정) =====

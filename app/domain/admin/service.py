@@ -108,7 +108,19 @@ async def search_users(
     강제 탈퇴 대상을 다른 관리자에게 전달받았을 때 프로필을 찾아가기 위한 용도.
     탈퇴한 유저는 익명화로 nickname이 NULL이라 조건상 자동으로 제외된다.
     """
-    where_clause = (User.user_role != UserRole.ADMIN) & User.nickname.ilike(f"%{nickname}%")
+    nickname = nickname.strip()
+    if not nickname:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="검색할 닉네임을 입력해주세요",
+        )
+
+    # %, _는 LIKE 와일드카드로 해석되므로 이스케이프하지 않으면 "%"만 검색해도
+    # 전체 유저가 조회되어, 검색어 없이는 조회 안 되게 한 프론트 가드가 무의미해짐
+    escaped = nickname.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    where_clause = (User.user_role != UserRole.ADMIN) & User.nickname.ilike(
+        f"%{escaped}%", escape="\\"
+    )
 
     total = (
         await db.execute(select(func.count()).select_from(User).where(where_clause))

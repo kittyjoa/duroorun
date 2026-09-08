@@ -12,6 +12,8 @@ testpaths = ["tests"]
 # 한 줄 최대 100자 (CONTRIBUTING.md 규칙)
 line-length = 100
 target-version = "py311"
+# Alembic 자동 생성 템플릿은 우리 lint 규칙(UP007 등)과 원래 안 맞음 - 검사 대상에서 제외
+extend-exclude = ["alembic/versions"]
 
 [tool.ruff.lint]
 # E/W: pycodestyle, F: pyflakes, I: isort(import 정렬), UP: pyupgrade, B: bugbear

@@ -520,3 +520,24 @@ async def test_search_users_excludes_withdrawn_user(db_session, ctx):
     result = await admin_service.search_users(token, 1, 20, db_session)
 
     assert target.user_id not in {item.user_id for item in result.items}
+
+
+# 21. 유저 검색 - %, _는 SQL 와일드카드가 아닌 리터럴 문자로 취급됨
+async def test_search_users_treats_like_wildcards_as_literals(db_session, ctx):
+    token = uuid.uuid4().hex[:12]
+    user = User(nickname=f"pytest-{token}-user", user_role=UserRole.USER)
+    db_session.add(user)
+    await db_session.commit()
+    ctx.user_ids.append(user.user_id)
+
+    # "%"만 검색해도 전체 유저가 조회되면 안 됨 (와일드카드 이스케이프 확인)
+    result = await admin_service.search_users("%", 1, 20, db_session)
+    assert user.user_id not in {item.user_id for item in result.items}
+
+
+# 22. 유저 검색 - 공백만 입력하면 422
+async def test_search_users_rejects_blank_nickname(db_session):
+    with pytest.raises(HTTPException) as exc_info:
+        await admin_service.search_users("   ", 1, 20, db_session)
+
+    assert exc_info.value.status_code == 422

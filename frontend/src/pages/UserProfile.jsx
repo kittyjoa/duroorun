@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 
 import { apiFetch } from '../api';
@@ -29,6 +29,13 @@ const UserProfile = () => {
   const [withdrawing, setWithdrawing] = useState(false);
   const [withdrawError, setWithdrawError] = useState('');
   const [withdrawn, setWithdrawn] = useState(false);
+  const redirectTimeoutRef = useRef(null);
+
+  useEffect(() => {
+    return () => {
+      if (redirectTimeoutRef.current) clearTimeout(redirectTimeoutRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -101,7 +108,7 @@ const UserProfile = () => {
         return;
       }
       setWithdrawn(true);
-      setTimeout(() => navigate('/admin'), WITHDRAW_REDIRECT_DELAY_MS);
+      redirectTimeoutRef.current = setTimeout(() => navigate('/admin'), WITHDRAW_REDIRECT_DELAY_MS);
     } catch (err) {
       console.error('강제 탈퇴 실패:', err);
       setWithdrawError('서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.');

@@ -43,9 +43,31 @@ class Settings(BaseSettings):
     # 카카오맵
     KAKAO_MAP_API_KEY: str = ""
 
+    # 기상청 (단기예보 + 특보) - DURUNUBI_API_KEY와 동일 값 사용
+    KMA_API_KEY: str = ""
+    KMA_BASE_URL: str = "https://apis.data.go.kr/1360000"
+
+    # 한국관광공사 (위치기반 관광정보) - DURUNUBI_API_KEY와 동일 값 사용
+    TOUR_API_KEY: str = ""
+    TOUR_BASE_URL: str = "https://apis.data.go.kr/B551011/KorService2"
+
+    # 코스 날씨·안전 브리핑 캐시 TTL(초) - 단기예보 갱신 주기(3시간)와 동일
+    WEATHER_BRIEFING_CACHE_TTL_SECONDS: int = 10800
+    # 주변 관광지 추천 캐시 TTL(초)
+    NEARBY_ATTRACTIONS_CACHE_TTL_SECONDS: int = 86400
+    NEARBY_ATTRACTIONS_RADIUS_M: int = 5000
+
+    # 코스 날씨/관광지 엔드포인트는 비로그인 공개 API라 유저 단위 rate limit을 못 쓰고,
+    # IP 단위로 건다. 캐시 히트는 카운트 X, "실제로 외부 API 새로 호출하는 경우"만 O
+    # ㅡ 두루누비 시딩 배치와 공공데이터포털 쿼터를 공유하므로 남용 방지 안전장치.
+    WEATHER_BRIEFING_RATE_LIMIT_MAX_REQUESTS: int = 30
+    WEATHER_BRIEFING_RATE_LIMIT_WINDOW_SECONDS: int = 3600
+    NEARBY_ATTRACTIONS_RATE_LIMIT_MAX_REQUESTS: int = 30
+    NEARBY_ATTRACTIONS_RATE_LIMIT_WINDOW_SECONDS: int = 3600
+
     # Gemini
     GEMINI_API_KEY: str = ""
-    GEMINI_MODEL: str = "gemini-2.5-flash-lite"
+    GEMINI_MODEL: str = "gemini-3.5-flash-lite"
     # Redis 락 TTL(60초)보다 확실히 짧게 - 응답이 너무 오래 걸려서 락이 먼저 만료되고
     # 같은 코스에 대한 다른 작업이 끼어드는 걸 막기 위함
     GEMINI_TIMEOUT_SECONDS: int = 30

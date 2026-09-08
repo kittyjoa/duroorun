@@ -166,6 +166,40 @@ class DrnbCourseDetailResponse(BaseModel):
     review_summary: ReviewSummaryResponse | None = None
 
 
+class WeatherBriefingResponse(BaseModel):
+    """코스 날씨·안전 브리핑 응답 - "코스 날씨·안전 브리핑" 버튼 클릭 시 조회"""
+
+    # 기상청 특보 통보문 원문 그대로 (발효 중인 특보 없으면 None)
+    # ㅡ AI가 다시 쓰지 않고 그대로 노출
+    warning_raw_text: str | None
+    # AI가 만든 오늘 하루 날씨 요약 + (특보 원문이 있다면) 코스 지역과의 관련성 판단 코멘트
+    briefing: str
+    # 현재 시각과 가장 가까운 예보 슬롯의 하늘상태/강수형태 ("맑음"/"구름많음"/"흐림"/"비"/
+    # "비/눈"/"눈"/"소나기") - 프론트가 날씨 아이콘/애니메이션을 고르는 용도.
+    # 예보 데이터를 아예 못 가져온 경우 None
+    condition: str | None
+    generated_at: datetime
+
+
+class NearbyAttractionResponse(BaseModel):
+    """코스 주변 관광지 추천 카드 1개 - 한국관광공사 위치기반 관광정보 기준"""
+
+    # 관광공사 API의 고유 ID(contentid) - 프론트가 React key로 씀
+    content_id: str | None
+    title: str
+    address: str | None
+    image_url: str | None
+    latitude: float
+    longitude: float
+    distance_m: float | None
+
+
+class NearbyAttractionListResponse(BaseModel):
+    """코스 주변 관광지 추천 목록 응답"""
+
+    items: list[NearbyAttractionResponse]
+
+
 class CustomCourseSummary(BaseModel):
     """커스텀 코스 목록 요소"""
 

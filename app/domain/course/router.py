@@ -1,12 +1,13 @@
 """코스 (DRNB + 커스텀) - API 엔드포인트 (APIRouter)."""
 
-from fastapi import APIRouter, Depends, Query, UploadFile, status
+from fastapi import APIRouter, Depends, Query, Request, UploadFile, status
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.rate_limit import rate_limit_per_request
 from app.core.security import get_current_user
 from app.database import get_db
+from app.domain.course import attraction_service, weather_service
 from app.domain.course import service as course_service
 from app.domain.course.models import Difficulty
 from app.domain.course.schemas import (
@@ -17,6 +18,8 @@ from app.domain.course.schemas import (
     CustomCourseListResponse,
     DrnbCourseDetailResponse,
     DrnbCourseListResponse,
+    NearbyAttractionListResponse,
+    WeatherBriefingResponse,
 )
 from app.domain.user.models import User
 
@@ -45,6 +48,32 @@ async def get_gangwon_boundary():
         GANGWON_BOUNDARY_PATH,
         media_type="application/geo+json",
         headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
+@router.get("/{course_id}/weather-briefing", response_model=WeatherBriefingResponse)
+async def get_weather_briefing(
+    course_id: int, request: Request, session: AsyncSession = Depends(get_db)
+):
+    """코스 날씨·안전 브리핑 조회 - "코스 날씨·안전 브리핑" 버튼 클릭 시 호출.
+    ㅡ DRNB/CUSTOM 공통. 공개 정보라 인증 불필요.
+    ㅡ 비로그인 공개 API라 캐시 미스(=실제 외부 API 호출) 시에만 IP 단위 rate limit."""
+    client_ip = request.client.host if request.client else "unknown"
+    return await weather_service.get_weather_briefing(
+        session=session, course_id=course_id, client_ip=client_ip
+    )
+
+
+@router.get("/{course_id}/nearby-attractions", response_model=NearbyAttractionListResponse)
+async def get_nearby_attractions(
+    course_id: int, request: Request, session: AsyncSession = Depends(get_db)
+):
+    """코스 시작/종료점 주변 관광지 추천 목록 조회.
+    ㅡ DRNB/CUSTOM 공통, 공개 정보라 인증 불필요.
+    ㅡ 날씨 브리핑과 동일하게 캐시 미스 시에만 IP 단위 rate limit이 걸린다."""
+    client_ip = request.client.host if request.client else "unknown"
+    return await attraction_service.get_nearby_attractions(
+        session=session, course_id=course_id, client_ip=client_ip
     )
 
 

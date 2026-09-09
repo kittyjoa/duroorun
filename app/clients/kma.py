@@ -13,6 +13,8 @@ from app.config import settings
 
 _TIMEOUT = 10.0
 _SUCCESS_RESULT_CODE = "00"
+# 공공데이터포털 공통 에러코드 중 "03": "조회했는데 해당 데이터 없음"이라는 정상 응답
+_NO_DATA_RESULT_CODE = "03"
 
 KST = ZoneInfo("Asia/Seoul")
 
@@ -191,10 +193,13 @@ async def _kma_get(url: str, params: dict) -> dict:
     try:
         data = res.json()
         header = data["response"]["header"]
-        if header["resultCode"] != _SUCCESS_RESULT_CODE:
-            raise KmaAPIError(
-                f"기상청 특보 API 에러 {header['resultCode']}: {header['resultMsg']}"
-            )
+        result_code = header["resultCode"]
+        if result_code == _NO_DATA_RESULT_CODE:
+            # 이 경우 응답에 "body" 자체가 없는 경우가 많아 아래 body 접근 시도하지 않고
+            # 여기서 바로 "정상, 결과 없음"으로 취급해 빈 값 돌려줌.
+            return {"items": None}
+        if result_code != _SUCCESS_RESULT_CODE:
+            raise KmaAPIError(f"기상청 특보 API 에러 {result_code}: {header['resultMsg']}")
         return data["response"]["body"]
     except ValueError as e:
         raise KmaAPIError(f"기상청 특보 API 응답이 JSON 형식이 아닙니다: {e}") from None

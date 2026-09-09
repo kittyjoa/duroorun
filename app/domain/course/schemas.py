@@ -178,6 +178,12 @@ class WeatherBriefingResponse(BaseModel):
     # "비/눈"/"눈"/"소나기") - 프론트가 날씨 아이콘/애니메이션을 고르는 용도.
     # 예보 데이터를 아예 못 가져온 경우 None
     condition: str | None
+    # 그날 최고/최저 기온 - 특보 없는 경우만: 최고/최저 통계칩 + 기온별 간단팁 노출
+    # tip은 ai 호출 안 하고 서버에서 계산
+    # ㅡ 예보 데이터를 못 가져온 경우 None
+    min_temp: float | None
+    max_temp: float | None
+    tip: str | None
     generated_at: datetime
 
 

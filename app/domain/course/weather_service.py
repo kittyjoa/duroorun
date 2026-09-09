@@ -25,6 +25,10 @@ logger = logging.getLogger(__name__)
 _PTY_LABEL = {"0": None, "1": "비", "2": "비/눈", "3": "눈", "4": "소나기"}
 _SKY_LABEL = {"1": "맑음", "3": "구름많음", "4": "흐림"}
 
+_HEAT_TIP_THRESHOLD_C = 28.0
+_COLD_TIP_THRESHOLD_C = 5.0
+_SWING_TIP_THRESHOLD_C = 10.0
+
 
 def _get_representative_point(course: Course) -> tuple[float, float] | None:
     """완주 인증 기준점(start/end)의 중간점을 대표 좌표로 사용.
@@ -100,6 +104,35 @@ def _get_current_condition(items: list[dict]) -> str | None:
     if precipitation:
         return precipitation
     return _SKY_LABEL.get(values.get("SKY", ""))
+
+
+def _get_temp_stats(items: list[dict]) -> tuple[float | None, float | None]:
+    """예보 항목에서 그날 최저/최고 기온을 뽑기.
+
+    특보가 없을 때 모달 안에 통계칩으로 보여주는 용도
+    ㅡ 이미 받아온 단기예보 데이터에서 계산만 함."""
+    temps = [float(item["fcstValue"]) for item in items if item.get("category") == "TMP"]
+    if not temps:
+        return None, None
+    return min(temps), max(temps)
+
+
+def _get_weather_tip(min_temp: float | None, max_temp: float | None) -> str | None:
+    """최저/최고 기온 기준 규칙 기반 팁 한 줄 만들기.
+
+    특보가 없을 때만 프론트가 노출.
+    ㅡ AI 호출 없이 서버에서 계산하므로 추가 지연/비용 X
+    (특보 있을 때는 이미 특보원문+판단코멘트로 모달이 충분히 풍부)
+    """
+    if min_temp is None or max_temp is None:
+        return None
+    if max_temp >= _HEAT_TIP_THRESHOLD_C:
+        return "더위 조심! 수분 보충하고 자외선 차단제도 챙기세요"
+    if min_temp <= _COLD_TIP_THRESHOLD_C:
+        return "쌀쌀해요, 겉옷 챙기세요"
+    if max_temp - min_temp >= _SWING_TIP_THRESHOLD_C:
+        return "일교차가 크니 얇은 겉옷 하나 챙기면 좋아요"
+    return "쾌적한 날씨예요, 즐거운 러닝 되세요!"
 
 
 async def _fetch_weather_data(nx: int, ny: int) -> tuple[list[dict] | None, str | None]:
@@ -190,7 +223,7 @@ async def get_weather_briefing(
         try:
             return WeatherBriefingResponse.model_validate(json.loads(cached))
         except (ValueError, ValidationError):
-            # 배포 사이클에서 스키마에 필드가 추가/변경되면, 
+            # 배포 사이클에서 스키마에 필드가 추가/변경되면,
             # 캐시 미스처럼 취급해 재계산
             # (최대 캐시 TTL 동안만 발생하는 일시적 상황이라 자연 복구됨)
             logger.warning("캐시 스키마 불일치, 재계산: key=%s", cache_key)
@@ -209,11 +242,15 @@ async def get_weather_briefing(
     forecast_items, warning_raw_text = await _fetch_weather_data(nx, ny)
     forecast_text = _format_forecast_text(forecast_items or [])
     briefing = await _generate_briefing_text(course.sigun, forecast_text, warning_raw_text)
+    min_temp, max_temp = _get_temp_stats(forecast_items or [])
 
     response = WeatherBriefingResponse(
         warning_raw_text=warning_raw_text,
         briefing=briefing,
         condition=_get_current_condition(forecast_items or []),
+        min_temp=min_temp,
+        max_temp=max_temp,
+        tip=_get_weather_tip(min_temp, max_temp),
         generated_at=datetime.now(UTC),
     )
     if redis is not None:

@@ -71,6 +71,7 @@ const CourseDetail = () => {
   const weatherFetchedRef = useRef(false);
   // fetchReviews와 동일한 staleness(오래됨) 체크용
   // ㅡ 새 코스 화면에 이전 코스 날씨 덮어쓰는거 방지
+  const weatherRequestSeqRef = useRef(0);
   const [isWeatherModalOpen, setIsWeatherModalOpen] = useState(false);
   const [weatherBriefing, setWeatherBriefing] = useState(null);
   const [weatherLoading, setWeatherLoading] = useState(false);
@@ -907,8 +908,24 @@ const CourseDetail = () => {
                   </div>
                 )}
                 <p className="weather-briefing-text">{weatherBriefing.briefing}</p>
-                {weatherBriefing.warning_raw_text && (
+                {weatherBriefing.warning_raw_text ? (
                   <p className="weather-warning-quote">{weatherBriefing.warning_raw_text}</p>
+                ) : (
+                  // 특보 있을때: 원문+판단 코멘트로 이미 모달이 차 있어서 안 보여줌
+                  // 특보 없는 경우만: 통계칩/팁을 더해서 날씨 정보 추가 제공
+                  <>
+                    {weatherBriefing.min_temp != null && weatherBriefing.max_temp != null && (
+                      <div className="weather-stat-chips">
+                        <span className="weather-stat-chip">
+                          🔵 최저 {Math.round(weatherBriefing.min_temp)}°
+                        </span>
+                        <span className="weather-stat-chip">
+                          🔴 최고 {Math.round(weatherBriefing.max_temp)}°
+                        </span>
+                      </div>
+                    )}
+                    {weatherBriefing.tip && <p className="weather-tip">{weatherBriefing.tip}</p>}
+                  </>
                 )}
               </>
             )}

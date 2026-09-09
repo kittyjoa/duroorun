@@ -168,6 +168,9 @@ button.profile-avatar { border:0; padding:0; font:inherit; cursor:pointer; }
 .weather-modal-close { position:static; flex:none; width:32px; height:32px; font-size:18px; background:#f1f1ee; color:var(--ink); }
 .weather-warning-quote { margin:16px 0 0; padding:14px 16px; background:#fdecee; border-left:3px solid var(--red); border-radius:6px; font-size:13px; color:#7a2836; white-space:pre-line; }
 .weather-briefing-text { margin:0; color:#3d524f; font-size:14px; line-height:1.7; white-space:pre-line; }
+.weather-stat-chips { display:flex; gap:8px; margin:16px 0 0; }
+.weather-stat-chip { padding:6px 14px; border-radius:16px; background:var(--cream); color:var(--ink); font-size:13px; font-weight:600; }
+.weather-tip { margin:12px 0 0; padding:12px 14px; background:#eef7f0; border-left:3px solid var(--green); border-radius:6px; font-size:13px; color:#2c5c3f; }
 .weather-icon { font-size:44px; line-height:1; text-align:center; margin:0 0 22px; }
 .weather-icon-sunny { animation:weather-pulse 2s ease-in-out infinite; }
 .weather-icon-cloudy { animation:weather-drift 3s ease-in-out infinite; }

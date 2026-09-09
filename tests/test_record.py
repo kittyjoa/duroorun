@@ -1,14 +1,17 @@
-"""러닝 기록 - DB 제약 검증."""
+"""러닝 기록 - DB 제약 검증 및 서비스 로직(삭제 권한) 검증."""
 
 import uuid
 from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import delete
+from fastapi import HTTPException
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 
 from app.domain.course.models import Course
 from app.domain.record.models import Record
+from app.domain.record.service import delete_record
+from app.domain.user.models import User
 
 
 async def _make_course(db_session) -> Course:
@@ -54,6 +57,69 @@ async def test_completed_record_with_ended_at_saves_normally(db_session):
     await db_session.commit()  # 예외 없이 통과해야 함
 
     await db_session.execute(delete(Record).where(Record.record_id == record.record_id))
+    await db_session.execute(delete(Course).where(Course.course_id == course.course_id))
+    await db_session.commit()
+
+
+async def test_delete_record_by_non_owner_raises_403(db_session):
+    """작성자가 아닌 유저가 삭제를 시도하면 403을 반환."""
+    course = await _make_course(db_session)
+    owner = User(nickname=f"pytest-owner-{uuid.uuid4().hex[:12]}")
+    other_user = User(nickname=f"pytest-other-{uuid.uuid4().hex[:12]}")
+    db_session.add_all([owner, other_user])
+    await db_session.flush()
+
+    record = Record(
+        user_id=owner.user_id,
+        course_id=course.course_id,
+        started_at=datetime.now(UTC),
+        ended_at=datetime.now(UTC),
+        is_completed=True,
+    )
+    db_session.add(record)
+    await db_session.commit()
+    await db_session.refresh(record)
+
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            await delete_record(
+                session=db_session, user_id=other_user.user_id, record_id=record.record_id
+            )
+        assert exc_info.value.status_code == 403
+    finally:
+        await db_session.execute(delete(Record).where(Record.record_id == record.record_id))
+        await db_session.execute(
+            delete(User).where(User.user_id.in_([owner.user_id, other_user.user_id]))
+        )
+        await db_session.execute(delete(Course).where(Course.course_id == course.course_id))
+        await db_session.commit()
+
+
+async def test_delete_record_by_owner_succeeds(db_session):
+    """본인 기록은 삭제가 성공하고 DB에서 실제로 사라진다."""
+    course = await _make_course(db_session)
+    owner = User(nickname=f"pytest-owner-{uuid.uuid4().hex[:12]}")
+    db_session.add(owner)
+    await db_session.flush()
+
+    record = Record(
+        user_id=owner.user_id,
+        course_id=course.course_id,
+        started_at=datetime.now(UTC),
+        ended_at=datetime.now(UTC),
+        is_completed=True,
+    )
+    db_session.add(record)
+    await db_session.commit()
+    await db_session.refresh(record)
+    record_id = record.record_id
+
+    await delete_record(session=db_session, user_id=owner.user_id, record_id=record_id)
+
+    remaining = await db_session.scalar(select(Record).where(Record.record_id == record_id))
+    assert remaining is None
+
+    await db_session.execute(delete(User).where(User.user_id == owner.user_id))
     await db_session.execute(delete(Course).where(Course.course_id == course.course_id))
     await db_session.commit()
 

@@ -262,6 +262,8 @@ button.text-button { background:transparent; border:0; border-radius:0; padding:
 .record-history-stats { display:flex; align-items:center; gap:16px; color:#5c706c; font-family:'Apple SD Gothic Neo',sans-serif; font-size:13px; }
 .record-badge { color:#82928e; font-size:12px; padding:4px 10px; border-radius:12px; background:#f1f1ee; }
 .record-badge.success { color:var(--green); background:#e3f6e9; }
+.record-history-delete { background:none; border:0; padding:4px 8px; font-size:12px; color:var(--red); font-weight:600; cursor:pointer; }
+.record-history-delete:disabled { opacity:.6; cursor:not-allowed; }
 
 .kakao-map-wrapper { position:relative; border:1px solid #e1e7e2; border-radius:10px; overflow:hidden; margin:0 0 28px; }
 .kakao-map { width:100%; }

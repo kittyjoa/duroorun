@@ -25,6 +25,9 @@ const RecordHistory = () => {
   // "더보기" 실패는 error(초기 로딩 에러)와 분리한다 - error를 같이 쓰면 render 조건이
   // !error를 요구해서, 더보기만 실패해도 이미 불러온 목록 전체가 화면에서 사라져버린다
   const [loadMoreError, setLoadMoreError] = useState('');
+  // 목록 조회 에러(error)와 분리 — 삭제 실패가 이미 불러온 목록을 숨기면 안 됨
+  const [deleteError, setDeleteError] = useState('');
+  const [deletingId, setDeletingId] = useState(null); // 삭제 진행 중인 기록 id — 버튼 중복 클릭 방지
   // 컴포넌트가 언마운트된 뒤 도착하는 응답이 setState를 시도하지 않도록 막는다
   const unmountedRef = useRef(false);
   // unmountedRef만으로는 "어떤 요청이 최신인지"를 구분하지 못한다 - StrictMode의
@@ -136,6 +139,49 @@ const RecordHistory = () => {
     fetchRecords(page + 1, { append: true });
   };
 
+  // 삭제 후 재조회 전용 - fetchRecords(1)을 그대로 쓰면 loading을 true로 바꿔 목록이
+  // 잠깐 사라진다. MyCourses.jsx(usePaginatedCourses.reload)와 동일하게 loading은
+  // 건드리지 않고, 지금까지 불러온 개수만큼 size를 늘려서 한 번에 다시 받아온다 -
+  // page는 그대로 둬야 다음 "더보기"가 요청할 위치가 어긋나지 않는다.
+  const reloadRecords = async () => {
+    const requestId = ++requestIdRef.current;
+    const isStale = () => unmountedRef.current || requestIdRef.current !== requestId;
+    const size = Math.min(Math.max(records.length, 1), 100);
+    try {
+      const res = await apiFetch(`/v1/records/?page=1&size=${size}`);
+      if (isStale()) return true;
+      if (!res.ok) return false;
+      const data = await res.json();
+      if (isStale()) return true;
+      setRecords(data.items);
+      setTotal(data.total);
+      return true;
+    } catch {
+      return isStale();
+    }
+  };
+
+  const handleDelete = async (recordId) => {
+    if (!window.confirm('정말 이 기록을 삭제하시겠어요?')) return;
+    setDeleteError('');
+    setDeletingId(recordId);
+    try {
+      const res = await apiFetch(`/v1/records/${recordId}`, { method: 'DELETE' });
+      if (!res.ok) {
+        setDeleteError('삭제에 실패했어요.');
+        return;
+      }
+      const reloaded = await reloadRecords();
+      if (!reloaded) {
+        setDeleteError('삭제는 됐지만 목록을 새로고침하지 못했어요. 새로고침 해주세요.');
+      }
+    } catch {
+      setDeleteError('서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.');
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
   return (
     <>
       <Header />
@@ -147,6 +193,8 @@ const RecordHistory = () => {
 
         {loading && <p className="course-list-status">불러오는 중...</p>}
         {error && <p className="course-list-status error">{error}</p>}
+        {/* 목록 조회 에러(error)와 분리 — 삭제 실패가 이미 불러온 목록을 숨기면 안 됨 */}
+        {deleteError && <p className="course-list-status error">{deleteError}</p>}
 
         {!loading && !error && records.length === 0 && (
           <p className="course-list-status">아직 러닝 기록이 없어요.</p>
@@ -173,6 +221,14 @@ const RecordHistory = () => {
                     <span className="record-badge">진행 중</span>
                   )}
                 </div>
+                <button
+                  type="button"
+                  className="record-history-delete"
+                  onClick={() => handleDelete(record.record_id)}
+                  disabled={deletingId === record.record_id}
+                >
+                  {deletingId === record.record_id ? '삭제 중...' : '삭제'}
+                </button>
               </li>
             ))}
           </ul>

@@ -28,6 +28,11 @@ const WEATHER_ICON = {
 const LOADING_ICONS = ['🌞', '🏃', '☔', '🏃‍♀️‍➡️'];
 const LOADING_ICON_INTERVAL_MS = 700;
 
+// 날씨 브리핑은 내부에서 Gemini 호출해 평소보다 오래 걸릴 수 있음.
+// 백엔드 GEMINI_TIMEOUT_SECONDS(30초)가 사실상의 상한이라,
+// 무한정 기다리게 하지 않고 더 빨리 통제권(재시도) 돌려주기.
+const WEATHER_BRIEFING_TIMEOUT_MS = 20000;
+
 const DifficultyPicker = ({ value, onChange }) => (
   <div className="review-difficulty-picker" role="group" aria-label="체감 난이도">
     {Object.entries(DIFFICULTY_LABEL).map(([level, label]) => (
@@ -224,8 +229,13 @@ const CourseDetail = () => {
     weatherFetchedRef.current = true;
     setWeatherLoading(true);
     setWeatherError('');
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), WEATHER_BRIEFING_TIMEOUT_MS);
     try {
-      const res = await apiFetch(`/v1/courses/${courseId}/weather-briefing`);
+      const res = await apiFetch(`/v1/courses/${courseId}/weather-briefing`, {
+        signal: controller.signal,
+      });
       if (isStale()) return; // 응답 오는 사이 다른 코스로 이동 - 이전 코스 데이터 버림
       if (!res.ok) {
         const data = await res.json().catch(() => null);
@@ -236,12 +246,17 @@ const CourseDetail = () => {
       const data = await res.json();
       if (isStale()) return;
       setWeatherBriefing(data);
-    } catch {
+    } catch (err) {
       if (!isStale()) {
-        setWeatherError('서버에 연결할 수 없어요.');
+        setWeatherError(
+          err.name === 'AbortError'
+            ? '응답이 너무 오래 걸리고 있어요. 잠시 후 다시 시도해주세요.'
+            : '서버에 연결할 수 없어요.',
+        );
         weatherFetchedRef.current = false; // 실패했으니 다음에 다시 열면 재시도 허용
       }
     } finally {
+      clearTimeout(timeoutId);
       if (!isStale()) setWeatherLoading(false);
     }
   };

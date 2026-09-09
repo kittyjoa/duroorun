@@ -186,6 +186,16 @@ def _get_weather_tip(min_temp: float | None, max_temp: float | None) -> str | No
 
 
 _CacheModel = TypeVar("_CacheModel", bound=BaseModel)
+_T = TypeVar("_T")
+
+
+async def _immediate(value: _T) -> _T:
+    """1. async def: 호출해도 함수 바로 실행 X,
+    나중에 실행할 준비가 된 껍데기 '코루틴 객체'만 생김
+    2. await 붙여야 '지금 진짜 실행해서 결과 받아와'
+    3. asyncio.gather에 다같이 넘기고 싶어서
+    이 함수 이용해서 코루틴 껍데기 씌워주는것."""
+    return value
 
 
 async def _read_cache(
@@ -403,21 +413,30 @@ async def get_weather_briefing(
             redis, rate_limit_key, settings.WEATHER_BRIEFING_RATE_LIMIT_WINDOW_SECONDS
         )
 
-    forecast_briefing = forecast_cached or await _compute_forecast_briefing(redis, nx, ny)
+    # 특보 원문은 Gemini 없이 캐시/KMA 조회만 하면 되므로 먼저 확정.
+    # "예보 요약 생성"과 "특보 관련성 코멘트 생성" Gemini 호출 2개를
+    # 순차적으로 기다리지 않고 동시에 실행 가능하도록.
     warning_raw = warning_cached or await _compute_warning_raw(redis)
+
+    if not warning_raw.ok:
+        warning_paragraph_coro = _immediate("특보 정보를 확인하지 못했습니다.")
+    elif warning_raw.text:
+        warning_paragraph_coro = _get_warning_comment(redis, course.sigun, warning_raw.text)
+    else:
+        warning_paragraph_coro = _immediate("현재 발효 중인 특보는 없습니다.")
+
+    forecast_briefing, warning_paragraph = await asyncio.gather(
+        _immediate(forecast_cached)
+        if forecast_cached is not None
+        else _compute_forecast_briefing(redis, nx, ny),
+        warning_paragraph_coro,
+    )
 
     if not forecast_briefing.ok and not warning_raw.ok:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="날씨 정보를 가져올 수 없습니다. 잠시 후 다시 시도해주세요.",
         )
-
-    if not warning_raw.ok:
-        warning_paragraph = "특보 정보를 확인하지 못했습니다."
-    elif warning_raw.text:
-        warning_paragraph = await _get_warning_comment(redis, course.sigun, warning_raw.text)
-    else:
-        warning_paragraph = "현재 발효 중인 특보는 없습니다."
 
     return WeatherBriefingResponse(
         warning_raw_text=warning_raw.text,

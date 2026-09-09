@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useLocation, useParams } from 'react-router-dom';
 
 import { apiFetch } from '../api';
 import KakaoMap from '../components/map/KakaoMap';
@@ -50,6 +50,11 @@ const DifficultyPicker = ({ value, onChange }) => (
 
 const CourseDetail = () => {
   const { courseType, courseId } = useParams();
+  const location = useLocation();
+  // 목록 개념이 여러 곳(전체 코스 목록/나만의 코스 목록)에서 들어올 수 있음 -
+  // 링크를 건 쪽이 state.from으로 넘겨준 경로로 돌아가고,
+  // 없으면(직접 URL 접속/새로고침 등) 전체 코스 목록 기본값.
+  const backToListPath = location.state?.from ?? '/courses';
   const { user } = useUser();
   // courseId가 바뀔 때마다 늘어나는 "코스 세대" 번호. courseId 값 자체를 대조하는 대신
   // 이 번호를 스냅샷 비교하면, "A → B → 다시 A"처럼 결국 같은 값으로 돌아와도 그 사이
@@ -537,7 +542,7 @@ const CourseDetail = () => {
     <>
       <Header />
       <main className="course-detail-page">
-        <Link to="/courses" className="text-button">
+        <Link to={backToListPath} className="text-button">
           ← 목록으로
         </Link>
 

@@ -88,6 +88,7 @@ const MyCourses = () => {
                 key={course.course_id}
                 course={course}
                 to={`/courses/custom/${course.course_id}`}
+                state={{ from: '/courses/custom/mine' }}
                 badgeText={formatCustomSigunBadge(course)}
                 actions={
                   <>

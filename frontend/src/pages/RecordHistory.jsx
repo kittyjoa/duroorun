@@ -27,7 +27,10 @@ const RecordHistory = () => {
   const [loadMoreError, setLoadMoreError] = useState('');
   // 목록 조회 에러(error)와 분리 — 삭제 실패가 이미 불러온 목록을 숨기면 안 됨
   const [deleteError, setDeleteError] = useState('');
-  const [deletingId, setDeletingId] = useState(null); // 삭제 진행 중인 기록 id — 버튼 중복 클릭 방지
+  // 삭제 진행 중인 기록 id들 - 단일 값이면 여러 기록을 연달아 삭제할 때 나중 클릭이
+  // deletingId를 덮어써서 먼저 클릭한 버튼이 응답 오기 전에 다시 활성화된다. Set으로
+  // 두면 기록별로 독립적으로 버튼 비활성화 상태를 관리할 수 있다.
+  const [deletingIds, setDeletingIds] = useState(() => new Set());
   // 컴포넌트가 언마운트된 뒤 도착하는 응답이 setState를 시도하지 않도록 막는다
   const unmountedRef = useRef(false);
   // unmountedRef만으로는 "어떤 요청이 최신인지"를 구분하지 못한다 - StrictMode의
@@ -164,7 +167,7 @@ const RecordHistory = () => {
   const handleDelete = async (recordId) => {
     if (!window.confirm('정말 이 기록을 삭제하시겠어요?')) return;
     setDeleteError('');
-    setDeletingId(recordId);
+    setDeletingIds((prev) => new Set(prev).add(recordId));
     try {
       const res = await apiFetch(`/v1/records/${recordId}`, { method: 'DELETE' });
       if (!res.ok) {
@@ -178,7 +181,11 @@ const RecordHistory = () => {
     } catch {
       setDeleteError('서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.');
     } finally {
-      setDeletingId(null);
+      setDeletingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(recordId);
+        return next;
+      });
     }
   };
 
@@ -225,9 +232,9 @@ const RecordHistory = () => {
                   type="button"
                   className="record-history-delete"
                   onClick={() => handleDelete(record.record_id)}
-                  disabled={deletingId === record.record_id}
+                  disabled={deletingIds.has(record.record_id)}
                 >
-                  {deletingId === record.record_id ? '삭제 중...' : '삭제'}
+                  {deletingIds.has(record.record_id) ? '삭제 중...' : '삭제'}
                 </button>
               </li>
             ))}

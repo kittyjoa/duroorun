@@ -229,7 +229,11 @@ const RecordHistory = () => {
     try {
       const res = await apiFetch(`/v1/records/${recordId}`, { method: 'DELETE' });
       if (!res.ok) {
-        setDeleteError('삭제에 실패했어요.');
+        // 진행 중인 기록 삭제 시도(409)는 이유가 명확하니 구분해서 보여준다(리뷰 지적) -
+        // 그 외(403/404 등)는 UI상 발생하기 어려운 경우들이라 뭉뚱그려도 무방
+        const message =
+          res.status === 409 ? '진행 중인 기록은 삭제할 수 없어요.' : '삭제에 실패했어요.';
+        setDeleteError(message);
         return;
       }
       const reloaded = await reloadRecords();

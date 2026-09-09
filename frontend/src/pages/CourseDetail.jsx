@@ -237,7 +237,10 @@ const CourseDetail = () => {
       if (isStale()) return;
       setWeatherBriefing(data);
     } catch {
-      if (!isStale()) setWeatherError('서버에 연결할 수 없어요.');
+      if (!isStale()) {
+        setWeatherError('서버에 연결할 수 없어요.');
+        weatherFetchedRef.current = false; // 실패했으니 다음에 다시 열면 재시도 허용
+      }
     } finally {
       if (!isStale()) setWeatherLoading(false);
     }

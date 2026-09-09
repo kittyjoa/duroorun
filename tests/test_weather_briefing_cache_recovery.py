@@ -20,8 +20,9 @@ async def test_incompatible_cached_json_falls_back_to_recompute(
 
     course_id = review_test_course.course_id
     # review_test_course 좌표는 (1.0,1.0)~(2.0,2.0) - 대표 좌표(중간점)는 (1.5, 1.5)
+    # 예보 요약은 격자 단위로 캐싱 - 특보 원문은 시군/코스와 무관한 전역 캐시라 별개 키
     nx, ny = kma.latlng_to_grid(1.5, 1.5)
-    cache_key = f"weather_briefing:{nx}:{ny}"
+    cache_key = f"weather_forecast_briefing:{nx}:{ny}"
 
     # 과거(다른 스키마) 캐시 흉내 - 지금 스키마에 없는 필드만 있고 필수 필드가 빠져있음
     await redis_client.set(cache_key, '{"legacy_field_only": true}')
@@ -37,7 +38,7 @@ async def test_incompatible_cached_json_falls_back_to_recompute(
                 new_callable=AsyncMock,
             ) as mock_warning,
             patch(
-                "app.domain.course.weather_service.generate_weather_briefing",
+                "app.domain.course.weather_service.generate_forecast_summary",
                 new_callable=AsyncMock,
             ) as mock_briefing,
         ):
@@ -54,7 +55,7 @@ async def test_incompatible_cached_json_falls_back_to_recompute(
         # 깨진 캐시를 500 없이 캐시 미스처럼 취급해 실제로 재계산했는지 확인
         mock_forecast.assert_called_once()
         mock_briefing.assert_called_once()
-        assert response.briefing == "테스트용 브리핑"
+        assert response.briefing == "테스트용 브리핑\n\n현재 발효 중인 특보는 없습니다."
 
         # 재계산 결과가 새 스키마로 다시 캐싱됐는지도 확인
         recached = await redis_client.get(cache_key)
@@ -62,6 +63,7 @@ async def test_incompatible_cached_json_falls_back_to_recompute(
         assert "legacy_field_only" not in recached
     finally:
         await redis_client.delete(cache_key)
+        await redis_client.delete("weather_warning_raw")
         await redis_client.delete("ratelimit:weather_briefing_fetch:127.0.0.1")
         # 제대로 정리가 되어야 여기서 쓰던걸 redis가 안 들고가니까
         # 테스트 끝날때도 시작할때처럼 none 처리

@@ -105,7 +105,11 @@ const RecordHistory = () => {
       }
       recordsRef.current = next;
       setRecords(next);
-      setPage(data.page);
+      // data.page(요청한 페이지 번호)를 그대로 믿지 않는다 - 삭제 후 재조회 뒤에 큐에
+      // 남아있던 더보기 요청이 빈 페이지를 받아도 백엔드는 요청받은 page 번호를 그대로
+      // 돌려주므로, 실제로 로드된 개수 기준으로 역산해야 다음 더보기 위치가 안 어긋난다
+      // (reloadRecords와 동일한 방식, 리뷰 지적)
+      setPage(Math.max(Math.ceil(next.length / RECORD_PAGE_SIZE), 1));
       setTotal(data.total);
     } catch {
       if (!isStale()) {

@@ -16,6 +16,7 @@ from app.domain.course.schemas import (
     CourseUpdateRequest,
     CustomCourseDetailResponse,
     CustomCourseListResponse,
+    CustomCourseSigunOptionsResponse,
     DrnbCourseDetailResponse,
     DrnbCourseListResponse,
     NearbyAttractionListResponse,
@@ -136,22 +137,33 @@ async def get_custom_courses(
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
     created_by: int | None = Query(default=None, ge=1),
+    sigun: str | None = Query(default=None),
     difficulty: Difficulty | None = Query(default=None),
     distance_min: float | None = Query(default=None, ge=0),
     distance_max: float | None = Query(default=None, ge=0),
     session: AsyncSession = Depends(get_db),
 ):
-    """커스텀 코스 목록 조회 (전체 공개. created_by/난이도/거리 필터 지원)
+    """커스텀 코스 목록 조회 (전체 공개. created_by/지역/난이도/거리 필터 지원)
+    ㅡ sigun은 시작 또는 종료 지역 중 하나만 일치해도 매칭
     ㅡ 거리 필터는 프론트에서 범위 UI 가능"""
     return await course_service.get_custom_courses(
         session=session,
         page=page,
         size=size,
         created_by=created_by,
+        sigun=sigun,
         difficulty=difficulty,
         distance_min=distance_min,
         distance_max=distance_max,
     )
+
+
+@router.get("/custom/sigun-options", response_model=CustomCourseSigunOptionsResponse)
+async def get_custom_course_sigun_options(session: AsyncSession = Depends(get_db)):
+    """커스텀 코스 지역 필터 드롭다운 옵션 조회 - 실제로 코스가 존재하는 시군만 반환.
+    ㅡ /custom/{course_id}보다 먼저 선언"""
+    items = await course_service.get_custom_course_sigun_options(session=session)
+    return CustomCourseSigunOptionsResponse(items=items)
 
 
 @router.get("/custom/{course_id}", response_model=CustomCourseDetailResponse)

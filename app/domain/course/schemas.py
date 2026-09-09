@@ -27,6 +27,34 @@ def _in_gangwon(lat: float, lng: float) -> bool:
     return _GANGWON_BOUNDARY.covers(Point(lng, lat))
 
 
+# 강원도 18개 시군구 경계 - 커스텀 코스 좌표(위경도)가 어느 시군에 속하는지
+# 로컬에서 판별하는 데 씀 (카카오 등 지오코딩 API 호출 없이 무료/무제한)
+# (출처/추출: extract_gangwon_sigungu_boundary.py, 공공누리 제1유형)
+GANGWON_SIGUNGU_BOUNDARY_PATH = (
+    Path(__file__).parent / "gangwon_boundary" / "gangwon_sigungu_boundary.geojson"
+)
+with GANGWON_SIGUNGU_BOUNDARY_PATH.open(encoding="utf-8") as _f:
+    _GANGWON_SIGUNGU_FEATURES: list[dict] = json.load(_f)["features"]
+    # 폴리곤 로드는 임포트 시 1번만, 매 호출마다 geojson 파싱하지 않도록 shape 변환까지 끝냄
+    _GANGWON_SIGUNGU_SHAPES: list[tuple[str, BaseGeometry]] = [
+        (f["properties"]["name"], shape(f["geometry"])) for f in _GANGWON_SIGUNGU_FEATURES
+    ]
+
+
+def find_sigungu(lat: float, lng: float) -> str | None:
+    """좌표가 속한 강원도 시군 이름("강원 삼척시" 등)을 반환.
+    강원도 밖이면 None.
+
+    ㅡ 커스텀 코스 생성/수정 시 시작·종료 좌표에 대해 호출해 sigun/end_sigun에 저장.
+    ㅡ covers(): 시군 경계선 바로 위의 좌표도 어느 한쪽 시군으로 판별되게 함.
+    """
+    point = Point(lng, lat)
+    for name, polygon in _GANGWON_SIGUNGU_SHAPES:
+        if polygon.covers(point):
+            return f"강원 {name}"
+    return None
+
+
 class CourseWaypointCreate(BaseModel):
     """커스텀 코스 경유지 좌표 입력 - 리스트 순서가 곧 sequence
     ㅡ 강원도 실제 경계(폴리곤) 안에 있어야 함 (강원도 밖 코스 생성 막기)"""
@@ -220,6 +248,10 @@ class CustomCourseSummary(BaseModel):
     # created_by가 가리키는 유저의 닉네임 - service.py에서 course.creator로 eager load 후 채워 넣음
     # (탈퇴 등으로 created_by가 NULL이면 이 값도 None)
     creator_nickname: str | None = None
+    # 시작/종료 좌표 기준 강원 시군 (find_sigungu로 생성/수정 시 계산)
+    # ㅡ None은 폴리곤 판별 실패 등 예외적인 경우만
+    sigun: str | None
+    end_sigun: str | None
     is_active: bool
     created_at: datetime
 
@@ -231,6 +263,12 @@ class CustomCourseListResponse(BaseModel):
     total: int
     page: int
     size: int
+
+
+class CustomCourseSigunOptionsResponse(BaseModel):
+    """커스텀 코스 지역 필터 드롭다운 옵션 - 실제로 코스가 존재하는 시군만"""
+
+    items: list[str]
 
 
 class CustomCourseDetailResponse(BaseModel):
@@ -254,6 +292,9 @@ class CustomCourseDetailResponse(BaseModel):
     start_lng: float | None
     end_lat: float | None
     end_lng: float | None
+    # 시작/종료 좌표 기준 강원 시군 (find_sigungu로 생성/수정 시 계산)
+    sigun: str | None
+    end_sigun: str | None
     has_verification_coords: bool
     is_active: bool
     created_at: datetime

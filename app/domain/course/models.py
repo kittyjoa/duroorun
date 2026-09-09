@@ -70,7 +70,12 @@ class Course(Base):
     difficulty: Mapped[Difficulty | None] = mapped_column(SAEnum(Difficulty), nullable=True)
     estimated_time: Mapped[int | None] = mapped_column(Integer, nullable=True)
     course_description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # DRNB: 두루누비 API가 내려주는 지역명 그대로.
+    # CUSTOM: 시작 좌표 기준 강원도 시군 - find_sigungu()로 생성/수정 시 계산해 저장.
     sigun: Mapped[str | None] = mapped_column(String, nullable=True)
+    # CUSTOM 전용: 종료 좌표 기준 강원도 시군 (DRNB는 항상 None).
+    # 코스가 시군 경계를 걸치는 경우 대비 - sigun과 함께 지역 필터/표시에 사용
+    end_sigun: Mapped[str | None] = mapped_column(String, nullable=True)
     brd_div: Mapped[str | None] = mapped_column(String, nullable=True)
     # 완주 인증 검증 기준점 — 런타임에 두루누비 API 미호출하고 DB 값만 사용
     # 팀 결정(2026-08-02): GPX 파싱 실패로 좌표가 None인 DRNB 코스는

@@ -600,7 +600,7 @@ const CourseDetail = () => {
 
         {courseType === 'drnb' && course.course_name?.includes('DMZ') && (
           <p className="course-detail-warning">
-            ⚠ 민간인 통제구역이 인접한 코스입니다. 신분증을 소지해주시고, 야간 통행 시 주의해주세요.
+            ⚠ DMZ 코스는 민간인 통제구역과 인접할 수 있습니다. 신분증을 소지해주시고, 야간 통행 시 주의해주세요.
           </p>
         )}
 

@@ -1,5 +1,6 @@
 """커스텀 코스 관련
-ㅡ 코스명 공백 검증 / 강원도 좌표 경계 / 소유자 권한 / 생성 응답 직렬화 테스트."""
+ㅡ 코스명 공백 검증 / 강원도 좌표 경계 / 소유자 권한 / 생성 응답 직렬화 /
+  강원 시군 판별(find_sigungu) 및 지역 태깅·필터 테스트."""
 
 import io
 import uuid
@@ -12,11 +13,17 @@ from sqlalchemy import delete
 
 from app.config import settings
 from app.domain.course.models import Course, CourseImage, CourseType, CourseWaypoint
-from app.domain.course.schemas import CourseCreateRequest, CourseUpdateRequest, CourseWaypointCreate
+from app.domain.course.schemas import (
+    CourseCreateRequest,
+    CourseUpdateRequest,
+    CourseWaypointCreate,
+    find_sigungu,
+)
 from app.domain.course.service import (
     create_course,
     delete_course,
     delete_course_image,
+    get_custom_course_sigun_options,
     get_custom_courses,
     update_course,
     upload_course_image,
@@ -465,3 +472,183 @@ async def test_get_custom_courses_filters_by_distance_range(db_session, custom_c
         session=db_session, page=1, size=50, distance_min=10.0, distance_max=20.0
     )
     assert all(item.course_id != course.course_id for item in excluded.items)
+
+
+# ㅡㅡㅡ 강원 시군 판별 / 지역 태깅 / 지역 필터 ㅡㅡㅡ
+
+
+@pytest.mark.parametrize(
+    "lat,lng,expected",
+    [
+        (37.8813, 127.7298, "강원 춘천시"),  # 춘천시청 - 폴리곤 안쪽 정상 케이스
+        (37.6966, 127.8887, "강원 홍천군"),  # 홍천군청 근처
+        (38.2070, 128.5918, "강원 속초시"),  # 속초해변
+        # 시군구 경계 폴리곤이 도 전체 경계와 독립적으로 단순화돼 생긴 접경선 틈에
+        # 위치한 실측 좌표 - 최근접 폴리곤(고성군) 폴백으로 처리돼야 함
+        (38.413, 128.4877, "강원 고성군"),
+    ],
+)
+def test_find_sigungu_returns_expected_sigun(lat, lng, expected):
+    assert find_sigungu(lat, lng) == expected
+
+
+def test_find_sigungu_returns_none_outside_gangwon():
+    """강원도에서 한참 떨어진 좌표(서울시청)는 최근접 폴백 상한을 넘어서 None."""
+    assert find_sigungu(37.5665, 126.9780) is None
+
+
+async def test_create_course_computes_sigun_and_end_sigun(db_session):
+    """생성 시 시작/종료 waypoint 좌표로 sigun/end_sigun이 각각 계산돼 저장."""
+    owner = User(nickname=f"pytest-sigun-{uuid.uuid4().hex[:12]}")
+    db_session.add(owner)
+    await db_session.commit()
+
+    result = None
+    try:
+        result = await create_course(
+            session=db_session,
+            user_id=owner.user_id,
+            body=CourseCreateRequest(
+                course_name="pytest 시군 계산 테스트",
+                distance=1.0,
+                difficulty="NORMAL",
+                estimated_time=10,
+                waypoints=[
+                    {"latitude": 37.8813, "longitude": 127.7298},  # 춘천시청
+                    {"latitude": 37.6966, "longitude": 127.8887},  # 홍천군청
+                ],
+            ),
+        )
+        assert result.sigun == "강원 춘천시"
+        assert result.end_sigun == "강원 홍천군"
+    finally:
+        if result is not None:
+            await db_session.execute(
+                delete(CourseWaypoint).where(CourseWaypoint.course_id == result.course_id)
+            )
+            await db_session.execute(delete(Course).where(Course.course_id == result.course_id))
+        await db_session.execute(delete(User).where(User.user_id == owner.user_id))
+        await db_session.commit()
+
+
+async def test_update_course_without_waypoints_keeps_sigun_unchanged(
+    db_session, custom_course_owner
+):
+    """waypoints를 안 보내는 수정(예: 이름만 변경)은 sigun/end_sigun을 재계산 X."""
+    course, owner = custom_course_owner
+    original_sigun, original_end_sigun = course.sigun, course.end_sigun
+
+    result = await update_course(
+        session=db_session,
+        user_id=owner.user_id,
+        course_id=course.course_id,
+        body=CourseUpdateRequest(course_name="이름만 바꾼 코스"),
+    )
+
+    assert result.sigun == original_sigun
+    assert result.end_sigun == original_end_sigun
+
+
+async def test_update_course_with_new_waypoints_recomputes_sigun(db_session, custom_course_owner):
+    """waypoints를 새로 보내면 sigun/end_sigun도 새 좌표 기준으로 재계산."""
+    course, owner = custom_course_owner
+
+    try:
+        result = await update_course(
+            session=db_session,
+            user_id=owner.user_id,
+            course_id=course.course_id,
+            body=CourseUpdateRequest(
+                waypoints=[
+                    {"latitude": 38.2070, "longitude": 128.5918},  # 속초해변
+                    {"latitude": 37.3422, "longitude": 127.9202},  # 원주시청
+                ]
+            ),
+        )
+        assert result.sigun == "강원 속초시"
+        assert result.end_sigun == "강원 원주시"
+    finally:
+        await db_session.execute(
+            delete(CourseWaypoint).where(CourseWaypoint.course_id == course.course_id)
+        )
+        await db_session.commit()
+
+
+async def test_get_custom_courses_sigun_filter_matches_start_or_end(db_session):
+    """sigun 필터는 시작(sigun) 또는 종료(end_sigun) 중 하나만 일치해도 매칭."""
+    owner = User(nickname=f"pytest-sgf-{uuid.uuid4().hex[:12]}")
+    db_session.add(owner)
+    await db_session.flush()
+
+    course = Course(
+        course_type=CourseType.CUSTOM,
+        course_name=f"pytest-sigun-filter-{uuid.uuid4().hex[:8]}",
+        created_by=owner.user_id,
+        distance=5.0,
+        difficulty="NORMAL",
+        estimated_time=60,
+        start_lat=37.8813,
+        start_lng=127.7298,
+        end_lat=37.6966,
+        end_lng=127.8887,
+        sigun="강원 춘천시",
+        end_sigun="강원 홍천군",
+    )
+    db_session.add(course)
+    await db_session.commit()
+
+    try:
+        by_start = await get_custom_courses(session=db_session, page=1, size=50, sigun="강원 춘천시")
+        assert any(item.course_id == course.course_id for item in by_start.items)
+
+        by_end = await get_custom_courses(session=db_session, page=1, size=50, sigun="강원 홍천군")
+        assert any(item.course_id == course.course_id for item in by_end.items)
+
+        by_other = await get_custom_courses(session=db_session, page=1, size=50, sigun="강원 삼척시")
+        assert all(item.course_id != course.course_id for item in by_other.items)
+    finally:
+        await db_session.execute(delete(Course).where(Course.course_id == course.course_id))
+        await db_session.execute(delete(User).where(User.user_id == owner.user_id))
+        await db_session.commit()
+
+
+async def test_get_custom_course_sigun_options_excludes_inactive_courses(db_session):
+    """비활성(is_active=False) 코스의 지역은 드롭다운 옵션에서 제외."""
+    owner = User(nickname=f"pytest-sgo-{uuid.uuid4().hex[:12]}")
+    db_session.add(owner)
+    await db_session.flush()
+
+    active = Course(
+        course_type=CourseType.CUSTOM,
+        course_name=f"pytest-opt-active-{uuid.uuid4().hex[:8]}",
+        created_by=owner.user_id,
+        distance=5.0,
+        difficulty="NORMAL",
+        estimated_time=60,
+        sigun="강원 정선군",
+        end_sigun="강원 정선군",
+    )
+    inactive = Course(
+        course_type=CourseType.CUSTOM,
+        course_name=f"pytest-opt-inactive-{uuid.uuid4().hex[:8]}",
+        created_by=owner.user_id,
+        distance=5.0,
+        difficulty="NORMAL",
+        estimated_time=60,
+        is_active=False,
+        sigun="강원 태백시",
+        end_sigun="강원 태백시",
+    )
+    db_session.add_all([active, inactive])
+    await db_session.commit()
+
+    try:
+        options = await get_custom_course_sigun_options(session=db_session)
+        assert "강원 정선군" in options
+        assert "강원 태백시" not in options
+    finally:
+        await db_session.execute(
+            delete(Course).where(Course.course_id.in_([active.course_id, inactive.course_id]))
+        )
+        await db_session.execute(delete(User).where(User.user_id == owner.user_id))
+        await db_session.commit()

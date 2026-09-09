@@ -6,6 +6,7 @@ import CourseCard from '../components/CourseCard';
 import Header from '../components/layout/Header';
 import { useUser } from '../contexts/UserContext';
 import { usePaginatedCourses } from '../hooks/usePaginatedCourses';
+import { formatCustomSigunBadge } from '../utils/format';
 
 const PAGE_SIZE = 20;
 
@@ -90,7 +91,7 @@ const MyCourses = () => {
                 key={course.course_id}
                 course={course}
                 to={`/courses/custom/${course.course_id}`}
-                badgeText="커스텀 코스"
+                badgeText={formatCustomSigunBadge(course)}
                 actions={
                   <>
                     <Link

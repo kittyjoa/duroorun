@@ -7,6 +7,7 @@ import Header from '../components/layout/Header';
 import { useUser } from '../contexts/UserContext';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { usePaginatedCourses } from '../hooks/usePaginatedCourses';
+import { formatCustomSigunBadge } from '../utils/format';
 
 // DRNB 코스가 실제로 존재하는 9개 강원 시/군만
 // 해파랑길: 삼척→고성 순(남→북), DMZ 평화의 길: 철원→양구 순(서→동)
@@ -56,16 +57,6 @@ const buildDrnbQuery = (filters, page, size) => {
   const params = buildCommonParams(page, size, filters);
   if (filters.sigun) params.set('sigun', filters.sigun);
   return params.toString();
-};
-
-// 커스텀 코스 카드 배지: 시작=종료 시군이면 하나만, 다르면 화살표로 구분
-// ㅡ 둘 중 하나만 없으면 깨지지 않도록 있는 쪽만 보여줌
-// ㅡ 둘 다 없으면 기존처럼 "커스텀 코스"로 대체 표시
-const formatCustomSigunBadge = (course) => {
-  if (course.sigun && course.end_sigun && course.sigun !== course.end_sigun) {
-    return `${course.sigun} → ${course.end_sigun}`;
-  }
-  return course.sigun ?? course.end_sigun ?? '커스텀 코스';
 };
 
 const buildCustomQuery = (filters, page, size) => {

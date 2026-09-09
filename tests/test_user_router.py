@@ -39,6 +39,24 @@ async def test_get_public_profile_returns_404_for_missing_user(async_client):
     assert res.status_code == 404
 
 
+async def test_get_public_profile_rate_limits_repeated_404s(async_client, redis_client):
+    # 존재하지 않는 user_id를 반복 조회해도(404) 카운트가 쌓여 결국 429가 나와야 한다
+    # ㅡ 조회 성공 시에만 카운트하면 이 경로로 rate limit이 무력화됨 (2026-09-09 리뷰 지적)
+    async for key in redis_client.scan_iter("ratelimit:public_profile:*"):
+        await redis_client.delete(key)
+
+    try:
+        for _ in range(_PUBLIC_PROFILE_RATE_LIMIT_MAX_REQUESTS):
+            res = await async_client.get("/api/v1/users/999999999")
+            assert res.status_code == 404
+
+        res = await async_client.get("/api/v1/users/999999999")
+        assert res.status_code == 429
+    finally:
+        async for key in redis_client.scan_iter("ratelimit:public_profile:*"):
+            await redis_client.delete(key)
+
+
 async def test_get_public_profile_rate_limited_by_ip(async_client, active_user, redis_client):
     # 다른 테스트가 같은 테스트클라이언트 IP로 이미 카운트를 쌓아뒀을 수 있으니 먼저 비운다
     async for key in redis_client.scan_iter("ratelimit:public_profile:*"):

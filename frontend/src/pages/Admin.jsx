@@ -91,6 +91,7 @@ const Admin = () => {
     loading: bannedLoading,
     loadingMore: bannedLoadingMore,
     error: bannedError,
+    loadMoreError: bannedLoadMoreError,
     loadMore: loadMoreBanned,
     reload: reloadBanned,
   } = usePaginatedCourses(bannedPath, buildBannedQuery, [isAdmin]);
@@ -105,6 +106,7 @@ const Admin = () => {
     loading: searchLoading,
     loadingMore: searchLoadingMore,
     error: searchError,
+    loadMoreError: searchLoadMoreError,
     loadMore: loadMoreSearch,
   } = usePaginatedCourses(searchPath, buildSearchQuery, [searchQuery]);
 
@@ -193,8 +195,11 @@ const Admin = () => {
             !searchError &&
             searchResults.length < searchTotal && (
               <div className="course-list-load-more">
+                {searchLoadMoreError && (
+                  <p className="course-list-status error">{searchLoadMoreError}</p>
+                )}
                 <button type="button" onClick={loadMoreSearch} disabled={searchLoadingMore}>
-                  {searchLoadingMore ? '불러오는 중...' : '더보기'}
+                  {searchLoadingMore ? '불러오는 중...' : searchLoadMoreError ? '다시 시도' : '더보기'}
                 </button>
               </div>
             )}
@@ -306,8 +311,21 @@ const Admin = () => {
 
           {!bannedLoading && !bannedError && bannedAccounts.length < bannedTotal && (
             <div className="course-list-load-more">
-              <button type="button" onClick={loadMoreBanned} disabled={bannedLoadingMore}>
-                {bannedLoadingMore ? '불러오는 중...' : '더보기'}
+              {bannedLoadMoreError && (
+                <p className="course-list-status error">{bannedLoadMoreError}</p>
+              )}
+              <button
+                type="button"
+                onClick={loadMoreBanned}
+                // 해제(unban) 처리 중엔 목록이 reloadBanned()로 재조회되는 중이라, 그 사이에
+                // 더보기를 누르면 재조회 결과가 무효화되어 해제된 항목이 화면에 남을 수 있음
+                disabled={bannedLoadingMore || unbanningId !== null}
+              >
+                {bannedLoadingMore
+                  ? '불러오는 중...'
+                  : bannedLoadMoreError
+                    ? '다시 시도'
+                    : '더보기'}
               </button>
             </div>
           )}

@@ -360,8 +360,10 @@ async def get_user_public_profile(
     client_ip = request.client.host if request.client else "unknown"
     rate_limit_key = f"ratelimit:public_profile:{client_ip}"
     await check_rate_limit(redis, rate_limit_key, _PUBLIC_PROFILE_RATE_LIMIT_MAX_REQUESTS)
+    # 조회 성공 여부와 무관하게 먼저 카운트한다 — 조회(404 포함) 뒤로 미루면 존재하지 않는
+    # user_id를 반복 조회하는 요청은 한도에 안 걸려 제한이 무력화된다
+    await record_rate_limit_hit(redis, rate_limit_key, _PUBLIC_PROFILE_RATE_LIMIT_WINDOW_SECONDS)
 
     user = await get_public_profile(user_id, db)
 
-    await record_rate_limit_hit(redis, rate_limit_key, _PUBLIC_PROFILE_RATE_LIMIT_WINDOW_SECONDS)
     return PublicProfileResponse.model_validate(user)

@@ -37,6 +37,19 @@ const UserProfile = () => {
     };
   }, []);
 
+  // 보고 있던 프로필의 대상(userId)이 바뀌면, 이전 대상 기준으로 남아있던 강제 탈퇴
+  // 폼 상태(사유/에러/완료 표시)와 예약된 리다이렉트를 정리한다 — 안 그러면 A 탈퇴 처리
+  // 결과 메시지가 B 프로필로 이동한 뒤에도 남아있을 수 있음
+  useEffect(() => {
+    setReason('');
+    setWithdrawError('');
+    setWithdrawn(false);
+    if (redirectTimeoutRef.current) {
+      clearTimeout(redirectTimeoutRef.current);
+      redirectTimeoutRef.current = null;
+    }
+  }, [userId]);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -55,7 +68,11 @@ const UserProfile = () => {
           setError('프로필을 불러오지 못했어요.');
           return;
         }
-        setProfile(await res.json());
+        const data = await res.json();
+        // json() 파싱도 비동기라 그 사이에 다른 프로필로 이동했을 수 있음
+        // ㅡ 상태 바꾸기 직전 재확인 (안 그러면 이전 프로필 응답이 화면을 덮어씀)
+        if (cancelled) return;
+        setProfile(data);
       } catch (err) {
         if (!cancelled) {
           console.error('프로필 조회 실패:', err);
@@ -81,12 +98,16 @@ const UserProfile = () => {
     loading: coursesLoading,
     loadingMore,
     error: coursesError,
+    loadMoreError: coursesLoadMoreError,
     loadMore,
   } = usePaginatedCourses(path, buildQuery, [userId, loading, notFound, error]);
 
   const isAdmin = viewer?.user_role === 'ADMIN';
   const isSelf = viewer != null && String(viewer.user_id) === String(userId);
-  const canForceWithdraw = isAdmin && !isSelf && profile?.user_role !== 'ADMIN';
+  // profile이 아직 현재 userId 응답으로 안 바뀐 상태(이전 프로필 잔상)에서는 강제 탈퇴를 막음
+  const isProfileForCurrentUser = profile != null && String(profile.user_id) === String(userId);
+  const canForceWithdraw =
+    isAdmin && !isSelf && isProfileForCurrentUser && profile.user_role !== 'ADMIN';
 
   const handleForceWithdraw = async (event) => {
     event.preventDefault();
@@ -188,8 +209,11 @@ const UserProfile = () => {
               )}
               {!coursesLoading && !coursesError && courses.length < total && (
                 <div className="course-list-load-more">
+                  {coursesLoadMoreError && (
+                    <p className="course-list-status error">{coursesLoadMoreError}</p>
+                  )}
                   <button type="button" onClick={loadMore} disabled={loadingMore}>
-                    {loadingMore ? '불러오는 중...' : '더보기'}
+                    {loadingMore ? '불러오는 중...' : coursesLoadMoreError ? '다시 시도' : '더보기'}
                   </button>
                 </div>
               )}

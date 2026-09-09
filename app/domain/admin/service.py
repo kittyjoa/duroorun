@@ -1,11 +1,13 @@
 """관리자 대시보드 - 비즈니스 로직 (통계 집계 등)."""
 
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException, status
 from redis.asyncio import Redis
-from sqlalchemy import case, delete, func, select
+from sqlalchemy import Select, case, delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
@@ -32,6 +34,18 @@ from app.domain.user.schemas import PublicProfileResponse
 from app.domain.user.service import force_withdraw_user as _force_withdraw_user
 
 KST = ZoneInfo("Asia/Seoul")
+
+
+async def _paginate(
+    db: AsyncSession, select_stmt: Select[Any], count_stmt: Select[Any], page: int, size: int
+) -> tuple[Sequence[Any], int]:
+    """count 조회 + offset/limit 조회를 묶어서 (items, total)을 반환합니다.
+
+    밴 목록/유저 검색처럼 정렬만 다르고 나머지는 동일한 offset 페이지네이션 골격을 공유한다.
+    """
+    total = (await db.execute(count_stmt)).scalar_one()
+    items = (await db.execute(select_stmt.offset((page - 1) * size).limit(size))).scalars().all()
+    return items, total
 
 
 async def force_withdraw_user(
@@ -71,15 +85,13 @@ async def force_withdraw_user(
 
 async def get_banned_accounts(page: int, size: int, db: AsyncSession) -> BannedAccountListResponse:
     """밴(재가입 차단) 계정 목록 조회."""
-    total = (await db.execute(select(func.count()).select_from(BannedAccount))).scalar_one()
-
-    result = await db.execute(
-        select(BannedAccount)
-        .order_by(BannedAccount.banned_at.desc(), BannedAccount.id.desc())
-        .offset((page - 1) * size)
-        .limit(size)
+    items, total = await _paginate(
+        db,
+        select(BannedAccount).order_by(BannedAccount.banned_at.desc(), BannedAccount.id.desc()),
+        select(func.count()).select_from(BannedAccount),
+        page,
+        size,
     )
-    items = result.scalars().all()
 
     return BannedAccountListResponse(
         items=[BannedAccountResponse.model_validate(b) for b in items],
@@ -122,18 +134,13 @@ async def search_users(
         f"%{escaped}%", escape="\\"
     )
 
-    total = (
-        await db.execute(select(func.count()).select_from(User).where(where_clause))
-    ).scalar_one()
-
-    result = await db.execute(
-        select(User)
-        .where(where_clause)
-        .order_by(User.nickname.asc(), User.user_id.asc())
-        .offset((page - 1) * size)
-        .limit(size)
+    items, total = await _paginate(
+        db,
+        select(User).where(where_clause).order_by(User.nickname.asc(), User.user_id.asc()),
+        select(func.count()).select_from(User).where(where_clause),
+        page,
+        size,
     )
-    items = result.scalars().all()
 
     return UserSearchListResponse(
         items=[PublicProfileResponse.model_validate(u) for u in items],

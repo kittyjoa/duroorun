@@ -2,7 +2,17 @@
 
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Cookie, Depends, File, HTTPException, Response, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Cookie,
+    Depends,
+    File,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
 from fastapi.responses import RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials
 from redis.asyncio import Redis
@@ -47,6 +57,10 @@ _OAUTH_STATE_COOKIE_PATH = "/api/v1/auth"
 # 유저당 10분에 5번까지
 _RATE_LIMIT_MAX_REQUESTS = 5
 _RATE_LIMIT_WINDOW_SECONDS = 600
+
+# 공개 프로필 조회는 로그인 불필요라 IP 기준으로 별도 제한 (분당 30번까지)
+_PUBLIC_PROFILE_RATE_LIMIT_MAX_REQUESTS = 30
+_PUBLIC_PROFILE_RATE_LIMIT_WINDOW_SECONDS = 60
 
 
 def _oauth_redirect_start(url: str, state: str) -> RedirectResponse:
@@ -333,8 +347,21 @@ async def withdraw(
 
 @router.get("/users/{user_id}", response_model=PublicProfileResponse, summary="공개 프로필 조회")
 async def get_user_public_profile(
-    user_id: int, db: AsyncSession = Depends(get_db)
+    request: Request,
+    user_id: int,
+    db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
 ) -> PublicProfileResponse:
-    """다른 유저의 공개 프로필(닉네임, 거주지)을 조회합니다. 로그인 불필요."""
+    """다른 유저의 공개 프로필(닉네임, 거주지)을 조회합니다. 로그인 불필요.
+
+    로그인이 없어 유저별 제한을 걸 수 없으므로 IP 기준으로 제한한다 — user_id가
+    순차 PK라 제한이 없으면 순서대로 호출해 전체 유저를 스크래핑할 수 있기 때문.
+    """
+    client_ip = request.client.host if request.client else "unknown"
+    rate_limit_key = f"ratelimit:public_profile:{client_ip}"
+    await check_rate_limit(redis, rate_limit_key, _PUBLIC_PROFILE_RATE_LIMIT_MAX_REQUESTS)
+
     user = await get_public_profile(user_id, db)
+
+    await record_rate_limit_hit(redis, rate_limit_key, _PUBLIC_PROFILE_RATE_LIMIT_WINDOW_SECONDS)
     return PublicProfileResponse.model_validate(user)

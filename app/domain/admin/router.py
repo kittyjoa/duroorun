@@ -35,7 +35,7 @@ async def force_withdraw(
 
 @router.get("/users/search", response_model=UserSearchListResponse, summary="닉네임으로 유저 검색")
 async def search_users(
-    nickname: str = Query(min_length=1),
+    nickname: str = Query(min_length=1, max_length=30),
     page: int = Query(default=1, ge=1),
     size: int = Query(default=20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),

@@ -541,3 +541,47 @@ async def test_search_users_rejects_blank_nickname(db_session):
         await admin_service.search_users("   ", 1, 20, db_session)
 
     assert exc_info.value.status_code == 422
+
+
+# 23. 유저 검색 - page가 실제로 다음 슬라이스를 가져오고 정렬(nickname asc, user_id asc) 순서를 지킴
+async def test_search_users_pagination_returns_distinct_ordered_slices(db_session, ctx):
+    token = uuid.uuid4().hex[:12]
+    nicknames = [f"pytest-{token}-a", f"pytest-{token}-b", f"pytest-{token}-c"]
+    users = [User(nickname=name, user_role=UserRole.USER) for name in nicknames]
+    db_session.add_all(users)
+    await db_session.commit()
+    ctx.user_ids.extend([u.user_id for u in users])
+
+    page1 = await admin_service.search_users(token, 1, 2, db_session)
+    page2 = await admin_service.search_users(token, 2, 2, db_session)
+
+    assert [item.nickname for item in page1.items] == nicknames[:2]
+    assert [item.nickname for item in page2.items] == nicknames[2:]
+    assert page1.total == 3
+    assert page2.total == 3
+
+
+# 24. 온보딩 전(닉네임 없음) 유저가 강제 탈퇴되면 banned_nickname은 None으로 저장됨
+async def test_force_withdraw_user_without_nickname_leaves_banned_nickname_none(db_session, ctx):
+    provider_uid = uuid.uuid4().hex
+    user = User(nickname=None)
+    db_session.add(user)
+    await db_session.flush()
+    ctx.user_ids.append(user.user_id)
+    db_session.add(
+        SocialAccount(
+            user_id=user.user_id, provider_type=ProviderType.KAKAO, provider_uid=provider_uid
+        )
+    )
+    admin_user, _ = await _make_user_with_social(db_session, ctx, user_role=UserRole.ADMIN)
+    await db_session.commit()
+
+    await force_withdraw_user(user, admin_user.user_id, "테스트 사유", db_session, _FakeRedis())
+
+    banned = (
+        await db_session.execute(
+            select(BannedAccount).where(BannedAccount.provider_uid == provider_uid)
+        )
+    ).scalar_one()
+    ctx.banned_ids.append(banned.id)
+    assert banned.banned_nickname is None

@@ -64,3 +64,21 @@ async def test_unban_account_rejects_regular_user(async_client, regular_user):
         "/api/v1/admin/banned-accounts/1", headers={"Authorization": f"Bearer {token}"}
     )
     assert res.status_code == 403
+
+
+async def test_force_withdraw_rejects_unauthenticated(async_client):
+    res = await async_client.request(
+        "DELETE", "/api/v1/admin/users/1", json={"reason": "test"}
+    )
+    assert res.status_code == 401
+
+
+async def test_force_withdraw_rejects_regular_user(async_client, regular_user):
+    token = create_access_token(regular_user.user_id)
+    res = await async_client.request(
+        "DELETE",
+        "/api/v1/admin/users/1",
+        json={"reason": "test"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert res.status_code == 403

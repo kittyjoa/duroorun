@@ -86,6 +86,7 @@ const UserProfile = () => {
 
   const isAdmin = viewer?.user_role === 'ADMIN';
   const isSelf = viewer != null && String(viewer.user_id) === String(userId);
+  const canForceWithdraw = isAdmin && !isSelf && profile?.user_role !== 'ADMIN';
 
   const handleForceWithdraw = async (event) => {
     event.preventDefault();
@@ -139,7 +140,7 @@ const UserProfile = () => {
               </div>
             </div>
 
-            {isAdmin && !isSelf && (
+            {canForceWithdraw && (
               <div className="profile-admin-panel">
                 {withdrawn ? (
                   <p className="mypage-success">강제 탈퇴 처리됐어요.</p>

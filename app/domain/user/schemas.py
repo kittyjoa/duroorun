@@ -53,7 +53,11 @@ class UserResponse(BaseModel):
 
 
 class PublicProfileResponse(BaseModel):
-    """다른 유저의 공개 프로필 조회 응답 (마이페이지보다 훨씬 적은 정보만 노출)."""
+    """다른 유저의 공개 프로필 조회 응답 (마이페이지보다 훨씬 적은 정보만 노출).
+
+    user_role은 프론트가 관리자 프로필에서 강제 탈퇴 폼을 아예 안 띄우기 위해 포함한다
+    (최종 차단은 어차피 백엔드가 하지만, 항상 실패할 폼을 보여주지 않기 위한 UX 목적).
+    """
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -61,3 +65,4 @@ class PublicProfileResponse(BaseModel):
     nickname: str | None
     location: str | None
     profile_image_url: str | None
+    user_role: UserRole

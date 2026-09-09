@@ -214,6 +214,7 @@ button.profile-avatar { border:0; padding:0; font:inherit; cursor:pointer; }
 .course-detail-info dd { margin:0; font-size:16px; color:var(--ink); }
 .course-detail-desc { color:#5c706c; font-size:14px; line-height:1.8; white-space:pre-line; }
 .course-detail-source-note { margin:-14px 0 20px; font-size:12px; color:#9aa9a5; }
+.course-detail-warning { margin:-8px 0 20px; padding:10px 14px; border-radius:8px; background:#fff4e5; color:#8a5a00; font-size:13px; }
 @media (max-width:560px) { .course-detail-info { grid-template-columns:1fr; } }
 
 /* 코스 타입 탭 / 필터 바 */
@@ -225,6 +226,8 @@ button.profile-avatar { border:0; padding:0; font:inherit; cursor:pointer; }
 .course-list-load-more { display:flex; justify-content:center; margin-top:28px; }
 .course-list-load-more button { border:1px solid #dadce0; background:#fff; border-radius:8px; padding:10px 24px; font-size:13px; cursor:pointer; }
 .course-list-load-more button:disabled { opacity:.6; cursor:not-allowed; }
+.course-list-footer-note { color:#8a9490; font-size:12.5px; text-align:center; margin-top:40px; }
+.course-list-footer-note a { color:inherit; text-decoration:underline; }
 .course-detail-images { display:flex; flex-wrap:wrap; gap:10px; margin:20px 0 28px; }
 .course-detail-images img { width:160px; height:120px; object-fit:cover; border-radius:8px; }
 

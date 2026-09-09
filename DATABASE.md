@@ -34,8 +34,8 @@ alembic upgrade head  # 로컬 반영
 
 | 서비스 | 용도 | 비고 |
 |--------|------|------|
-| 두루누비 API (공공데이터포털) | DRNB 코스 목록/상세정보 (GPX 좌표, 거리, 난이도 등) 배치 조회 | 시드 스크립트가 `crsKorNm`/`sigun` 필터로 호출, DB에 저장 |
-| 카카오맵 API | 편의시설 지도 표시, 장소 상세정보 연동, 코스 경로/경유지 지도 표시 | `kakao_place_id`로 연동. 프론트는 `VITE_KAKAO_JS_KEY`(JS SDK), 백엔드는 `KAKAO_MAP_API_KEY`(REST, 좌표→행정구역 변환 등) |
+| 두루누비 API (공공데이터포털) | DRNB 코스 목록/상세정보 (GPX 좌표, 거리, 난이도 등) 배치 조회 | 시드 스크립트가 `sigun` 필터로 강원 전체 트레일 조회, DB에 저장 (2026-09부터 `crsKorNm` 트레일명 필터는 제거) |
+| 카카오맵 API | 편의시설 지도 표시, 장소 상세정보 연동, 코스 경로/경유지 지도 표시 | `kakao_place_id`로 연동. 프론트는 `VITE_KAKAO_JS_KEY`(JS SDK) 사용 |
 | 소셜 로그인 (Google / Kakao / Naver) | OAuth 2.0 인증 | `social_accounts` 테이블 |
 | Cloudflare R2 | 이미지 파일 저장 (리뷰 이미지 / 프로필 이미지 / 코스 이미지) | 확정 |
 | Gemini API (Google) | AI 리뷰 요약 생성, AI 코스 날씨·안전 브리핑 문구 생성 | 모델: Gemini 2.5 Flash-Lite (두 기능이 같은 클라이언트/모델 공유) |

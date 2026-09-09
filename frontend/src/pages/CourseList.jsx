@@ -1,13 +1,15 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 
+import { apiFetch } from '../api';
 import CourseCard from '../components/CourseCard';
 import Header from '../components/layout/Header';
 import { useUser } from '../contexts/UserContext';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { usePaginatedCourses } from '../hooks/usePaginatedCourses';
 
-// 해파랑길 강원 구간(29~50코스)이 지나는 시/군, 삼척→고성 순 (남→북)
+// DRNB 코스가 실제로 존재하는 9개 강원 시/군만
+// 해파랑길: 삼척→고성 순(남→북), DMZ 평화의 길: 철원→양구 순(서→동)
 // DB에 저장된 sigun 값과 정확히 일치해야 필터가 걸림 (백엔드가 == 비교)
 const GANGWON_SIGUN_OPTIONS = [
   '강원 삼척시',
@@ -16,6 +18,9 @@ const GANGWON_SIGUN_OPTIONS = [
   '강원 양양군',
   '강원 속초시',
   '강원 고성군',
+  '강원 철원군',
+  '강원 화천군',
+  '강원 양구군',
 ];
 
 const DRNB_INITIAL_FILTERS = {
@@ -26,6 +31,7 @@ const DRNB_INITIAL_FILTERS = {
 };
 
 const CUSTOM_INITIAL_FILTERS = {
+  sigun: '',
   difficulty: '',
   distanceMin: '',
   distanceMax: '',
@@ -52,13 +58,34 @@ const buildDrnbQuery = (filters, page, size) => {
   return params.toString();
 };
 
-const buildCustomQuery = (filters, page, size) => buildCommonParams(page, size, filters).toString();
+// 커스텀 코스 카드 배지: 시작=종료 시군이면 하나만, 다르면 화살표로 구분
+// ㅡ 둘 다 없으면(폴리곤 판별 실패 등 예외) 기존처럼 "커스텀 코스"로 대체 표시
+const formatCustomSigunBadge = (course) => {
+  if (!course.sigun && !course.end_sigun) return '커스텀 코스';
+  if (!course.end_sigun || course.sigun === course.end_sigun) return course.sigun;
+  return `${course.sigun} → ${course.end_sigun}`;
+};
+
+const buildCustomQuery = (filters, page, size) => {
+  const params = buildCommonParams(page, size, filters);
+  if (filters.sigun) params.set('sigun', filters.sigun);
+  return params.toString();
+};
 
 const CourseList = () => {
   const { user } = useUser();
   const [courseType, setCourseType] = useState('drnb');
   const [drnbFilters, setDrnbFilters] = useState(DRNB_INITIAL_FILTERS);
   const [customFilters, setCustomFilters] = useState(CUSTOM_INITIAL_FILTERS);
+  // 커스텀 코스는 실제로 코스가 존재하는 시군만 서버에서 받아옴
+  const [customSigunOptions, setCustomSigunOptions] = useState([]);
+
+  useEffect(() => {
+    apiFetch('/v1/courses/custom/sigun-options')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => data && setCustomSigunOptions(data.items))
+      .catch(() => {}); // 옵션 로딩 실패해도 "지역 전체"만 있는 드롭다운으로 동작은 가능
+  }, []);
 
   // 입력창에는 즉시 반영하되, 실제 API 호출은 타이핑이 멈춘 뒤에만 나가도록 지연
   const debouncedDrnbFilters = useDebouncedValue(drnbFilters);
@@ -163,6 +190,18 @@ const CourseList = () => {
         ) : (
           <div className="course-filter-bar">
             <select
+              aria-label="지역 선택"
+              value={customFilters.sigun}
+              onChange={(e) => setCustomFilters({ ...customFilters, sigun: e.target.value })}
+            >
+              <option value="">지역 전체</option>
+              {customSigunOptions.map((sigun) => (
+                <option key={sigun} value={sigun}>
+                  {sigun}
+                </option>
+              ))}
+            </select>
+            <select
               aria-label="난이도 선택"
               value={customFilters.difficulty}
               onChange={(e) => setCustomFilters({ ...customFilters, difficulty: e.target.value })}
@@ -209,7 +248,9 @@ const CourseList = () => {
                 key={course.course_id}
                 course={course}
                 to={`/courses/${courseType}/${course.course_id}`}
-                badgeText={courseType === 'drnb' ? (course.sigun ?? course.brd_div) : '커스텀 코스'}
+                badgeText={
+                  courseType === 'drnb' ? (course.sigun ?? course.brd_div) : formatCustomSigunBadge(course)
+                }
                 showMineBadge={courseType === 'custom' && user && course.created_by === user.user_id}
                 showCreator={courseType === 'custom'}
               />
@@ -224,6 +265,16 @@ const CourseList = () => {
               {loadingMore ? '불러오는 중...' : loadMoreError ? '다시 시도' : '더보기'}
             </button>
           </div>
+        )}
+
+        {courseType === 'drnb' && (
+          <p className="course-list-footer-note">
+            일부 예약/통제구역 코스는 제공하지 않아요. 자세한 내용은{' '}
+            <a href="https://durunubi.kr" target="_blank" rel="noreferrer">
+              두루누비 공식 홈페이지
+            </a>
+            를 참고해주세요.
+          </p>
         )}
       </main>
     </>

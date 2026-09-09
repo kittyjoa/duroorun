@@ -598,6 +598,12 @@ const CourseDetail = () => {
             : '※ 난이도, 거리, 소요시간은 코스 제작자 기준입니다.'}
         </p>
 
+        {courseType === 'drnb' && course.course_name?.includes('DMZ') && (
+          <p className="course-detail-warning">
+            ⚠ 민간인 통제구역이 인접한 코스입니다. 신분증을 소지해주시고, 야간 통행 시 주의해주세요.
+          </p>
+        )}
+
         {course.course_description && (
           <p className="course-detail-desc">
             {course.course_description.replace(/<br\s*\/?>/gi, '\n')}

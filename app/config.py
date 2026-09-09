@@ -40,9 +40,6 @@ class Settings(BaseSettings):
     DURUNUBI_API_KEY: str = ""
     DURUNUBI_BASE_URL: str = "https://apis.data.go.kr/B551011/Durunubi"
 
-    # 카카오맵
-    KAKAO_MAP_API_KEY: str = ""
-
     # 기상청 (단기예보 + 특보) - DURUNUBI_API_KEY와 동일 값 사용
     KMA_API_KEY: str = ""
     KMA_BASE_URL: str = "https://apis.data.go.kr/1360000"

@@ -302,8 +302,8 @@ class CustomCourseListResponse(BaseModel):
     size: int
 
 
-class CustomCourseSigunOptionsResponse(BaseModel):
-    """커스텀 코스 지역 필터 드롭다운 옵션 - 실제로 코스가 존재하는 시군만"""
+class SigunOptionsResponse(BaseModel):
+    """코스 지역 필터 드롭다운 옵션 - 실제로 코스가 존재하는 시군만 (DRNB/CUSTOM 공용)"""
 
     items: list[str]
 

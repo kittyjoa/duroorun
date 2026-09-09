@@ -1,28 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 
-import { apiFetch } from '../api';
 import CourseCard from '../components/CourseCard';
 import Header from '../components/layout/Header';
 import { useUser } from '../contexts/UserContext';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { usePaginatedCourses } from '../hooks/usePaginatedCourses';
+import { useSigunOptions } from '../hooks/useSigunOptions';
 import { formatCustomSigunBadge } from '../utils/format';
-
-// DRNB 코스가 실제로 존재하는 9개 강원 시/군만
-// 해파랑길: 삼척→고성 순(남→북), DMZ 평화의 길: 철원→양구 순(서→동)
-// DB에 저장된 sigun 값과 정확히 일치해야 필터가 걸림 (백엔드가 == 비교)
-const GANGWON_SIGUN_OPTIONS = [
-  '강원 삼척시',
-  '강원 동해시',
-  '강원 강릉시',
-  '강원 양양군',
-  '강원 속초시',
-  '강원 고성군',
-  '강원 철원군',
-  '강원 화천군',
-  '강원 양구군',
-];
 
 const DRNB_INITIAL_FILTERS = {
   sigun: '',
@@ -70,15 +55,9 @@ const CourseList = () => {
   const [courseType, setCourseType] = useState('drnb');
   const [drnbFilters, setDrnbFilters] = useState(DRNB_INITIAL_FILTERS);
   const [customFilters, setCustomFilters] = useState(CUSTOM_INITIAL_FILTERS);
-  // 커스텀 코스는 실제로 코스가 존재하는 시군만 서버에서 받아옴
-  const [customSigunOptions, setCustomSigunOptions] = useState([]);
-
-  useEffect(() => {
-    apiFetch('/v1/courses/custom/sigun-options')
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => data && setCustomSigunOptions(data.items))
-      .catch(() => {}); // 옵션 로딩 실패해도 "지역 전체"만 있는 드롭다운으로 동작은 가능
-  }, []);
+  // 둘 다 실제로 코스가 존재하는 시군만 서버에서 동적으로 받아옴
+  const drnbSigunOptions = useSigunOptions('/v1/courses/drnb/sigun-options');
+  const customSigunOptions = useSigunOptions('/v1/courses/custom/sigun-options');
 
   // 입력창에는 즉시 반영하되, 실제 API 호출은 타이핑이 멈춘 뒤에만 나가도록 지연
   const debouncedDrnbFilters = useDebouncedValue(drnbFilters);
@@ -143,7 +122,7 @@ const CourseList = () => {
               onChange={(e) => setDrnbFilters({ ...drnbFilters, sigun: e.target.value })}
             >
               <option value="">지역 전체</option>
-              {GANGWON_SIGUN_OPTIONS.map((sigun) => (
+              {drnbSigunOptions.map((sigun) => (
                 <option key={sigun} value={sigun}>
                   {sigun}
                 </option>

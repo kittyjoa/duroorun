@@ -16,10 +16,10 @@ from app.domain.course.schemas import (
     CourseUpdateRequest,
     CustomCourseDetailResponse,
     CustomCourseListResponse,
-    CustomCourseSigunOptionsResponse,
     DrnbCourseDetailResponse,
     DrnbCourseListResponse,
     NearbyAttractionListResponse,
+    SigunOptionsResponse,
     WeatherBriefingResponse,
 )
 from app.domain.user.models import User
@@ -103,6 +103,14 @@ async def get_drnb_courses(
     )
 
 
+@router.get("/drnb/sigun-options", response_model=SigunOptionsResponse)
+async def get_drnb_course_sigun_options(session: AsyncSession = Depends(get_db)):
+    """DRNB 코스 지역 필터 드롭다운 옵션 조회 - 실제로 코스가 존재하는 시군만 반환.
+    ㅡ /drnb/{course_id}보다 먼저 선언"""
+    items = await course_service.get_drnb_course_sigun_options(session=session)
+    return SigunOptionsResponse(items=items)
+
+
 @router.get("/drnb/{course_id}", response_model=DrnbCourseDetailResponse)
 async def get_drnb_course(course_id: int, session: AsyncSession = Depends(get_db)):
     """DRNB(두루누비) 코스 상세 조회"""
@@ -158,12 +166,12 @@ async def get_custom_courses(
     )
 
 
-@router.get("/custom/sigun-options", response_model=CustomCourseSigunOptionsResponse)
+@router.get("/custom/sigun-options", response_model=SigunOptionsResponse)
 async def get_custom_course_sigun_options(session: AsyncSession = Depends(get_db)):
     """커스텀 코스 지역 필터 드롭다운 옵션 조회 - 실제로 코스가 존재하는 시군만 반환.
     ㅡ /custom/{course_id}보다 먼저 선언"""
     items = await course_service.get_custom_course_sigun_options(session=session)
-    return CustomCourseSigunOptionsResponse(items=items)
+    return SigunOptionsResponse(items=items)
 
 
 @router.get("/custom/{course_id}", response_model=CustomCourseDetailResponse)

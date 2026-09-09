@@ -621,6 +621,9 @@ const CourseDetail = () => {
             : '※ 난이도, 거리, 소요시간은 코스 제작자 기준입니다.'}
         </p>
 
+        {/* KNOWN LIMITATION: course_name 문자열에 "DMZ" 포함 여부로만 판별.
+            구분 필드명이 있으면 사용하려 했으나 확인해보니 없음.
+            지금은 시간 관계상 보류. */}
         {courseType === 'drnb' && course.course_name?.includes('DMZ') && (
           <p className="course-detail-warning">
             ⚠ DMZ 코스는 민간인 통제구역과 인접할 수 있습니다. 신분증을 소지해주시고, 야간 통행 시 주의해주세요.

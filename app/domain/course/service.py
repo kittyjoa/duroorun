@@ -127,6 +127,24 @@ async def get_drnb_courses(
     )
 
 
+async def get_drnb_course_sigun_options(session: AsyncSession) -> list[str]:
+    """DRNB 코스 지역 필터 드롭다운에 보여줄 시군 목록.
+
+    ㅡ 실제로 코스가 있는 시군만 반환, DB 값 기준으로 동적으로 뽑음.
+    """
+    result = await session.execute(
+        select(Course.sigun)
+        .where(
+            Course.course_type == CourseType.DRNB,
+            Course.is_active.is_(True),
+            Course.dmb_id.is_not(None),
+            Course.sigun.is_not(None),
+        )
+        .distinct()
+    )
+    return sorted(result.scalars().all())
+
+
 async def get_drnb_course(session: AsyncSession, course_id: int) -> DrnbCourseDetailResponse:
     """DRNB 코스 상세를 조회합니다. 시드 스크립트로 저장된 DB 정보만 사용 (배치 갱신)."""
     result = await session.execute(

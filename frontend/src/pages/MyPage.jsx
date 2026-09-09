@@ -1,16 +1,19 @@
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 
 import { apiFetch } from '../api';
 import Header from '../components/layout/Header';
 import { useUser } from '../contexts/UserContext';
 import useFocusTrap from '../hooks/useFocusTrap';
+import { DIFFICULTY_COLOR, DIFFICULTY_LABEL } from '../utils/difficulty';
 
 // 백엔드 검증 규칙과 동일 (app/config.py) — 서버가 최종 검증하고, 여긴 UX용 사전 안내
 const NICKNAME_PATTERN = '[가-힣a-zA-Z0-9]{2,10}';
 const LOCATION_PATTERN = '[가-힣a-zA-Z0-9\\s]{1,50}';
 const PROFILE_IMAGE_MAX_SIZE_MB = 2;
 const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+// CourseDetail.jsx의 리뷰 목록과 동일한 페이지 크기 (백엔드 기본값도 20)
+const REVIEW_PAGE_SIZE = 20;
 
 const MyPage = () => {
   const navigate = useNavigate();
@@ -27,6 +30,33 @@ const MyPage = () => {
   const [message, setMessage] = useState('');
   const [isImageOpen, setIsImageOpen] = useState(false);
   const [isReviewOpen, setIsReviewOpen] = useState(false);
+
+  const [myReviews, setMyReviews] = useState([]);
+  // 모달을 열기 전엔 로딩 상태가 아니므로 초기값은 false (RecordHistory.jsx와 다른 부분)
+  const [reviewsLoading, setReviewsLoading] = useState(false);
+  const [reviewsError, setReviewsError] = useState('');
+  const [reviewsTotal, setReviewsTotal] = useState(0);
+  const [loadingMoreReviews, setLoadingMoreReviews] = useState(false);
+  const [loadMoreReviewsError, setLoadMoreReviewsError] = useState('');
+  // 화면에 렌더링되지 않는 값이라 state 대신 ref로 둔다 (불필요한 리렌더 방지)
+  const reviewsPageRef = useRef(1);
+  // 모달이 닫힌 뒤 도착하는 응답이 setState를 시도하지 않도록 막는다
+  const reviewsUnmountedRef = useRef(false);
+  // 모달을 여러 번 열고 닫을 때, 먼저 시작된 요청의 응답이 늦게 도착해도 최신 요청만 반영한다
+  const reviewsRequestIdRef = useRef(0);
+  // loadingMoreReviews(state)는 리렌더 전까지 반영되지 않아, "더보기" 버튼이 disabled
+  // 되기 전에 연달아 클릭되면 중복 요청이 나갈 수 있다 - ref로 클릭 시점에 즉시 막는다
+  const loadingMoreReviewsRef = useRef(false);
+
+  // 모달을 열 때마다 이전 세션의 리뷰 목록 상태를 처음으로 되돌린다
+  const resetReviewsState = () => {
+    setLoadingMoreReviews(false);
+    loadingMoreReviewsRef.current = false;
+    setLoadMoreReviewsError('');
+    setMyReviews([]);
+    setReviewsTotal(0);
+    reviewsPageRef.current = 1;
+  };
 
   useEffect(() => {
     if (!message) return undefined;
@@ -64,6 +94,74 @@ const MyPage = () => {
 
   useFocusTrap(imageModalRef, isImageOpen);
   useFocusTrap(reviewModalRef, isReviewOpen);
+
+  const fetchMyReviews = async (targetPage = 1, { append = false } = {}) => {
+    if (append) {
+      if (loadingMoreReviewsRef.current) return;
+      loadingMoreReviewsRef.current = true;
+    }
+    const requestId = ++reviewsRequestIdRef.current;
+    const isStale = () => reviewsUnmountedRef.current || reviewsRequestIdRef.current !== requestId;
+
+    const setLoading = append ? setLoadingMoreReviews : setReviewsLoading;
+    const setError = append ? setLoadMoreReviewsError : setReviewsError;
+
+    setLoading(true);
+    setError('');
+    try {
+      const res = await apiFetch(`/v1/reviews/mine?page=${targetPage}&size=${REVIEW_PAGE_SIZE}`);
+      if (isStale()) return;
+      if (!res.ok) {
+        const errorMessage =
+          res.status === 401
+            ? '로그인이 필요해요.'
+            : append
+              ? '리뷰를 더 불러오지 못했어요.'
+              : '리뷰를 불러오지 못했어요.';
+        setError(errorMessage);
+        return;
+      }
+      const data = await res.json();
+      if (isStale()) return;
+      setMyReviews((prev) => {
+        if (!append) return data.items;
+        // page 기반 페이지네이션은 그 사이 리뷰가 삭제되면 경계에서 겹칠 수 있다 -
+        // review_id 기준으로 걸러서 중복 렌더링을 막는다
+        const existingIds = new Set(prev.map((r) => r.review_id));
+        return [...prev, ...data.items.filter((r) => !existingIds.has(r.review_id))];
+      });
+      reviewsPageRef.current = data.page;
+      setReviewsTotal(data.total);
+    } catch {
+      if (!isStale()) {
+        setError('서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.');
+      }
+    } finally {
+      // 중복 클릭 방지용 ref는 staleness와 무관하게 이 요청이 끝나면 바로 풀어준다
+      if (append) loadingMoreReviewsRef.current = false;
+      // 로딩 플래그는 이 요청 자신이 최신일 때만 끈다 - 모달이 닫혔다 다시 열려서 stale해진
+      // 경우엔 아래 effect가 명시적으로 리셋해주므로 여기서 무조건 꺼줄 필요가 없다
+      if (!isStale()) setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!isReviewOpen) return undefined;
+    // StrictMode(개발 모드)가 effect를 마운트→클린업→마운트 순으로 두 번 실행하므로,
+    // 매 실행 시작 시점에 반드시 false로 되돌려야 두 번째 실행의 응답이 무시되지 않는다
+    reviewsUnmountedRef.current = false;
+    // 이전에 열었을 때 남은 상태를 초기화한다 - 코스 상세에서 리뷰를 수정/삭제하고
+    // 돌아왔을 수 있으므로 열 때마다 처음부터 다시 불러온다
+    resetReviewsState();
+    fetchMyReviews(1);
+    return () => {
+      reviewsUnmountedRef.current = true;
+    };
+  }, [isReviewOpen]);
+
+  const handleLoadMoreReviews = () => {
+    fetchMyReviews(reviewsPageRef.current + 1, { append: true });
+  };
 
   const handleSubmit = async (event) => {
     event.preventDefault();
@@ -301,7 +399,56 @@ const MyPage = () => {
               ×
             </button>
             <h2>내가 쓴 리뷰</h2>
-            <p>준비 중이에요. 조금만 기다려주세요!</p>
+
+            {reviewsLoading && <p className="course-list-status">불러오는 중...</p>}
+            {reviewsError && <p className="course-list-status error">{reviewsError}</p>}
+
+            {!reviewsLoading && !reviewsError && myReviews.length === 0 && (
+              <p className="course-list-status">아직 작성한 리뷰가 없어요.</p>
+            )}
+
+            {!reviewsLoading && !reviewsError && myReviews.length > 0 && (
+              <ul className="review-list">
+                {myReviews.map((review) => (
+                  <li key={review.review_id} className="review-item">
+                    {/* 수정/삭제는 코스 상세에서 하므로 여기서는 이동 링크만 제공 */}
+                    <Link
+                      className="text-button"
+                      to={`/courses/${review.course_type.toLowerCase()}/${review.course_id}`}
+                      onClick={() => setIsReviewOpen(false)}
+                    >
+                      {review.course_name}
+                    </Link>
+                    <div className="review-item-header">
+                      <span
+                        className={`review-difficulty-badge ${DIFFICULTY_COLOR[review.difficulty] ?? ''}`}
+                      >
+                        {DIFFICULTY_LABEL[review.difficulty]}
+                      </span>
+                      <span className="record-hint">
+                        {new Date(review.created_at).toLocaleDateString('ko-KR')}
+                      </span>
+                    </div>
+                    <p className="review-item-content">{review.content}</p>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            {loadMoreReviewsError && (
+              <p className="course-list-status error">{loadMoreReviewsError}</p>
+            )}
+
+            {!reviewsLoading && !reviewsError && myReviews.length < reviewsTotal && (
+              <button
+                type="button"
+                className="text-button review-load-more"
+                onClick={handleLoadMoreReviews}
+                disabled={loadingMoreReviews}
+              >
+                {loadingMoreReviews ? '불러오는 중...' : '리뷰 더보기'}
+              </button>
+            )}
           </div>
         </div>
       )}

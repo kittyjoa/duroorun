@@ -4,7 +4,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
-from app.domain.course.models import Difficulty
+from app.domain.course.models import CourseType, Difficulty
 
 
 class ReviewCreateRequest(BaseModel):
@@ -73,6 +73,8 @@ class MyReviewResponse(BaseModel):
     review_id: int
     course_id: int
     course_name: str
+    # 프론트가 코스 상세 URL(/courses/{course_type}/{course_id})을 만들 수 있도록 포함
+    course_type: CourseType
     content: str
     difficulty: Difficulty
     created_at: datetime

@@ -158,9 +158,11 @@ button.profile-avatar { border:0; padding:0; font:inherit; cursor:pointer; }
 .modal-overlay { position:fixed; inset:0; background:rgba(16,42,43,.85); display:flex; align-items:center; justify-content:center; z-index:100; padding:24px; }
 .modal-image { max-width:min(90vw,480px); max-height:80vh; border-radius:12px; object-fit:contain; }
 .modal-close { position:absolute; top:24px; right:24px; width:40px; height:40px; border-radius:50%; border:0; background:rgba(255,255,255,.15); color:#fff; font-size:22px; cursor:pointer; }
-.review-modal-card { position:relative; width:100%; max-width:360px; background:#fff; border-radius:16px; padding:32px; text-align:center; }
+.review-modal-card { position:relative; width:100%; max-width:360px; max-height:80vh; overflow-y:auto; background:#fff; border-radius:16px; padding:32px; text-align:center; }
 .review-modal-card h2 { font-size:18px; margin:0 0 10px; }
-.review-modal-card p { color:#5c706c; font-size:14px; margin:0; }
+.review-modal-card > p { color:#5c706c; font-size:14px; margin:0; }
+.review-modal-card .review-list { margin-top:16px; }
+.review-modal-card .review-item { text-align:left; }
 .review-modal-close { position:static; margin:0 0 12px auto; display:block; background:#f1f1ee; color:var(--ink); }
 
 @media (max-width:560px) {

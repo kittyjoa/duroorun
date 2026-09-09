@@ -241,9 +241,7 @@ async def get_custom_courses(
     if created_by is not None:
         base_query = base_query.where(Course.created_by == created_by)
     if sigun is not None:
-        base_query = base_query.where(
-            (Course.sigun == sigun) | (Course.end_sigun == sigun)
-        )
+        base_query = base_query.where((Course.sigun == sigun) | (Course.end_sigun == sigun))
     if difficulty is not None:
         base_query = base_query.where(Course.difficulty == difficulty)
     if distance_min is not None:
@@ -279,14 +277,19 @@ async def get_custom_course_sigun_options(session: AsyncSession) -> list[str]:
 
     ㅡ 실제로 코스가 있는(sigun 또는 end_sigun에 값이 존재하는) 시군만 반환
     ㅡ DB 값 기준으로 동적으로 뽑음.
+    ㅡ UNION으로 DB가 중복 제거된 시군 목록만 반환하게
+    (코스가 많아져도 결과 크기는 시군 종류 수만큼만 유지됨).
     """
-    result = await session.execute(
-        select(Course.sigun, Course.end_sigun).where(
-            Course.course_type == CourseType.CUSTOM, Course.is_active.is_(True)
+    filters = (Course.course_type == CourseType.CUSTOM, Course.is_active.is_(True))
+    query = (
+        select(Course.sigun.label("sigun"))
+        .where(*filters, Course.sigun.is_not(None))
+        .union(
+            select(Course.end_sigun.label("sigun")).where(*filters, Course.end_sigun.is_not(None))
         )
     )
-    values = {v for row in result.all() for v in row if v is not None}
-    return sorted(values)
+    result = await session.execute(query)
+    return sorted(row.sigun for row in result.all())
 
 
 async def update_course(

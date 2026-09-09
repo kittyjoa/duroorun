@@ -40,10 +40,15 @@ def _map_item(item: dict) -> NearbyAttractionResponse | None:
         return None
 
 
-async def _fetch_points(points: list[tuple[float, float]]) -> list[dict]:
-    """여러 좌표(시작/종료점)에 대해 관광지를 조회하고, contentid 기준으로 중복을 제거."""
+async def _fetch_points(points: list[tuple[float, float]]) -> tuple[list[dict], bool]:
+    """시작/종료 좌표에 대해 관광지를 조회하고, contentid 기준으로 중복을 제거.
+
+    좌표 중 하나라도 조회 실패하면 두 번째 반환값이 False
+    ㅡ 이 경우 '정상적인 빈 결과"와 구분해 짧은 TTL로 캐싱하도록
+    """
     seen_ids: set[str] = set()
     merged: list[dict] = []
+    all_ok = True
     for lat, lng in points:
         try:
             items = await fetch_nearby_attractions(
@@ -55,6 +60,7 @@ async def _fetch_points(points: list[tuple[float, float]]) -> list[dict]:
         except TourAPIError:
             # 관광지 카드는 부가 기능 - 실패해도 재시도/에러 노출 없이 조용히 건너뜀
             logger.exception("관광공사 API 조회 실패: lat=%s, lng=%s", lat, lng)
+            all_ok = False
             continue
         for item in items:
             content_id = item.get("contentid")
@@ -63,7 +69,7 @@ async def _fetch_points(points: list[tuple[float, float]]) -> list[dict]:
             if content_id is not None:
                 seen_ids.add(content_id)
             merged.append(item)
-    return merged
+    return merged, all_ok
 
 
 async def get_nearby_attractions(
@@ -113,16 +119,19 @@ async def get_nearby_attractions(
     if (course.start_lat, course.start_lng) != (course.end_lat, course.end_lng):
         points.append((course.end_lat, course.end_lng))
 
-    raw_items = await _fetch_points(points)
+    raw_items, all_points_ok = await _fetch_points(points)
     mapped = [attraction for item in raw_items if (attraction := _map_item(item)) is not None]
     mapped.sort(key=lambda a: a.distance_m if a.distance_m is not None else float("inf"))
     response = NearbyAttractionListResponse(items=mapped[:_MAX_ATTRACTIONS])
 
     if redis is not None:
+        # 시작/종료점 중 하나라도 조회 실패했으면, 정상 빈 결과와 같은 TTL(하루)로
+        # 캐싱 X - 일시 장애가 복구된 뒤에도 오래 숨겨지는 것 방지
+        cache_ttl = (
+            settings.NEARBY_ATTRACTIONS_CACHE_TTL_SECONDS
+            if all_points_ok
+            else settings.NEARBY_ATTRACTIONS_PARTIAL_FAILURE_CACHE_TTL_SECONDS
+        )
         with contextlib.suppress(RedisError):
-            await redis.set(
-                cache_key,
-                response.model_dump_json(),
-                ex=settings.NEARBY_ATTRACTIONS_CACHE_TTL_SECONDS,
-            )
+            await redis.set(cache_key, response.model_dump_json(), ex=cache_ttl)
     return response

@@ -137,6 +137,12 @@ const CustomCourseForm = () => {
   const [gangwonBoundaryFailed, setGangwonBoundaryFailed] = useState(false);
 
   useEffect(() => {
+    if (!userLoading && !user) {
+      navigate('/login', { replace: true });
+    }
+  }, [userLoading, user, navigate]);
+
+  useEffect(() => {
     if (!navigator.geolocation) {
       setLocationStatus('unsupported');
       return;
@@ -392,17 +398,6 @@ const CustomCourseForm = () => {
     }
   };
 
-  if (!userLoading && !user) {
-    return (
-      <>
-        <Header />
-        <main className="course-detail-page">
-          <p className="course-list-status error">로그인 후 이용할 수 있어요.</p>
-        </main>
-      </>
-    );
-  }
-
   if (isEditMode && !loading && loadError) {
     return (
       <>
@@ -432,9 +427,11 @@ const CustomCourseForm = () => {
         <h1 className="course-form-title">{isEditMode ? '커스텀 코스 수정' : '커스텀 코스 생성'}</h1>
         <p className="course-detail-desc">🏃 커스텀 코스는 현재 강원도 지역에서만 만들 수 있어요.</p>
 
-        {loading && <p className="course-list-status">불러오는 중...</p>}
+        {/* user가 아직 null이면(로그인 확인 전이거나 곧 /login으로 이동), 폼 숨김 -
+            신규 생성 모드는 loading이 false라 !user 없으면 폼이 잠깐 노출됨 */}
+        {(loading || !user) && <p className="course-list-status">불러오는 중...</p>}
 
-        {!loading && (
+        {!loading && user && (
           <form className="course-form" onSubmit={handleSubmit}>
             <label htmlFor="course_name">코스명</label>
             <input

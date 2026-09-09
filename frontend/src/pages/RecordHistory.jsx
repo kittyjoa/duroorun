@@ -178,27 +178,40 @@ const RecordHistory = () => {
   // 백엔드가 size<=100으로 막아놔서 100개 넘게 불러온 뒤 삭제하면 목록이 100개로
   // 잘리면서 page는 그대로라 다음 "더보기"가 잘려나간 구간을 건너뛰는 문제가 있었다
   // (리뷰 지적). 매 요청을 더보기와 똑같은 size(20)로 나눠서 필요한 페이지 수만큼
-  // 반복 조회하고, 실제로 받아온 개수 기준으로 page를 다시 계산해 다음 더보기가
-  // 정확한 위치를 요청하게 한다.
+  // 조회하고, 실제로 받아온 개수 기준으로 page를 다시 계산해 다음 더보기가 정확한
+  // 위치를 요청하게 한다. 순차(await 체인)로 하면 페이지 수만큼 왕복시간이 쌓여
+  // 기록이 많은 유저일수록 삭제할 때 체감 지연이 길어지므로(리뷰 지적) 병렬로 요청한다.
   const reloadRecords = () =>
     runListOpExclusive(async () => {
       const requestId = ++requestIdRef.current;
       const isStale = () => unmountedRef.current || requestIdRef.current !== requestId;
       const pagesToRefetch = Math.max(Math.ceil(recordsRef.current.length / RECORD_PAGE_SIZE), 1);
-      const collected = [];
-      let latestTotal = 0;
       try {
-        for (let p = 1; p <= pagesToRefetch; p += 1) {
-          const res = await apiFetch(`/v1/records/?page=${p}&size=${RECORD_PAGE_SIZE}`);
-          if (isStale()) return true;
-          if (!res.ok) return false;
-          const data = await res.json();
-          if (isStale()) return true;
-          collected.push(...data.items);
-          latestTotal = data.total;
-          // 삭제로 총 개수가 줄어 더 이상 다음 페이지가 없으면 여기서 멈춘다
-          if (collected.length >= latestTotal) break;
+        const responses = await Promise.all(
+          Array.from({ length: pagesToRefetch }, (_, i) =>
+            apiFetch(`/v1/records/?page=${i + 1}&size=${RECORD_PAGE_SIZE}`)
+          )
+        );
+        if (isStale()) return true;
+        if (responses.some((res) => !res.ok)) return false;
+        const datas = await Promise.all(responses.map((res) => res.json()));
+        if (isStale()) return true;
+
+        // offset 기반 페이지네이션이라 이 병렬 조회 도중 다른 탭/기기에서 새 기록이 생기면
+        // 앞 페이지의 마지막 항목이 다음 페이지 offset으로 밀려 들어와 두 번 수집될 수
+        // 있다 - record_id 기준으로 걸러 중복 렌더링을 막는다(리뷰 지적). datas는 요청
+        // 순서(페이지 오름차순) 그대로 배열에 담기므로 앞쪽 페이지가 우선한다.
+        const collectedIds = new Set();
+        const collected = [];
+        for (const data of datas) {
+          for (const record of data.items) {
+            if (collectedIds.has(record.record_id)) continue;
+            collectedIds.add(record.record_id);
+            collected.push(record);
+          }
         }
+        const latestTotal = datas.at(-1)?.total ?? 0;
+
         recordsRef.current = collected;
         setRecords(collected);
         setTotal(latestTotal);

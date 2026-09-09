@@ -59,11 +59,13 @@ const buildDrnbQuery = (filters, page, size) => {
 };
 
 // 커스텀 코스 카드 배지: 시작=종료 시군이면 하나만, 다르면 화살표로 구분
-// ㅡ 둘 다 없으면(폴리곤 판별 실패 등 예외) 기존처럼 "커스텀 코스"로 대체 표시
+// ㅡ 둘 중 하나만 없으면 깨지지 않도록 있는 쪽만 보여줌
+// ㅡ 둘 다 없으면 기존처럼 "커스텀 코스"로 대체 표시
 const formatCustomSigunBadge = (course) => {
-  if (!course.sigun && !course.end_sigun) return '커스텀 코스';
-  if (!course.end_sigun || course.sigun === course.end_sigun) return course.sigun;
-  return `${course.sigun} → ${course.end_sigun}`;
+  if (course.sigun && course.end_sigun && course.sigun !== course.end_sigun) {
+    return `${course.sigun} → ${course.end_sigun}`;
+  }
+  return course.sigun ?? course.end_sigun ?? '커스텀 코스';
 };
 
 const buildCustomQuery = (filters, page, size) => {

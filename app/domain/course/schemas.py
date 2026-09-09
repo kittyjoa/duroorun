@@ -12,13 +12,32 @@ from shapely.geometry.base import BaseGeometry
 from app.domain.course.models import Difficulty
 from app.domain.review.schemas import ReviewSummaryResponse
 
+# 아래 두 geojson은 이 모듈이 임포트되는 순간(앱 기동 시점) 즉시 읽어서 shapely
+# 도형으로 변환해둔다. 둘 중 하나라도 없으면 앱 전체 기동 X.
+# TODO(배포 담당자): CI/배포 파이프라인에 아래 두 파일이 git에 tracked 상태인지
+# 확인하는 스텝을 추가할 것 — 예: `git ls-files --error-unmatch <path>` 둘 다 통과해야
+# 빌드 계속 진행.
+#   - app/domain/course/gangwon_boundary/gangwon_boundary.geojson
+#   - app/domain/course/gangwon_boundary/gangwon_sigungu_boundary.geojson
+def _load_boundary_geojson(path: Path) -> dict:
+    try:
+        with path.open(encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError as e:
+        raise RuntimeError(
+            f"필수 경계 데이터 파일이 없습니다: {path} "
+            "(git에 커밋됐는지, 배포 이미지에 포함됐는지 확인 필요)"
+        ) from e
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f"경계 데이터 파일이 올바른 JSON이 아닙니다: {path}") from e
+
+
 # 강원도 실제 경계(폴리곤) - 통계청 SGIS 시도 경계 데이터에서 강원도만 추출
 # (출처/추출: app/scripts/extract_gangwon_boundary.py, 공공누리 제1유형)
 # ㅡ 프론트도 이 파일을 GET /courses/gangwon-boundary로 그대로 받아 같은 폴리곤으로 검증함
 #   (router.py) - 경로 상수를 여기 하나만 둬서 프론트/백엔드가 다른 파일을 보는 일이 없게 함
 GANGWON_BOUNDARY_PATH = Path(__file__).parent / "gangwon_boundary" / "gangwon_boundary.geojson"
-with GANGWON_BOUNDARY_PATH.open(encoding="utf-8") as _f:
-    _GANGWON_BOUNDARY: BaseGeometry = shape(json.load(_f)["geometry"])
+_GANGWON_BOUNDARY: BaseGeometry = shape(_load_boundary_geojson(GANGWON_BOUNDARY_PATH)["geometry"])
 
 
 def _in_gangwon(lat: float, lng: float) -> bool:
@@ -33,12 +52,21 @@ def _in_gangwon(lat: float, lng: float) -> bool:
 GANGWON_SIGUNGU_BOUNDARY_PATH = (
     Path(__file__).parent / "gangwon_boundary" / "gangwon_sigungu_boundary.geojson"
 )
-with GANGWON_SIGUNGU_BOUNDARY_PATH.open(encoding="utf-8") as _f:
-    _GANGWON_SIGUNGU_FEATURES: list[dict] = json.load(_f)["features"]
-    # 폴리곤 로드는 임포트 시 1번만, 매 호출마다 geojson 파싱하지 않도록 shape 변환까지 끝냄
-    _GANGWON_SIGUNGU_SHAPES: list[tuple[str, BaseGeometry]] = [
-        (f["properties"]["name"], shape(f["geometry"])) for f in _GANGWON_SIGUNGU_FEATURES
-    ]
+_GANGWON_SIGUNGU_FEATURES: list[dict] = _load_boundary_geojson(GANGWON_SIGUNGU_BOUNDARY_PATH)[
+    "features"
+]
+# 폴리곤 로드는 임포트 시 1번만, 매 호출마다 geojson 파싱하지 않도록 shape 변환까지 끝냄
+_GANGWON_SIGUNGU_SHAPES: list[tuple[str, BaseGeometry]] = [
+    (f["properties"]["name"], shape(f["geometry"])) for f in _GANGWON_SIGUNGU_FEATURES
+]
+
+
+# 강원도 전체 경계와 시군구 18개 경계는 서로 다른 스크립트가 독립적으로 단순화,
+# 시군 접경선 부근은 두 경계가 완전히 맞지 않아 '어느 시군도 안 걸리는 좁은 틈' 발생 가능
+# ㅡ 가장 가까운 시군 폴리곤으로 대체
+# _NEAREST_FALLBACK_MAX_DEGREES: 그래도 무한정 허용하면 안 되니,
+# 안전장치로 넉넉하게 상한(대략 5km) 둠
+_NEAREST_FALLBACK_MAX_DEGREES = 0.05  # 위도 1도 ≈ 111km 기준 약 5.5km
 
 
 def find_sigungu(lat: float, lng: float) -> str | None:
@@ -47,11 +75,20 @@ def find_sigungu(lat: float, lng: float) -> str | None:
 
     ㅡ 커스텀 코스 생성/수정 시 시작·종료 좌표에 대해 호출해 sigun/end_sigun에 저장.
     ㅡ covers(): 시군 경계선 바로 위의 좌표도 어느 한쪽 시군으로 판별되게 함.
+    ㅡ 어느 폴리곤에도 안 걸리면(접경선 부근 경계 불일치, 위 주석 참고) 가장 가까운
+      시군으로 폴백. 그마저도 너무 멀면(_NEAREST_FALLBACK_MAX_DEGREES 초과) None.
     """
     point = Point(lng, lat)
     for name, polygon in _GANGWON_SIGUNGU_SHAPES:
         if polygon.covers(point):
             return f"강원 {name}"
+
+    nearest_name, nearest_distance = min(
+        ((name, polygon.distance(point)) for name, polygon in _GANGWON_SIGUNGU_SHAPES),
+        key=lambda pair: pair[1],
+    )
+    if nearest_distance <= _NEAREST_FALLBACK_MAX_DEGREES:
+        return f"강원 {nearest_name}"
     return None
 
 

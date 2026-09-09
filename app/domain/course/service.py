@@ -277,7 +277,7 @@ async def get_custom_courses(
 async def get_custom_course_sigun_options(session: AsyncSession) -> list[str]:
     """커스텀 코스 지역 필터 드롭다운에 보여줄 시군 목록.
 
-    ㅡ 실제로 코스가 있는(sigun 또는end_sigun에 값이 존재하는) 시군만 반환
+    ㅡ 실제로 코스가 있는(sigun 또는 end_sigun에 값이 존재하는) 시군만 반환
     ㅡ DB 값 기준으로 동적으로 뽑음.
     """
     result = await session.execute(

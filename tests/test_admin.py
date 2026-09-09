@@ -123,6 +123,42 @@ async def test_force_withdraw_anonymizes_user_and_records_ban(db_session, ctx):
     assert banned.banned_nickname == original_nickname
 
 
+# 2-1. 강제 탈퇴도 본인 탈퇴와 동일하게, 다른 유저와 안 엮인 커스텀 코스는 하드삭제한다
+async def test_force_withdraw_hard_deletes_course_with_only_own_records(db_session, ctx):
+    user, _ = await _make_user_with_social(db_session, ctx)
+    admin_user, _ = await _make_user_with_social(db_session, ctx, user_role=UserRole.ADMIN)
+
+    course = Course(
+        course_type=CourseType.CUSTOM,
+        course_name=f"pytest-course-{uuid.uuid4().hex[:8]}",
+        created_by=user.user_id,
+    )
+    db_session.add(course)
+    await db_session.flush()
+    course_id = course.course_id
+    ctx.course_ids.append(course_id)
+
+    db_session.add(
+        Record(
+            user_id=user.user_id,
+            course_id=course_id,
+            started_at=datetime.now(UTC),
+            ended_at=datetime.now(UTC),
+            is_completed=True,
+        )
+    )
+    await db_session.commit()
+
+    await force_withdraw_user(user, admin_user.user_id, "욕설", db_session, _FakeRedis())
+
+    assert (
+        await db_session.execute(select(Course).where(Course.course_id == course_id))
+    ).scalar_one_or_none() is None
+    assert (
+        await db_session.execute(select(Record).where(Record.course_id == course_id))
+    ).scalar_one_or_none() is None
+
+
 # 3. 강제 탈퇴 중 오류 발생 시 둘 다 롤백됨
 async def test_force_withdraw_rolls_back_on_error(db_session, ctx):
     user, provider_uid = await _make_user_with_social(db_session, ctx)

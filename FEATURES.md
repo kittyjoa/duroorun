@@ -54,7 +54,10 @@
 - `social_accounts`: Hard Delete (개인 식별 정보 즉시 파기)
 - `records`: 서비스 레이어에서 `user_id` 명시적 NULL 업데이트 (기록 보존, 통계 활용)
 - `reviews`: 서비스 레이어에서 `user_id` 명시적 NULL 업데이트 (리뷰 내용/평점 보존, 통계 활용). 화면에서는 `WHERE user_id IS NOT NULL`으로 제외
-- `courses`: `created_by` → NULL 처리 (커스텀 코스 데이터 100% 보존)
+- `courses`(커스텀 코스만 해당): **다른 유저와 얽혀있는지에 따라 분기** (2026-09-10 팀 결정)
+  - 이 코스에 다른 유저(이미 탈퇴해 `user_id`가 NULL인 유저 포함)의 `records`/`reviews`가 하나라도 있으면(엮여있음) → 지금처럼 `created_by`만 NULL 처리, 코스는 서비스에 계속 노출 (다른 사람의 기록/통계를 훼손할 수 없으므로)
+  - 이 코스에 본인 것뿐이거나 아무 기록도 없으면(안 엮여있음) → 코스 row 자체를 **완전 삭제** (Hard Delete). 주인 없이 영원히 남는 찌꺼기 데이터를 막기 위함. 이 경우 그 코스에 달린 본인의 `records`/`reviews`, 경유지(`course_waypoints`), 이미지(`course_images`, R2 파일 포함), 편의시설 매핑(`course_facility`)도 함께 삭제됨
+  - 강제 탈퇴(관리자)에도 동일하게 적용
 - 위 처리는 하나의 트랜잭션으로 묶어 중간 실패 시 전체 롤백 (social만 삭제되고 user가 남는 불일치 방지)
 
 ---

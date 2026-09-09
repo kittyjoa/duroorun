@@ -144,7 +144,7 @@ alembic upgrade head  # 로컬 반영
 > CUSTOM 코스의 경유지 좌표는 `course_waypoints` 테이블에 저장  
 > `start_lat/lng`, `end_lat/lng`는 DRNB도 저장 (지도 표시 최적화 + **완주 인증 검증 기준점**). **두루누비 API 응답에는 시작/종료 좌표 필드가 없으므로, 시드 스크립트가 `gpxpath`(GPX xml URL)를 다운로드·파싱하여 첫 포인트=시작점, 마지막 포인트=종료점을 추출해 저장.** CUSTOM 코스는 `course_waypoints` 첫/마지막 sequence 기준 자동 저장  
 > 완주 인증 검증은 런타임에 두루누비 API를 호출하지 않고 **DB에 저장된 `start_lat/lng`, `end_lat/lng`만 사용** (외부 API 장애와 무관하게 검증 동작 보장)  
-> **탈퇴 처리**: `created_by`를 NULL 처리. 코스 데이터와 경유지는 100% 영구 보존 (다른 유저가 계속 이용 가능)
+> **탈퇴 처리** (CUSTOM만 해당, 2026-09-10 팀 결정): 다른 유저의 `records`/`reviews`가 얽혀있으면 지금처럼 `created_by`만 NULL 처리하고 코스는 영구 보존. 본인 것뿐이거나 아무 기록도 없으면 코스 row 자체를 Hard Delete(경유지/이미지/편의시설 매핑, 본인 records/reviews도 함께 삭제) — 상세 이유는 `FEATURES.md` 참고
 
 ---
 

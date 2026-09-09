@@ -27,6 +27,7 @@ from app.domain.review.models import Review
 from app.domain.user.models import ProviderType, SocialAccount, User
 from app.domain.user.service import (
     _touch_last_login,
+    complete_signup,
     get_public_profile,
     kakao_login,
     logout,
@@ -91,17 +92,35 @@ async def _make_user(db_session, ctx: UserTestContext) -> User:
     return user
 
 
-# 1. 카카오 로그인 신규가입 시 User+SocialAccount 생성
+# 1. 카카오 로그인(신규) 시 계정을 바로 만들지 않고 signup_token만 내려줌 +
+# 약관 동의(complete_signup) 완료 시에만 실제로 User+SocialAccount 생성
 async def test_kakao_login_creates_new_user(db_session, ctx, redis_client):
     provider_uid = uuid.uuid4().hex
     state = uuid.uuid4().hex
     await redis_client.setex(f"oauth:state:kakao:{state}", 300, "1")
 
     with patch("httpx.AsyncClient", return_value=_fake_kakao_client(provider_uid)):
-        access_token, refresh_token = await kakao_login(
+        login_result = await kakao_login(
             code="fake-code", state=state, cookie_state=state, db=db_session, redis=redis_client
         )
 
+    assert login_result.signup_token
+    assert login_result.access_token is None
+    no_social = (
+        await db_session.execute(
+            select(SocialAccount).where(SocialAccount.provider_uid == provider_uid)
+        )
+    ).scalar_one_or_none()
+    assert no_social is None
+
+    access_token, _ = await complete_signup(
+        signup_token=login_result.signup_token,
+        agree_terms=True,
+        nickname=uuid.uuid4().hex[:8],
+        location="강원 속초시",
+        db=db_session,
+        redis=redis_client,
+    )
     user_id = int(decode_token(access_token)["sub"])
     ctx.user_ids.append(user_id)
 
@@ -134,11 +153,11 @@ async def test_kakao_login_existing_account_reuses_user(db_session, ctx, redis_c
     await redis_client.setex(f"oauth:state:kakao:{state}", 300, "1")
 
     with patch("httpx.AsyncClient", return_value=_fake_kakao_client(provider_uid)):
-        access_token, _ = await kakao_login(
+        login_result = await kakao_login(
             code="fake-code", state=state, cookie_state=state, db=db_session, redis=redis_client
         )
 
-    assert int(decode_token(access_token)["sub"]) == existing_user.user_id
+    assert int(decode_token(login_result.access_token)["sub"]) == existing_user.user_id
     social_count = (
         await db_session.execute(
             select(SocialAccount).where(SocialAccount.provider_uid == provider_uid)
@@ -240,8 +259,11 @@ async def test_get_current_user_rejects_withdrawn_user(db_session, ctx, redis_cl
 
 
 # 8. 본인 탈퇴 시 익명화 + social_accounts 하드삭제 + records/reviews/courses user_id NULL 처리
+# 이 코스는 다른 유저(other_runner)의 기록/리뷰가 얽혀있어(엮여있음) 하드삭제 대상이
+# 아니다 — created_by만 NULL 처리되고 코스 자체는 보존된다 (2026-09-10 팀 결정)
 async def test_withdraw_user_anonymizes_and_nullifies_related_data(db_session, ctx, redis_client):
     user = await _make_user(db_session, ctx)
+    other_runner = await _make_user(db_session, ctx)
     db_session.add(
         SocialAccount(
             user_id=user.user_id, provider_type=ProviderType.KAKAO, provider_uid=uuid.uuid4().hex
@@ -273,6 +295,25 @@ async def test_withdraw_user_anonymizes_and_nullifies_related_data(db_session, c
             difficulty="NORMAL",
         )
     )
+    # 다른 유저가 이 코스로 뛰고 리뷰를 남김 — 이게 있어야 "엮여있음"으로 판정되어
+    # 코스가 보존된다
+    db_session.add(
+        Record(
+            user_id=other_runner.user_id,
+            course_id=course.course_id,
+            started_at=datetime.now(UTC),
+            ended_at=datetime.now(UTC),
+            is_completed=True,
+        )
+    )
+    db_session.add(
+        Review(
+            user_id=other_runner.user_id,
+            course_id=course.course_id,
+            content="다른 유저 리뷰",
+            difficulty="NORMAL",
+        )
+    )
     await db_session.commit()
 
     access_token = create_access_token(user.user_id)
@@ -292,19 +333,104 @@ async def test_withdraw_user_anonymizes_and_nullifies_related_data(db_session, c
     assert remaining_social == []
 
     record = (
-        await db_session.execute(select(Record).where(Record.course_id == course.course_id))
+        await db_session.execute(
+            select(Record).where(Record.course_id == course.course_id, Record.user_id.is_(None))
+        )
     ).scalar_one()
     assert record.user_id is None
 
     review = (
-        await db_session.execute(select(Review).where(Review.course_id == course.course_id))
+        await db_session.execute(
+            select(Review).where(Review.course_id == course.course_id, Review.user_id.is_(None))
+        )
     ).scalar_one()
     assert review.user_id is None
+
+    # 다른 유저의 기록/리뷰는 그대로 보존됨
+    other_record = (
+        await db_session.execute(
+            select(Record).where(
+                Record.course_id == course.course_id, Record.user_id == other_runner.user_id
+            )
+        )
+    ).scalar_one()
+    assert other_record is not None
 
     refreshed_course = (
         await db_session.execute(select(Course).where(Course.course_id == course.course_id))
     ).scalar_one()
     assert refreshed_course.created_by is None
+
+
+# 8-1. 탈퇴 유저의 커스텀 코스 중 본인 기록/리뷰만 있고 다른 유저와 안 엮인 코스는
+# created_by만 NULL 처리하는 게 아니라 코스 row 자체를 하드삭제한다 (2026-09-10 팀 결정)
+async def test_withdraw_user_hard_deletes_course_with_only_own_records(
+    db_session, ctx, redis_client
+):
+    user = await _make_user(db_session, ctx)
+    course = Course(
+        course_type=CourseType.CUSTOM,
+        course_name=f"pytest-course-{uuid.uuid4().hex[:8]}",
+        created_by=user.user_id,
+    )
+    db_session.add(course)
+    await db_session.flush()
+    course_id = course.course_id
+    ctx.course_ids.append(course_id)
+
+    db_session.add(
+        Record(
+            user_id=user.user_id,
+            course_id=course_id,
+            started_at=datetime.now(UTC),
+            ended_at=datetime.now(UTC),
+            is_completed=True,
+        )
+    )
+    db_session.add(
+        Review(
+            user_id=user.user_id,
+            course_id=course_id,
+            content="내 코스 내 리뷰",
+            difficulty="NORMAL",
+        )
+    )
+    await db_session.commit()
+
+    access_token = create_access_token(user.user_id)
+    await withdraw_user(user, access_token, db_session, redis_client)
+
+    assert (
+        await db_session.execute(select(Course).where(Course.course_id == course_id))
+    ).scalar_one_or_none() is None
+    assert (
+        await db_session.execute(select(Record).where(Record.course_id == course_id))
+    ).scalar_one_or_none() is None
+    assert (
+        await db_session.execute(select(Review).where(Review.course_id == course_id))
+    ).scalar_one_or_none() is None
+
+
+# 8-2. 아무도 안 쓴(기록/리뷰 자체가 없는) 코스도 마찬가지로 하드삭제된다
+async def test_withdraw_user_hard_deletes_untouched_course(db_session, ctx, redis_client):
+    user = await _make_user(db_session, ctx)
+    course = Course(
+        course_type=CourseType.CUSTOM,
+        course_name=f"pytest-course-{uuid.uuid4().hex[:8]}",
+        created_by=user.user_id,
+    )
+    db_session.add(course)
+    await db_session.flush()
+    course_id = course.course_id
+    ctx.course_ids.append(course_id)
+    await db_session.commit()
+
+    access_token = create_access_token(user.user_id)
+    await withdraw_user(user, access_token, db_session, redis_client)
+
+    assert (
+        await db_session.execute(select(Course).where(Course.course_id == course_id))
+    ).scalar_one_or_none() is None
 
 
 # 9. 닉네임 형식 위반(특수문자) → 400
@@ -369,14 +495,25 @@ async def test_social_account_user_id_is_unique(db_session, ctx):
     await db_session.rollback()
 
 
-# 13. last_login_at 갱신이 내부에서 실패해도 로그인 자체는 성공함
-async def test_kakao_login_succeeds_even_if_last_login_update_fails(db_session, ctx, redis_client):
-    """_touch_last_login이 내부 rollback을 타도, 로그인 함수는 user_id를 정수로 미리
+# 13. last_login_at 갱신이 내부에서 실패해도 가입 완료 자체는 성공함
+async def test_complete_signup_succeeds_even_if_last_login_update_fails(
+    db_session, ctx, redis_client
+):
+    """_touch_last_login이 내부 rollback을 타도, 가입 완료 함수는 user_id를 정수로 미리
     꺼내둔 값만 쓰므로 만료된 user 객체를 다시 건드리다 MissingGreenlet로 깨지지 않는다.
+
+    User/SocialAccount 생성 + last_login_at 갱신 커밋이 실제로 일어나는 지점이
+    kakao_login()이 아니라 complete_signup()으로 옮겨졌으므로(약관 동의 절차 도입),
+    이 테스트도 그에 맞춰 complete_signup()을 대상으로 한다.
     """
     provider_uid = uuid.uuid4().hex
     state = uuid.uuid4().hex
     await redis_client.setex(f"oauth:state:kakao:{state}", 300, "1")
+
+    with patch("httpx.AsyncClient", return_value=_fake_kakao_client(provider_uid)):
+        login_result = await kakao_login(
+            code="fake-code", state=state, cookie_state=state, db=db_session, redis=redis_client
+        )
 
     original_commit = db_session.commit
     call_count = {"n": 0}
@@ -387,12 +524,14 @@ async def test_kakao_login_succeeds_even_if_last_login_update_fails(db_session, 
             return await original_commit()
         raise SQLAlchemyError("boom")  # _touch_last_login의 커밋만 실패시킴
 
-    with (
-        patch("httpx.AsyncClient", return_value=_fake_kakao_client(provider_uid)),
-        patch.object(db_session, "commit", side_effect=flaky_commit),
-    ):
-        access_token, refresh_token = await kakao_login(
-            code="fake-code", state=state, cookie_state=state, db=db_session, redis=redis_client
+    with patch.object(db_session, "commit", side_effect=flaky_commit):
+        access_token, refresh_token = await complete_signup(
+            signup_token=login_result.signup_token,
+            agree_terms=True,
+            nickname=uuid.uuid4().hex[:8],
+            location="강원 속초시",
+            db=db_session,
+            redis=redis_client,
         )
 
     assert access_token

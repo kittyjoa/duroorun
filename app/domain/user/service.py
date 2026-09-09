@@ -30,9 +30,10 @@ from app.core.security import (
     rotate_refresh_jti,
     save_refresh_jti,
 )
-from app.domain.course.models import Course
+from app.domain.course.models import Course, CourseImage, CourseType, CourseWaypoint
+from app.domain.facility.models import CourseFacility
 from app.domain.record.models import Record
-from app.domain.review.models import Review
+from app.domain.review.models import Review, ReviewImage, ReviewSummary
 from app.domain.user.models import BannedAccount, ProviderType, SocialAccount, User
 
 logger = logging.getLogger(__name__)
@@ -781,15 +782,107 @@ async def delete_profile_image(user: User, db: AsyncSession) -> None:
         logger.warning("기존 이미지 정리 실패 (R2): user_id=%s, url=%s", user.user_id, old_url)
 
 
-async def _anonymize_user_data(user: User, db: AsyncSession) -> str | None:
+@dataclass
+class _AnonymizeResult:
+    """탈퇴 처리 결과 - R2 정리용 URL 모음.
+
+    profile_image_url: 탈퇴 전 프로필 이미지 URL
+    orphaned_image_urls: 하드삭제된(아무도 안 쓴) 커스텀 코스의 코스 이미지 + 리뷰 이미지 URL
+    """
+
+    profile_image_url: str | None
+    orphaned_image_urls: list[str]
+
+
+async def _delete_orphaned_custom_courses(user_id: int, db: AsyncSession) -> list[str]:
+    """탈퇴 유저의 커스텀 코스 중 다른 유저와 전혀 얽히지 않은 것을 완전히 삭제합니다.
+
+    (2026-09-10 팀 결정) 탈퇴 유저의 커스텀 코스는:
+    - 다른 유저의 기록/리뷰가 하나라도 얽혀있으면(이미 탈퇴해 user_id가 NULL인 것도
+      "다른 사람이 쓴 흔적"으로 포함) → 건드리지 않는다. 뒤이은 익명화 단계에서
+      지금처럼 created_by만 NULL 처리되어 서비스에 계속 노출된다.
+    - 본인 기록/리뷰뿐이거나 아예 아무 기록도 없으면 → 주인 없이 영원히 남을 찌꺼기이므로
+      코스 자체를 완전히 삭제한다. 본인의 기록/리뷰도 이 코스에 딸린 것이라 같이 사라진다.
+
+    FK 제약(records/reviews.course_id NOT NULL) 때문에 자식 → 부모 순서로 지운다.
+    반환값은 R2에서 같이 정리해야 할 이미지 URL 목록(코스 이미지 + 리뷰 이미지).
+    """
+    own_course_ids = (
+        await db.execute(
+            select(Course.course_id).where(
+                Course.created_by == user_id, Course.course_type == CourseType.CUSTOM
+            )
+        )
+    ).scalars().all()
+    if not own_course_ids:
+        return []
+
+    # 이 코스들 중, 본인이 아닌 다른 유저(이미 탈퇴해 NULL인 유저 포함)의 기록/리뷰가
+    # 하나라도 있는 코스 id만 추림 — 나머지가 하드삭제 대상(고아 코스)
+    entangled_course_ids = {
+        row[0]
+        for row in (
+            await db.execute(
+                select(Record.course_id)
+                .where(
+                    Record.course_id.in_(own_course_ids),
+                    or_(Record.user_id.is_(None), Record.user_id != user_id),
+                )
+                .union(
+                    select(Review.course_id).where(
+                        Review.course_id.in_(own_course_ids),
+                        or_(Review.user_id.is_(None), Review.user_id != user_id),
+                    )
+                )
+            )
+        ).all()
+    }
+    orphan_course_ids = [cid for cid in own_course_ids if cid not in entangled_course_ids]
+    if not orphan_course_ids:
+        return []
+
+    course_image_urls = (
+        await db.execute(
+            select(CourseImage.image_url).where(CourseImage.course_id.in_(orphan_course_ids))
+        )
+    ).scalars().all()
+    # review_images는 reviews.review_id에 ondelete=CASCADE가 걸려있어 DB가 알아서 지워주지만,
+    # R2 파일은 DB가 못 지워주므로 행이 사라지기 전에 URL을 먼저 뽑아둔다
+    review_image_urls = (
+        await db.execute(
+            select(ReviewImage.image_url)
+            .join(Review, Review.review_id == ReviewImage.review_id)
+            .where(Review.course_id.in_(orphan_course_ids))
+        )
+    ).scalars().all()
+
+    await db.execute(delete(ReviewSummary).where(ReviewSummary.course_id.in_(orphan_course_ids)))
+    await db.execute(delete(Review).where(Review.course_id.in_(orphan_course_ids)))
+    await db.execute(delete(Record).where(Record.course_id.in_(orphan_course_ids)))
+    await db.execute(delete(CourseImage).where(CourseImage.course_id.in_(orphan_course_ids)))
+    await db.execute(
+        delete(CourseWaypoint).where(CourseWaypoint.course_id.in_(orphan_course_ids))
+    )
+    await db.execute(
+        delete(CourseFacility).where(CourseFacility.course_id.in_(orphan_course_ids))
+    )
+    await db.execute(delete(Course).where(Course.course_id.in_(orphan_course_ids)))
+
+    return [*course_image_urls, *review_image_urls]
+
+
+async def _anonymize_user_data(user: User, db: AsyncSession) -> _AnonymizeResult:
     """탈퇴 공통 처리: 개인정보 익명화 + 소셜 계정 삭제 + 연관 데이터 익명화.
 
     commit은 호출자가 수행 (강제 탈퇴 시 banned_accounts 기록과 같은 트랜잭션으로 묶기 위함).
-    반환값은 삭제 전 프로필 이미지 URL (R2 정리용).
     """
     now = datetime.now(tz=UTC)
 
     old_profile_image_url = user.profile_image_url
+
+    # 익명화(아래)로 이 유저의 기록/리뷰 user_id가 NULL로 바뀌기 전에, 아직 이 유저
+    # 소유임이 명확한 상태에서 "다른 유저와 안 얽힌 코스"를 먼저 골라 하드삭제한다
+    orphaned_image_urls = await _delete_orphaned_custom_courses(user.user_id, db)
 
     # row 삭제 없이 익명화 — 탈퇴 후에도 통계 집계에 계속 활용
     user.name = None
@@ -802,20 +895,24 @@ async def _anonymize_user_data(user: User, db: AsyncSession) -> str | None:
     await db.execute(delete(SocialAccount).where(SocialAccount.user_id == user.user_id))
 
     # Soft Delete이므로 DB 트리거 미발동 — 서비스 레이어에서 직접 NULL 처리
+    # (하드삭제된 코스의 본인 기록/리뷰는 이미 위에서 지워졌으므로 여기서 자동으로 제외됨)
     await db.execute(update(Record).where(Record.user_id == user.user_id).values(user_id=None))
 
     await db.execute(update(Review).where(Review.user_id == user.user_id).values(user_id=None))
 
+    # 하드삭제된 코스는 이미 위에서 지워졌으므로, 여기서는 얽혀있어 남아있는 코스만 걸림
     await db.execute(
         update(Course).where(Course.created_by == user.user_id).values(created_by=None)
     )
 
-    return old_profile_image_url
+    return _AnonymizeResult(
+        profile_image_url=old_profile_image_url, orphaned_image_urls=orphaned_image_urls
+    )
 
 
 async def withdraw_user(user: User, access_token: str, db: AsyncSession, redis: Redis) -> None:
     """회원 탈퇴(본인) - 단일 트랜잭션 처리."""
-    old_profile_image_url = await _anonymize_user_data(user, db)
+    result = await _anonymize_user_data(user, db)
     await db.commit()
 
     # Redis 정리 실패해도 DB 탈퇴는 완료 — get_current_user가 deleted_at으로 차단하므로 정상 응답
@@ -828,15 +925,25 @@ async def withdraw_user(user: User, access_token: str, db: AsyncSession, redis: 
     except RedisError:
         logger.warning("탈퇴 시 refresh token 정리 실패 (Redis): user_id=%s", user.user_id)
 
-    # R2 정리 실패해도 탈퇴는 완료 — DB에는 이미 NULL 처리됨(고아 파일로만 남음)
-    if old_profile_image_url:
+    # R2 정리 실패해도 탈퇴는 완료 — DB에는 이미 NULL/삭제 처리됨(고아 파일로만 남음)
+    if result.profile_image_url:
         try:
-            await delete_file(old_profile_image_url)
+            await delete_file(result.profile_image_url)
         except (ClientError, BotoCoreError):
             logger.warning(
                 "탈퇴 시 프로필 이미지 정리 실패 (R2): user_id=%s, url=%s",
                 user.user_id,
-                old_profile_image_url,
+                result.profile_image_url,
+            )
+
+    for url in result.orphaned_image_urls:
+        try:
+            await delete_file(url)
+        except (ClientError, BotoCoreError):
+            logger.warning(
+                "탈퇴 시 하드삭제된 코스 이미지 정리 실패 (R2): user_id=%s, url=%s",
+                user.user_id,
+                url,
             )
 
 
@@ -855,7 +962,7 @@ async def force_withdraw_user(
     # 익명화로 지워지기 전에 닉네임을 캡처 - 밴 목록에서 관리자가 식별할 수 있게 하기 위함
     nickname_before_anonymize = user.nickname
 
-    old_profile_image_url = await _anonymize_user_data(user, db)
+    result = await _anonymize_user_data(user, db)
 
     if social is not None:
         db.add(BannedAccount(
@@ -874,13 +981,23 @@ async def force_withdraw_user(
     except RedisError:
         logger.warning("강제 탈퇴 시 refresh token 정리 실패 (Redis): user_id=%s", user.user_id)
 
-    # R2 정리 실패해도 탈퇴는 완료 — DB에는 이미 NULL 처리됨(고아 파일로만 남음)
-    if old_profile_image_url:
+    # R2 정리 실패해도 탈퇴는 완료 — DB에는 이미 NULL/삭제 처리됨(고아 파일로만 남음)
+    if result.profile_image_url:
         try:
-            await delete_file(old_profile_image_url)
+            await delete_file(result.profile_image_url)
         except (ClientError, BotoCoreError):
             logger.warning(
                 "강제 탈퇴 시 프로필 이미지 정리 실패 (R2): user_id=%s, url=%s",
                 user.user_id,
-                old_profile_image_url,
+                result.profile_image_url,
+            )
+
+    for url in result.orphaned_image_urls:
+        try:
+            await delete_file(url)
+        except (ClientError, BotoCoreError):
+            logger.warning(
+                "강제 탈퇴 시 하드삭제된 코스 이미지 정리 실패 (R2): user_id=%s, url=%s",
+                user.user_id,
+                url,
             )

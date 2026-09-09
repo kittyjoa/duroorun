@@ -288,6 +288,12 @@ async def delete_record(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="본인의 기록만 삭제할 수 있습니다."
         )
+    # 진행 중(ended_at 없음)인 기록은 다른 탭/기기에서 실제로 러닝 중인 세션일 수 있다 -
+    # 지우면 그 세션의 pause/resume/end 요청이 404를 맞고 GPS/시간 데이터가 유실된다
+    if record.ended_at is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="진행 중인 기록은 삭제할 수 없습니다."
+        )
     await session.delete(record)
     await session.commit()
 

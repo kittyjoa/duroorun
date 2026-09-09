@@ -1,7 +1,7 @@
 """마이페이지 - 내가 쓴 리뷰 목록(GET /reviews/mine) 조회 테스트."""
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import delete, select
 
@@ -86,4 +86,74 @@ async def test_get_my_reviews_includes_drnb_course_type(db_session):
         await db_session.execute(delete(Record).where(Record.user_id == user.user_id))
         await db_session.execute(delete(User).where(User.user_id == user.user_id))
         await db_session.execute(delete(Course).where(Course.course_id == course.course_id))
+        await db_session.commit()
+
+
+async def test_get_my_reviews_pagination_does_not_overlap(db_session):
+    """size보다 리뷰가 많을 때 페이지끼리 겹치거나 순서(최신순)가 어긋나지 않는다.
+
+    created_at은 DB server_default=func.now()라 같은 트랜잭션 안에서 한꺼번에 insert하면
+    타임스탬프가 전부 같아질 수 있다 - 순서를 확실히 검증하기 위해 명시적으로 다르게 준다.
+    """
+    owner = User(nickname=f"pytest-owner-{uuid.uuid4().hex[:12]}")
+    db_session.add(owner)
+    await db_session.flush()
+
+    courses = []
+    reviews = []
+    base_time = datetime.now(UTC)
+    for i in range(4):
+        course = Course(
+            course_type=CourseType.CUSTOM,
+            course_name=f"pytest-course-{uuid.uuid4().hex[:8]}",
+            distance=5.0,
+            difficulty="NORMAL",
+            estimated_time=60,
+            start_lat=1.0,
+            start_lng=1.0,
+            end_lat=2.0,
+            end_lng=2.0,
+        )
+        db_session.add(course)
+        await db_session.flush()
+        courses.append(course)
+
+        review = Review(
+            user_id=owner.user_id,
+            course_id=course.course_id,
+            content=f"pytest 리뷰 {i}",
+            difficulty="NORMAL",
+            created_at=base_time + timedelta(seconds=i),
+        )
+        db_session.add(review)
+        reviews.append(review)
+
+    await db_session.commit()
+    for review in reviews:
+        await db_session.refresh(review)
+
+    try:
+        page1 = await get_my_reviews(session=db_session, user_id=owner.user_id, page=1, size=2)
+        page2 = await get_my_reviews(session=db_session, user_id=owner.user_id, page=2, size=2)
+
+        assert page1.total == 4
+        assert page2.total == 4
+        assert len(page1.items) == 2
+        assert len(page2.items) == 2
+
+        page1_ids = [item.review_id for item in page1.items]
+        page2_ids = [item.review_id for item in page2.items]
+
+        # 페이지끼리 겹치는 리뷰가 없어야 한다
+        assert set(page1_ids).isdisjoint(page2_ids)
+
+        # created_at desc(최신순) - 가장 나중에 만든 reviews[3]이 1페이지 맨 앞에 와야 한다
+        expected_order = [reviews[i].review_id for i in (3, 2, 1, 0)]
+        assert page1_ids + page2_ids == expected_order
+    finally:
+        for review in reviews:
+            await db_session.execute(delete(Review).where(Review.review_id == review.review_id))
+        for course in courses:
+            await db_session.execute(delete(Course).where(Course.course_id == course.course_id))
+        await db_session.execute(delete(User).where(User.user_id == owner.user_id))
         await db_session.commit()

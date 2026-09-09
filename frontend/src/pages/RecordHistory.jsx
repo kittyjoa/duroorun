@@ -43,12 +43,27 @@ const RecordHistory = () => {
   // disabled 되기 전에 연달아 두 번 클릭되면 fetchRecords가 중복 실행될 수 있다 -
   // ref는 동기적으로 바로 갱신되므로 클릭 시점에 즉시 막을 수 있다.
   const loadingMoreRef = useRef(false);
+  // 더보기(fetchRecords append)와 삭제 후 재조회(reloadRecords)는 둘 다 records/total을
+  // 직접 교체·병합한다 - 동시에 실행되면 requestIdRef 하나로는 늦게 시작한 쪽이 먼저
+  // 시작한 쪽을 무조건 stale 처리해버려서, 더보기 버튼이 영영 안 풀리거나(더보기 도중
+  // 삭제) 삭제한 기록이 화면에 남는(재조회 도중 더보기) 문제가 생긴다(리뷰 지적). 큐에
+  // 넣어 항상 하나씩 순서대로만 실행되게 직렬화한다.
+  const listOpQueueRef = useRef(Promise.resolve());
+  const runListOpExclusive = (op) => {
+    const run = listOpQueueRef.current.then(op, op);
+    listOpQueueRef.current = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  };
+  // reloadRecords가 실행 시점(큐 대기 후) 기준 최신 개수를 읽을 수 있도록 미러링한다 -
+  // useEffect로 동기화하면 React의 effect는 커밋 후 별도 스케줄(매크로태스크)로 도는
+  // 반면 큐는 Promise 체이닝(마이크로태스크)이라 다음 작업이 더 먼저 시작돼버려서 값이
+  // 갱신되기 전일 수 있다 - setRecords를 호출하는 자리에서 직접 동기적으로 같이 갱신한다
+  const recordsRef = useRef(records);
 
   const fetchRecords = async (targetPage = 1, { append = false } = {}) => {
-    if (append) {
-      if (loadingMoreRef.current) return;
-      loadingMoreRef.current = true;
-    }
     const requestId = ++requestIdRef.current;
     const isStale = () => unmountedRef.current || requestIdRef.current !== requestId;
 
@@ -78,13 +93,18 @@ const RecordHistory = () => {
       }
       const data = await res.json();
       if (isStale()) return;
-      setRecords((prev) => {
-        if (!append) return data.items;
+      // recordsRef.current를 prev로 쓴다 - setRecords(updaterFn)은 이 updater를 렌더링
+      // 단계에서 나중에 실행하므로, 여기서 곧바로 recordsRef.current에 동기적으로 반영해야
+      // 바로 이어서 큐를 타는 reloadRecords가 최신 개수를 즉시 읽을 수 있다
+      let next = data.items;
+      if (append) {
         // 방어적으로 한 번 더: ref 가드로 대부분 막히지만, 혹시 모를 중복 병합에도
         // 같은 기록이 목록에 두 번 들어가지 않도록 record_id 기준으로 걸러낸다
-        const existingIds = new Set(prev.map((r) => r.record_id));
-        return [...prev, ...data.items.filter((r) => !existingIds.has(r.record_id))];
-      });
+        const existingIds = new Set(recordsRef.current.map((r) => r.record_id));
+        next = [...recordsRef.current, ...data.items.filter((r) => !existingIds.has(r.record_id))];
+      }
+      recordsRef.current = next;
+      setRecords(next);
       setPage(data.page);
       setTotal(data.total);
     } catch {
@@ -139,30 +159,51 @@ const RecordHistory = () => {
   }, [userLoading, user]);
 
   const handleLoadMore = () => {
-    fetchRecords(page + 1, { append: true });
+    if (loadingMoreRef.current) return;
+    loadingMoreRef.current = true;
+    // 큐에서 대기하는 동안(삭제 후 재조회가 앞에 있는 경우)에도 버튼이 바로 비활성화되고
+    // "불러오는 중..."으로 보이도록, fetchRecords가 실제로 시작되기 전에 미리 켜둔다
+    setLoadingMore(true);
+    setLoadMoreError('');
+    runListOpExclusive(() => fetchRecords(page + 1, { append: true }));
   };
 
   // 삭제 후 재조회 전용 - fetchRecords(1)을 그대로 쓰면 loading을 true로 바꿔 목록이
   // 잠깐 사라진다. MyCourses.jsx(usePaginatedCourses.reload)와 동일하게 loading은
-  // 건드리지 않고, 지금까지 불러온 개수만큼 size를 늘려서 한 번에 다시 받아온다 -
-  // page는 그대로 둬야 다음 "더보기"가 요청할 위치가 어긋나지 않는다.
-  const reloadRecords = async () => {
-    const requestId = ++requestIdRef.current;
-    const isStale = () => unmountedRef.current || requestIdRef.current !== requestId;
-    const size = Math.min(Math.max(records.length, 1), 100);
-    try {
-      const res = await apiFetch(`/v1/records/?page=1&size=${size}`);
-      if (isStale()) return true;
-      if (!res.ok) return false;
-      const data = await res.json();
-      if (isStale()) return true;
-      setRecords(data.items);
-      setTotal(data.total);
-      return true;
-    } catch {
-      return isStale();
-    }
-  };
+  // 건드리지 않는다. 예전엔 지금까지 불러온 개수만큼 size를 한 번에 늘려서 요청했는데,
+  // 백엔드가 size<=100으로 막아놔서 100개 넘게 불러온 뒤 삭제하면 목록이 100개로
+  // 잘리면서 page는 그대로라 다음 "더보기"가 잘려나간 구간을 건너뛰는 문제가 있었다
+  // (리뷰 지적). 매 요청을 더보기와 똑같은 size(20)로 나눠서 필요한 페이지 수만큼
+  // 반복 조회하고, 실제로 받아온 개수 기준으로 page를 다시 계산해 다음 더보기가
+  // 정확한 위치를 요청하게 한다.
+  const reloadRecords = () =>
+    runListOpExclusive(async () => {
+      const requestId = ++requestIdRef.current;
+      const isStale = () => unmountedRef.current || requestIdRef.current !== requestId;
+      const pagesToRefetch = Math.max(Math.ceil(recordsRef.current.length / RECORD_PAGE_SIZE), 1);
+      const collected = [];
+      let latestTotal = 0;
+      try {
+        for (let p = 1; p <= pagesToRefetch; p += 1) {
+          const res = await apiFetch(`/v1/records/?page=${p}&size=${RECORD_PAGE_SIZE}`);
+          if (isStale()) return true;
+          if (!res.ok) return false;
+          const data = await res.json();
+          if (isStale()) return true;
+          collected.push(...data.items);
+          latestTotal = data.total;
+          // 삭제로 총 개수가 줄어 더 이상 다음 페이지가 없으면 여기서 멈춘다
+          if (collected.length >= latestTotal) break;
+        }
+        recordsRef.current = collected;
+        setRecords(collected);
+        setTotal(latestTotal);
+        setPage(Math.max(Math.ceil(collected.length / RECORD_PAGE_SIZE), 1));
+        return true;
+      } catch {
+        return isStale();
+      }
+    });
 
   const handleDelete = async (recordId) => {
     if (!window.confirm('정말 이 기록을 삭제하시겠어요?')) return;
@@ -228,14 +269,19 @@ const RecordHistory = () => {
                     <span className="record-badge">진행 중</span>
                   )}
                 </div>
-                <button
-                  type="button"
-                  className="record-history-delete"
-                  onClick={() => handleDelete(record.record_id)}
-                  disabled={deletingIds.has(record.record_id)}
-                >
-                  {deletingIds.has(record.record_id) ? '삭제 중...' : '삭제'}
-                </button>
+                {/* 진행 중(ended_at 없음)인 기록은 다른 탭/기기의 실제 러닝 세션일 수 있어
+                    삭제 버튼을 노출하지 않는다 - 지우면 그 세션의 pause/resume/end 요청이
+                    404를 맞고 GPS/시간 데이터가 통째로 날아간다(리뷰 지적) */}
+                {record.ended_at && (
+                  <button
+                    type="button"
+                    className="record-history-delete"
+                    onClick={() => handleDelete(record.record_id)}
+                    disabled={deletingIds.has(record.record_id)}
+                  >
+                    {deletingIds.has(record.record_id) ? '삭제 중...' : '삭제'}
+                  </button>
+                )}
               </li>
             ))}
           </ul>

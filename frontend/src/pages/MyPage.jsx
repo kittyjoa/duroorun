@@ -137,10 +137,12 @@ const MyPage = () => {
         setError('서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.');
       }
     } finally {
-      // 중복 클릭 방지용 ref는 staleness와 무관하게 이 요청이 끝나면 바로 풀어준다
-      if (append) loadingMoreReviewsRef.current = false;
+      // 이 요청이 stale해진 뒤에 늦게 끝나면 ref를 여기서 풀지 않는다 - stale해진 시점에
+      // resetReviewsState가 이미 리셋했고, 그 이후 시작된 요청이 아직 진행 중일 수 있는데
+      // 여기서 무조건 풀면 그 진행 중인 요청의 중복 클릭 방지가 풀려버린다(리뷰 지적)
+      if (append && !isStale()) loadingMoreReviewsRef.current = false;
       // 로딩 플래그는 이 요청 자신이 최신일 때만 끈다 - 모달이 닫혔다 다시 열려서 stale해진
-      // 경우엔 아래 effect가 명시적으로 리셋해주므로 여기서 무조건 꺼줄 필요가 없다
+      // 경우엔 위 resetReviewsState가 명시적으로 리셋해주므로 여기서 무조건 꺼줄 필요가 없다
       if (!isStale()) setLoading(false);
     }
   };

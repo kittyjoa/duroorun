@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 
 import pytest
 from fastapi import HTTPException
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 
@@ -12,6 +13,7 @@ from app.domain.course.models import Course
 from app.domain.record.models import Record
 from app.domain.record.service import delete_record
 from app.domain.user.models import User
+from app.main import app
 
 
 async def _make_course(db_session) -> Course:
@@ -122,6 +124,47 @@ async def test_delete_record_by_owner_succeeds(db_session):
     await db_session.execute(delete(User).where(User.user_id == owner.user_id))
     await db_session.execute(delete(Course).where(Course.course_id == course.course_id))
     await db_session.commit()
+
+
+async def test_delete_in_progress_record_raises_409(db_session):
+    """진행 중(ended_at 없음)인 기록은 다른 세션이 사용 중일 수 있으므로 삭제가 거부된다."""
+    course = await _make_course(db_session)
+    owner = User(nickname=f"pytest-owner-{uuid.uuid4().hex[:12]}")
+    db_session.add(owner)
+    await db_session.flush()
+
+    record = Record(
+        user_id=owner.user_id,
+        course_id=course.course_id,
+        started_at=datetime.now(UTC),
+        ended_at=None,
+        is_completed=False,
+    )
+    db_session.add(record)
+    await db_session.commit()
+    await db_session.refresh(record)
+
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            await delete_record(session=db_session, user_id=owner.user_id, record_id=record.record_id)
+        assert exc_info.value.status_code == 409
+    finally:
+        await db_session.execute(delete(Record).where(Record.record_id == record.record_id))
+        await db_session.execute(delete(User).where(User.user_id == owner.user_id))
+        await db_session.execute(delete(Course).where(Course.course_id == course.course_id))
+        await db_session.commit()
+
+
+async def test_delete_record_rejects_unauthenticated():
+    """라우터에 인증 의존성이 실수로 빠지는 걸 잡기 위한 HTTP 레벨 테스트 - 서비스 함수만
+    직접 호출하는 위 테스트들과 달리, 실제 ASGI 앱에 Authorization 헤더 없이 요청을 보내
+    라우터가 인증을 요구하는지 확인한다(test_review_public_access.py와 동일한 패턴).
+    """
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.delete("/api/v1/records/1")
+
+    assert res.status_code == 401
 
 
 async def test_in_progress_record_without_ended_at_saves_normally(db_session):

@@ -33,7 +33,7 @@
 **비즈니스 로직**
 - 소셜 로그인 시 `social_accounts`에 `provider_type` + `provider_uid` 저장
 - 같은 소셜 계정으로 재가입 시 기존 계정으로 로그인 처리
-- `ADMIN` 계정은 회원가입 API로 생성 불가. seed 스크립트로 별도 생성
+- `ADMIN` 계정은 회원가입 API로 생성 불가. 일반 소셜 로그인으로 가입 후 DB에서 `user_role`을 수동으로 `ADMIN`으로 승격 (2026-09-09 팀 결정 — 관리자 인원이 적어 별도 가입/승격 API·스크립트를 둘 필요가 없고, 애초에 그런 API가 없어야 권한 상승 공격 경로도 안 생김)
 - OAuth state는 Redis(`oauth:state:{state}`, TTL 5분)에 저장하여 콜백 시 검증 (CSRF 방지)
 
 **토큰 전략 (JWT)**

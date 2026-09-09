@@ -98,7 +98,7 @@ alembic upgrade head  # 로컬 반영
 | deleted_at | TIMESTAMP nullable | 탈퇴일. 탈퇴 시 현재 시각 기록 |
 
 > 소셜 로그인 전용 서비스이므로 `email`, `password` 컬럼 없음. 인증은 `social_accounts`로 관리.  
-> `ADMIN` 계정은 회원가입 API로 생성 불가. seed 스크립트로 별도 생성.  
+> `ADMIN` 계정은 회원가입 API로 생성 불가. 일반 소셜 로그인으로 가입 후 DB에서 `user_role`을 수동으로 `ADMIN`으로 승격 (상세 이유는 `FEATURES.md` 참고).  
 > **탈퇴 처리**: row를 삭제하지 않고 개인정보 컬럼(`name`, `nickname`, `profile_image_url`, `location`)을 NULL로 익명화, `deleted_at`에 탈퇴 시각 기록. 통계용 데이터 보존 목적.
 
 ---

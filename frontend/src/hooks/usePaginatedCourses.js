@@ -103,7 +103,8 @@ export const usePaginatedCourses = (path, buildQuery, deps) => {
     const myRequestId = ++requestIdRef.current;
     setLoadingMore(false);
     setLoadMoreError('');
-    // 백엔드 size 상한(le=100, course/router.py Query 제약)을 넘지 않게
+    // KNOWN BUG: 백엔드 size 상한(le=100)에 걸려 courses.length가 100 넘으면 잘림.
+    // 리뷰 팀원이 제대로 된 방식으로 고쳤으니 메인 머지 이후 참고해서 통일시킬것.
     const size = Math.min(Math.max(courses.length, 1), 100);
     try {
       const query = buildQuery(1, size);

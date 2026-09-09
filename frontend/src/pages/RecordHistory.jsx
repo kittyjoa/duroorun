@@ -31,6 +31,10 @@ const RecordHistory = () => {
   // deletingId를 덮어써서 먼저 클릭한 버튼이 응답 오기 전에 다시 활성화된다. Set으로
   // 두면 기록별로 독립적으로 버튼 비활성화 상태를 관리할 수 있다.
   const [deletingIds, setDeletingIds] = useState(() => new Set());
+  // DELETE는 성공했는데 그 뒤 reloadRecords()가 실패하면, 서버에는 이미 없는 기록이
+  // 화면엔 그대로 남고 삭제 버튼도 다시 눌리는 상태가 된다 - 다시 누르면 404만 반복돼서
+  // 혼란스럽다(리뷰 지적). 이런 기록들을 표시해서 재시도 대신 새로고침을 유도한다.
+  const [staleRecordIds, setStaleRecordIds] = useState(() => new Set());
   // 컴포넌트가 언마운트된 뒤 도착하는 응답이 setState를 시도하지 않도록 막는다
   const unmountedRef = useRef(false);
   // unmountedRef만으로는 "어떤 요청이 최신인지"를 구분하지 못한다 - StrictMode의
@@ -105,6 +109,9 @@ const RecordHistory = () => {
       }
       recordsRef.current = next;
       setRecords(next);
+      // 서버와 다시 동기화됐으니, 이전에 재조회 실패로 "새로고침 필요" 상태였던 기록들도
+      // 이제는 신뢰할 수 있다 - 화면에 없으면 이미 지워진 거고 있으면 정상 기록이다
+      setStaleRecordIds(new Set());
       // data.page(요청한 페이지 번호)를 그대로 믿지 않는다 - 삭제 후 재조회 뒤에 큐에
       // 남아있던 더보기 요청이 빈 페이지를 받아도 백엔드는 요청받은 page 번호를 그대로
       // 돌려주므로, 실제로 로드된 개수 기준으로 역산해야 다음 더보기 위치가 안 어긋난다
@@ -214,6 +221,7 @@ const RecordHistory = () => {
 
         recordsRef.current = collected;
         setRecords(collected);
+        setStaleRecordIds(new Set());
         setTotal(latestTotal);
         setPage(Math.max(Math.ceil(collected.length / RECORD_PAGE_SIZE), 1));
         return true;
@@ -239,6 +247,9 @@ const RecordHistory = () => {
       const reloaded = await reloadRecords();
       if (!reloaded) {
         setDeleteError('삭제는 됐지만 목록을 새로고침하지 못했어요. 새로고침 해주세요.');
+        // 서버에는 이미 없는 기록이 화면엔 남아있는 상태다 - 삭제 버튼을 다시 활성화하면
+        // 재시도해도 404만 반복되니, 새로고침 전까지는 비활성 상태를 유지한다(리뷰 지적)
+        setStaleRecordIds((prev) => new Set(prev).add(recordId));
       }
     } catch {
       setDeleteError('서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.');
@@ -298,9 +309,13 @@ const RecordHistory = () => {
                     type="button"
                     className="record-history-delete"
                     onClick={() => handleDelete(record.record_id)}
-                    disabled={deletingIds.has(record.record_id)}
+                    disabled={deletingIds.has(record.record_id) || staleRecordIds.has(record.record_id)}
                   >
-                    {deletingIds.has(record.record_id) ? '삭제 중...' : '삭제'}
+                    {deletingIds.has(record.record_id)
+                      ? '삭제 중...'
+                      : staleRecordIds.has(record.record_id)
+                        ? '새로고침 필요'
+                        : '삭제'}
                   </button>
                 )}
               </li>

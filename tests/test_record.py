@@ -146,7 +146,9 @@ async def test_delete_in_progress_record_raises_409(db_session):
 
     try:
         with pytest.raises(HTTPException) as exc_info:
-            await delete_record(session=db_session, user_id=owner.user_id, record_id=record.record_id)
+            await delete_record(
+                session=db_session, user_id=owner.user_id, record_id=record.record_id
+            )
         assert exc_info.value.status_code == 409
     finally:
         await db_session.execute(delete(Record).where(Record.record_id == record.record_id))

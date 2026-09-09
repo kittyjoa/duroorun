@@ -25,9 +25,11 @@ class ProfileImageResponse(BaseModel):
     profile_image_url: str
 
 
-class UserOnboardingRequest(BaseModel):
-    """최초 가입 완료 요청. 닉네임/거주지 둘 다 필수."""
+class CompleteSignupRequest(BaseModel):
+    """소셜 로그인 최초 시도 후 약관 동의 + 프로필을 받아 가입을 완료하는 요청."""
 
+    signup_token: str
+    agree_terms: bool
     nickname: str
     location: str
 

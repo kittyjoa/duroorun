@@ -24,15 +24,16 @@ from app.core.security import bearer_scheme, get_current_user
 from app.database import get_db
 from app.domain.user.models import User
 from app.domain.user.schemas import (
+    CompleteSignupRequest,
     MessageResponse,
     ProfileImageResponse,
     PublicProfileResponse,
     TokenResponse,
-    UserOnboardingRequest,
     UserProfileUpdate,
     UserResponse,
 )
 from app.domain.user.service import (
+    complete_signup,
     delete_profile_image,
     get_google_auth_url,
     get_kakao_auth_url,
@@ -86,13 +87,13 @@ def _oauth_redirect_start(url: str, state: str) -> RedirectResponse:
 
 
 def _oauth_success_redirect(refresh_token: str) -> RedirectResponse:
-    """소셜 로그인 성공 후 프론트로 리다이렉트합니다.
+    """이미 가입된(기존) 유저의 로그인 성공 후 프론트로 리다이렉트합니다.
 
     소셜사 콜백은 브라우저 전체 페이지 이동이라 JSON을 직접 응답해도 프론트(SPA)가
     받을 방법이 없음 — access_token은 URL에 노출되면 브라우저 히스토리/Referrer/서버
     로그로 새어나갈 수 있어 절대 싣지 않는다. refresh_token만 쿠키로 실어 보내고,
-    프론트는 도착 즉시 /auth/refresh를 호출해 access_token을 받은 뒤 /users/me로
-    온보딩 완료 여부(닉네임/거주지 유무)를 직접 조회해 이동 경로를 정한다.
+    프론트는 도착 즉시 /auth/refresh를 호출해 access_token을 받는다. 신규 유저는
+    이 경로를 타지 않고 _oauth_signup_redirect로 온보딩(약관 동의)부터 거친다.
     """
     redirect = RedirectResponse(f"{settings.FRONTEND_URL}/oauth/callback")
     redirect.set_cookie(
@@ -105,6 +106,21 @@ def _oauth_success_redirect(refresh_token: str) -> RedirectResponse:
         path=_REFRESH_COOKIE_PATH,
         domain=settings.COOKIE_DOMAIN or None,
     )
+    redirect.delete_cookie(
+        key="oauth_state", path=_OAUTH_STATE_COOKIE_PATH, domain=settings.COOKIE_DOMAIN or None
+    )
+    return redirect
+
+
+def _oauth_signup_redirect(signup_token: str) -> RedirectResponse:
+    """신규 유저는 아직 계정이 없으므로(약관 동의 전) 바로 온보딩 화면으로 보낸다.
+
+    signup_token은 Redis에 잠깐 저장된 가입정보(provider_type/uid/name)를 찾는 열쇠 —
+    프론트는 이 값을 그대로 들고 있다가 약관 동의 + 닉네임/거주지와 함께
+    POST /auth/complete-signup으로 보내야 실제 계정이 만들어진다.
+    """
+    params = urlencode({"signup_token": signup_token})
+    redirect = RedirectResponse(f"{settings.FRONTEND_URL}/onboarding?{params}")
     redirect.delete_cookie(
         key="oauth_state", path=_OAUTH_STATE_COOKIE_PATH, domain=settings.COOKIE_DOMAIN or None
     )
@@ -141,10 +157,12 @@ async def kakao_callback(
     if error or not code:
         return _oauth_error_redirect("로그인이 취소되었습니다")
     try:
-        _, refresh_token = await kakao_login(code, state, oauth_state, db, redis)
+        result = await kakao_login(code, state, oauth_state, db, redis)
     except HTTPException as e:
         return _oauth_error_redirect(e.detail)
-    return _oauth_success_redirect(refresh_token)
+    if result.signup_token:
+        return _oauth_signup_redirect(result.signup_token)
+    return _oauth_success_redirect(result.refresh_token)
 
 
 @router.get("/auth/naver", summary="네이버 로그인 페이지로 리다이렉트")
@@ -167,10 +185,12 @@ async def naver_callback(
     if error or not code:
         return _oauth_error_redirect("로그인이 취소되었습니다")
     try:
-        _, refresh_token = await naver_login(code, state, oauth_state, db, redis)
+        result = await naver_login(code, state, oauth_state, db, redis)
     except HTTPException as e:
         return _oauth_error_redirect(e.detail)
-    return _oauth_success_redirect(refresh_token)
+    if result.signup_token:
+        return _oauth_signup_redirect(result.signup_token)
+    return _oauth_success_redirect(result.refresh_token)
 
 
 @router.get("/auth/google", summary="구글 로그인 페이지로 리다이렉트")
@@ -193,10 +213,44 @@ async def google_callback(
     if error or not code:
         return _oauth_error_redirect("로그인이 취소되었습니다")
     try:
-        _, refresh_token = await google_login(code, state, oauth_state, db, redis)
+        result = await google_login(code, state, oauth_state, db, redis)
     except HTTPException as e:
         return _oauth_error_redirect(e.detail)
-    return _oauth_success_redirect(refresh_token)
+    if result.signup_token:
+        return _oauth_signup_redirect(result.signup_token)
+    return _oauth_success_redirect(result.refresh_token)
+
+
+@router.post(
+    "/auth/complete-signup", response_model=TokenResponse, summary="약관 동의 및 최초 가입 완료"
+)
+async def complete_signup_endpoint(
+    body: CompleteSignupRequest,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    redis: Redis = Depends(get_redis),
+) -> TokenResponse:
+    """소셜 로그인 최초 시도 후 약관 동의 + 닉네임/거주지를 받아 계정을 생성합니다.
+
+    이 시점 전까지는 로그인 토큰이 전혀 발급되지 않으므로, 동의하지 않고 이탈하면
+    아무 계정도 만들어지지 않는다 (Redis에 저장된 임시 가입정보는 TTL로 자동 소멸).
+    """
+    access_token, refresh_token = await complete_signup(
+        body.signup_token, body.agree_terms, body.nickname, body.location, db, redis
+    )
+
+    response.set_cookie(
+        key="refresh_token",
+        value=refresh_token,
+        httponly=True,
+        secure=settings.is_production,
+        samesite="none" if settings.is_production else "lax",
+        max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400,
+        path=_REFRESH_COOKIE_PATH,
+        domain=settings.COOKIE_DOMAIN or None,
+    )
+
+    return TokenResponse(access_token=access_token, is_new_user=True)
 
 
 @router.post("/auth/refresh", response_model=TokenResponse, summary="토큰 재발급")
@@ -249,17 +303,6 @@ async def logout_endpoint(
 async def get_my_profile(user: User = Depends(get_current_user)) -> UserResponse:
     """내 정보를 조회합니다."""
     return UserResponse.model_validate(user)
-
-
-@router.put("/users/me", response_model=UserResponse, summary="최초 가입 완료")
-async def complete_onboarding(
-    body: UserOnboardingRequest,
-    db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
-) -> UserResponse:
-    """카카오 로그인 최초 가입 시 닉네임/거주지를 필수로 입력받습니다."""
-    updated = await update_profile(user, body.nickname, body.location, db)
-    return UserResponse.model_validate(updated)
 
 
 @router.patch("/users/me", response_model=UserResponse, summary="내 정보 수정")

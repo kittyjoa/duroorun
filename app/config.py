@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     # OAuth
     OAUTH_STATE_EXPIRE_SECONDS: int = 300  # state TTL 5분 (CSRF 방지용 1회성 값)
     OAUTH_API_TIMEOUT: float = 5.0  # 소셜 API 호출 타임아웃 (초)
+    # 신규 유저가 약관 동의/닉네임/거주지 입력 중 대기하는 임시 가입정보 TTL (Redis)
+    PENDING_SIGNUP_EXPIRE_SECONDS: int = 600
 
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""

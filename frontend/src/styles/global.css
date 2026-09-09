@@ -121,6 +121,9 @@ h2 { font-size:36px; letter-spacing:-1.5px; margin:8px 0 0; line-height:1.25; }
 .onboarding-card .primary-button { width:100%; margin-top:26px; border:0; border-radius:8px; cursor:pointer; text-align:center; }
 .onboarding-card .primary-button:disabled { opacity:.6; cursor:not-allowed; }
 .onboarding-error { color:var(--red); font-size:13px; margin:14px 0 0; }
+.onboarding-terms-box { white-space:pre-wrap; max-height:120px; overflow-y:auto; background:#f6f8f7; border:1px solid #e4eae6; border-radius:8px; padding:12px 14px; font-size:12px; color:#5c706c; line-height:1.6; margin-top:8px; }
+.onboarding-checkbox { display:flex; align-items:center; gap:8px; font-size:13px; color:var(--ink); margin:12px 0 0; }
+.onboarding-checkbox input { width:auto; }
 .oauth-callback { min-height:100vh; display:flex; align-items:center; justify-content:center; color:var(--ink); font-family:'Apple SD Gothic Neo',sans-serif; }
 
 /* 헤더 — 로그인 상태 프로필 메뉴 */

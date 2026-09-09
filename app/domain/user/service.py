@@ -1,8 +1,10 @@
 """회원/인증 - 비즈니스 로직."""
 
+import json
 import logging
 import re
 import secrets
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlencode
 
@@ -58,6 +60,47 @@ _LOCATION_PATTERN = re.compile(r"^[가-힣a-zA-Z0-9\s]+$")
 
 _LAST_LOGIN_UPDATE_THRESHOLD = timedelta(minutes=5)
 
+# 신규 유저의 약관 동의 전 임시 가입정보(provider_type/provider_uid/name) 저장 키
+_PENDING_SIGNUP_PREFIX = "pending_signup:"
+
+
+@dataclass
+class SocialLoginResult:
+    """소셜 로그인 콜백 처리 결과.
+
+    기존 유저면 access/refresh 토큰이 채워지고, 신규 유저면 계정을 만들지 않은 채
+    signup_token만 채워진다 (약관 동의 + 프로필 입력 후 complete_signup()에서 실제 생성).
+    """
+
+    access_token: str | None = None
+    refresh_token: str | None = None
+    signup_token: str | None = None
+
+
+def _validate_nickname(nickname: str) -> str:
+    nickname = nickname.strip()
+    valid_length = settings.NICKNAME_MIN_LENGTH <= len(nickname) <= settings.NICKNAME_MAX_LENGTH
+    if not valid_length or not _NICKNAME_PATTERN.match(nickname):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"닉네임은 한글/영문/숫자 {settings.NICKNAME_MIN_LENGTH}"
+                f"~{settings.NICKNAME_MAX_LENGTH}자로 입력해주세요"
+            ),
+        )
+    return nickname
+
+
+def _validate_location(location: str) -> str:
+    location = location.strip()
+    valid_length = 1 <= len(location) <= settings.LOCATION_MAX_LENGTH
+    if not valid_length or not _LOCATION_PATTERN.match(location):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"거주지는 한글/영문/숫자 1~{settings.LOCATION_MAX_LENGTH}자로 입력해주세요",
+        )
+    return location
+
 
 async def _touch_last_login(user_id: int, db: AsyncSession) -> None:
     """로그인/토큰 재발급 시 last_login_at을 갱신합니다.
@@ -103,6 +146,61 @@ async def _check_not_banned(
         )
 
 
+async def _finish_social_login(
+    provider_type: ProviderType, provider_uid: str, name: str | None, db: AsyncSession, redis: Redis
+) -> SocialLoginResult:
+    """provider_uid로 기존/신규 유저를 판별해 로그인을 마무리합니다.
+
+    기존 유저는 바로 토큰을 발급하지만, 신규 유저는 약관 동의 전이므로 계정을 만들지
+    않는다 — 대신 가입정보를 Redis에 잠깐(PENDING_SIGNUP_EXPIRE_SECONDS) 저장해두고
+    signup_token만 돌려준다. 이 값은 이후 complete_signup()에서 약관 동의 + 닉네임/거주지와
+    함께 와야 실제 User/SocialAccount row가 생성된다 (동의 안 하고 이탈하면 TTL로 자동 소멸).
+    """
+    result = await db.execute(
+        select(SocialAccount).where(
+            SocialAccount.provider_type == provider_type,
+            SocialAccount.provider_uid == provider_uid,
+        )
+    )
+    social = result.scalar_one_or_none()
+
+    if social is None:
+        await _check_not_banned(provider_type, provider_uid, db)
+        signup_token = secrets.token_urlsafe(32)
+        payload = json.dumps({
+            "provider_type": provider_type.value,
+            "provider_uid": provider_uid,
+            "name": name,
+        })
+        try:
+            await redis.setex(
+                f"{_PENDING_SIGNUP_PREFIX}{signup_token}",
+                settings.PENDING_SIGNUP_EXPIRE_SECONDS,
+                payload,
+            )
+        except RedisError:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="서버 오류가 발생했습니다. 잠시 후 다시 시도해주세요",
+            ) from None
+        return SocialLoginResult(signup_token=signup_token)
+
+    result = await db.execute(select(User).where(User.user_id == social.user_id))
+    user = result.scalar_one()
+
+    # _touch_last_login 내부에서 rollback이 나면 이 세션에 속한 user 객체의 속성이
+    # 전부 만료되어, 이후 user.user_id처럼 다시 접근하는 순간 동기 컨텍스트에서 지연 로딩이
+    # 시도되며 MissingGreenlet 에러로 이어질 수 있음 — 정수로 미리 꺼내 그 위험을 없앤다.
+    user_id = user.user_id
+    await _touch_last_login(user_id, db)
+
+    access_token = create_access_token(user_id)
+    refresh_token, refresh_jti = create_refresh_token(user_id)
+    await save_refresh_jti(user_id, refresh_jti, redis)
+
+    return SocialLoginResult(access_token=access_token, refresh_token=refresh_token)
+
+
 def _has_valid_image_signature(content_type: str, file_bytes: bytes) -> bool:
     """Content-Type 헤더는 위조 가능하므로 실제 파일 시그니처(매직넘버)로 재검증합니다."""
     if content_type == "image/jpeg":
@@ -135,8 +233,8 @@ async def get_kakao_auth_url(redis: Redis) -> tuple[str, str]:
 
 async def kakao_login(
     code: str, state: str, cookie_state: str | None, db: AsyncSession, redis: Redis
-) -> tuple[str, str]:
-    """카카오 OAuth 콜백을 처리하고 (access_token, refresh_token)을 반환합니다."""
+) -> SocialLoginResult:
+    """카카오 OAuth 콜백을 처리합니다."""
     # 콜백을 받은 브라우저가 로그인을 시작한 브라우저와 같은지 먼저 확인 (로그인 CSRF 방지)
     if not cookie_state or cookie_state != state:
         raise HTTPException(
@@ -214,48 +312,7 @@ async def kakao_login(
     provider_uid = str(provider_uid)
     name = user_info.get("kakao_account", {}).get("name")
 
-    result = await db.execute(
-        select(SocialAccount).where(
-            SocialAccount.provider_type == ProviderType.KAKAO,
-            SocialAccount.provider_uid == provider_uid,
-        )
-    )
-    social = result.scalar_one_or_none()
-
-    is_new_user = social is None
-    if is_new_user:
-        await _check_not_banned(ProviderType.KAKAO, provider_uid, db)
-        try:
-            user = User(name=name)
-            db.add(user)
-            await db.flush()
-            db.add(SocialAccount(
-                user_id=user.user_id,
-                provider_type=ProviderType.KAKAO,
-                provider_uid=provider_uid,
-            ))
-            await db.commit()
-        except IntegrityError:
-            await db.rollback()
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="이미 연동된 소셜 계정입니다",
-            ) from None
-    else:
-        result = await db.execute(select(User).where(User.user_id == social.user_id))
-        user = result.scalar_one()
-
-    # _touch_last_login 내부에서 rollback이 나면 이 세션에 속한 user 객체의 속성이
-    # 전부 만료되어, 이후 user.user_id처럼 다시 접근하는 순간 동기 컨텍스트에서 지연 로딩이
-    # 시도되며 MissingGreenlet 에러로 이어질 수 있음 — 정수로 미리 꺼내 그 위험을 없앤다.
-    user_id = user.user_id
-    await _touch_last_login(user_id, db)
-
-    access_token = create_access_token(user_id)
-    refresh_token, refresh_jti = create_refresh_token(user_id)
-    await save_refresh_jti(user_id, refresh_jti, redis)
-
-    return access_token, refresh_token
+    return await _finish_social_login(ProviderType.KAKAO, provider_uid, name, db, redis)
 
 
 async def get_naver_auth_url(redis: Redis) -> tuple[str, str]:
@@ -279,8 +336,8 @@ async def get_naver_auth_url(redis: Redis) -> tuple[str, str]:
 
 async def naver_login(
     code: str, state: str, cookie_state: str | None, db: AsyncSession, redis: Redis
-) -> tuple[str, str]:
-    """네이버 OAuth 콜백을 처리하고 (access_token, refresh_token)을 반환합니다."""
+) -> SocialLoginResult:
+    """네이버 OAuth 콜백을 처리합니다."""
     # 콜백을 받은 브라우저가 로그인을 시작한 브라우저와 같은지 먼저 확인 (로그인 CSRF 방지)
     if not cookie_state or cookie_state != state:
         raise HTTPException(
@@ -366,48 +423,7 @@ async def naver_login(
     provider_uid = str(provider_uid)
     name = naver_response.get("name")
 
-    result = await db.execute(
-        select(SocialAccount).where(
-            SocialAccount.provider_type == ProviderType.NAVER,
-            SocialAccount.provider_uid == provider_uid,
-        )
-    )
-    social = result.scalar_one_or_none()
-
-    is_new_user = social is None
-    if is_new_user:
-        await _check_not_banned(ProviderType.NAVER, provider_uid, db)
-        try:
-            user = User(name=name)
-            db.add(user)
-            await db.flush()
-            db.add(SocialAccount(
-                user_id=user.user_id,
-                provider_type=ProviderType.NAVER,
-                provider_uid=provider_uid,
-            ))
-            await db.commit()
-        except IntegrityError:
-            await db.rollback()
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="이미 연동된 소셜 계정입니다",
-            ) from None
-    else:
-        result = await db.execute(select(User).where(User.user_id == social.user_id))
-        user = result.scalar_one()
-
-    # _touch_last_login 내부에서 rollback이 나면 이 세션에 속한 user 객체의 속성이
-    # 전부 만료되어, 이후 user.user_id처럼 다시 접근하는 순간 동기 컨텍스트에서 지연 로딩이
-    # 시도되며 MissingGreenlet 에러로 이어질 수 있음 — 정수로 미리 꺼내 그 위험을 없앤다.
-    user_id = user.user_id
-    await _touch_last_login(user_id, db)
-
-    access_token = create_access_token(user_id)
-    refresh_token, refresh_jti = create_refresh_token(user_id)
-    await save_refresh_jti(user_id, refresh_jti, redis)
-
-    return access_token, refresh_token
+    return await _finish_social_login(ProviderType.NAVER, provider_uid, name, db, redis)
 
 
 async def get_google_auth_url(redis: Redis) -> tuple[str, str]:
@@ -432,8 +448,8 @@ async def get_google_auth_url(redis: Redis) -> tuple[str, str]:
 
 async def google_login(
     code: str, state: str, cookie_state: str | None, db: AsyncSession, redis: Redis
-) -> tuple[str, str]:
-    """구글 OAuth 콜백을 처리하고 (access_token, refresh_token)을 반환합니다."""
+) -> SocialLoginResult:
+    """구글 OAuth 콜백을 처리합니다."""
     # 콜백을 받은 브라우저가 로그인을 시작한 브라우저와 같은지 먼저 확인 (로그인 CSRF 방지)
     if not cookie_state or cookie_state != state:
         raise HTTPException(
@@ -511,40 +527,79 @@ async def google_login(
     provider_uid = str(provider_uid)
     name = user_info.get("name")
 
-    result = await db.execute(
-        select(SocialAccount).where(
-            SocialAccount.provider_type == ProviderType.GOOGLE,
-            SocialAccount.provider_uid == provider_uid,
+    return await _finish_social_login(ProviderType.GOOGLE, provider_uid, name, db, redis)
+
+
+async def complete_signup(
+    signup_token: str,
+    agree_terms: bool,
+    nickname: str,
+    location: str,
+    db: AsyncSession,
+    redis: Redis,
+) -> tuple[str, str]:
+    """약관 동의 + 닉네임/거주지를 받아 대기 중이던 신규 계정을 실제로 생성합니다.
+
+    signup_token은 소셜 로그인 최초 시도(callback) 시 Redis에 잠깐 저장해둔 가입정보의
+    열쇠 — 1회용이라 성공하면 즉시 삭제하고, TTL이 지났으면 처음부터 다시 로그인해야 한다.
+    """
+    if not agree_terms:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="이용약관 및 개인정보처리방침에 동의해야 가입할 수 있습니다",
         )
-    )
-    social = result.scalar_one_or_none()
 
-    is_new_user = social is None
-    if is_new_user:
-        await _check_not_banned(ProviderType.GOOGLE, provider_uid, db)
-        try:
-            user = User(name=name)
-            db.add(user)
-            await db.flush()
-            db.add(SocialAccount(
-                user_id=user.user_id,
-                provider_type=ProviderType.GOOGLE,
-                provider_uid=provider_uid,
-            ))
-            await db.commit()
-        except IntegrityError:
-            await db.rollback()
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="이미 연동된 소셜 계정입니다",
-            ) from None
-    else:
-        result = await db.execute(select(User).where(User.user_id == social.user_id))
-        user = result.scalar_one()
+    key = f"{_PENDING_SIGNUP_PREFIX}{signup_token}"
+    try:
+        raw = await redis.get(key)
+    except RedisError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="서버 오류가 발생했습니다. 잠시 후 다시 시도해주세요",
+        ) from None
+    if raw is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="가입 세션이 만료되었습니다. 처음부터 다시 로그인해주세요",
+        )
 
-    # _touch_last_login 내부에서 rollback이 나면 이 세션에 속한 user 객체의 속성이
-    # 전부 만료되어, 이후 user.user_id처럼 다시 접근하는 순간 동기 컨텍스트에서 지연 로딩이
-    # 시도되며 MissingGreenlet 에러로 이어질 수 있음 — 정수로 미리 꺼내 그 위험을 없앤다.
+    try:
+        await redis.delete(key)
+    except RedisError:
+        pass  # 삭제 실패해도 TTL로 자동 정리되므로 가입 자체는 계속 진행
+
+    pending = json.loads(raw)
+    provider_type = ProviderType(pending["provider_type"])
+    provider_uid = pending["provider_uid"]
+    name = pending["name"]
+
+    nickname = _validate_nickname(nickname)
+    location = _validate_location(location)
+
+    await _check_not_banned(provider_type, provider_uid, db)
+
+    try:
+        user = User(
+            name=name,
+            nickname=nickname,
+            location=location,
+            terms_agreed_at=datetime.now(UTC),
+        )
+        db.add(user)
+        await db.flush()
+        db.add(SocialAccount(
+            user_id=user.user_id,
+            provider_type=provider_type,
+            provider_uid=provider_uid,
+        ))
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="이미 사용 중인 닉네임이거나 이미 연동된 소셜 계정입니다",
+        ) from None
+
     user_id = user.user_id
     await _touch_last_login(user_id, db)
 
@@ -622,29 +677,12 @@ async def get_public_profile(user_id: int, db: AsyncSession) -> User:
 async def update_profile(
     user: User, nickname: str | None, location: str | None, db: AsyncSession
 ) -> User:
-    """닉네임/거주지를 수정합니다. 최초 가입 완료와 마이페이지 수정 모두 이 함수로 처리합니다."""
+    """닉네임/거주지를 수정합니다 (마이페이지)."""
     if nickname is not None:
-        nickname = nickname.strip()
-        valid_length = settings.NICKNAME_MIN_LENGTH <= len(nickname) <= settings.NICKNAME_MAX_LENGTH
-        if not valid_length or not _NICKNAME_PATTERN.match(nickname):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    f"닉네임은 한글/영문/숫자 {settings.NICKNAME_MIN_LENGTH}"
-                    f"~{settings.NICKNAME_MAX_LENGTH}자로 입력해주세요"
-                ),
-            )
-        user.nickname = nickname
+        user.nickname = _validate_nickname(nickname)
 
     if location is not None:
-        location = location.strip()
-        valid_length = 1 <= len(location) <= settings.LOCATION_MAX_LENGTH
-        if not valid_length or not _LOCATION_PATTERN.match(location):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"거주지는 한글/영문/숫자 1~{settings.LOCATION_MAX_LENGTH}자로 입력해주세요",
-            )
-        user.location = location
+        user.location = _validate_location(location)
 
     try:
         await db.commit()

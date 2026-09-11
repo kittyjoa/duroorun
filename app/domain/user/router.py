@@ -64,6 +64,20 @@ _PUBLIC_PROFILE_RATE_LIMIT_MAX_REQUESTS = 30
 _PUBLIC_PROFILE_RATE_LIMIT_WINDOW_SECONDS = 60
 
 
+def _set_refresh_token_cookie(response: Response, refresh_token: str) -> None:
+    """Refresh Token httpOnly 쿠키를 설정합니다 (로그인 성공/재발급/가입완료 3곳에서 공용)."""
+    response.set_cookie(
+        key="refresh_token",
+        value=refresh_token,
+        httponly=True,
+        secure=settings.is_production,
+        samesite="none" if settings.is_production else "lax",
+        max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400,
+        path=_REFRESH_COOKIE_PATH,
+        domain=settings.COOKIE_DOMAIN or None,
+    )
+
+
 def _oauth_redirect_start(url: str, state: str) -> RedirectResponse:
     """소셜사 인증 페이지로 리다이렉트하며, state를 쿠키에도 심어 콜백 브라우저와 대조합니다.
 
@@ -96,16 +110,7 @@ def _oauth_success_redirect(refresh_token: str) -> RedirectResponse:
     이 경로를 타지 않고 _oauth_signup_redirect로 온보딩(약관 동의)부터 거친다.
     """
     redirect = RedirectResponse(f"{settings.FRONTEND_URL}/oauth/callback")
-    redirect.set_cookie(
-        key="refresh_token",
-        value=refresh_token,
-        httponly=True,
-        secure=settings.is_production,
-        samesite="none" if settings.is_production else "lax",
-        max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400,
-        path=_REFRESH_COOKIE_PATH,
-        domain=settings.COOKIE_DOMAIN or None,
-    )
+    _set_refresh_token_cookie(redirect, refresh_token)
     redirect.delete_cookie(
         key="oauth_state", path=_OAUTH_STATE_COOKIE_PATH, domain=settings.COOKIE_DOMAIN or None
     )
@@ -239,16 +244,7 @@ async def complete_signup_endpoint(
         body.signup_token, body.agree_terms, body.nickname, body.location, db, redis
     )
 
-    response.set_cookie(
-        key="refresh_token",
-        value=refresh_token,
-        httponly=True,
-        secure=settings.is_production,
-        samesite="none" if settings.is_production else "lax",
-        max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400,
-        path=_REFRESH_COOKIE_PATH,
-        domain=settings.COOKIE_DOMAIN or None,
-    )
+    _set_refresh_token_cookie(response, refresh_token)
 
     return TokenResponse(access_token=access_token, is_new_user=True)
 
@@ -269,16 +265,7 @@ async def token_refresh(
 
     new_access_token, new_refresh_token = await refresh_tokens(refresh_token, db, redis)
 
-    response.set_cookie(
-        key="refresh_token",
-        value=new_refresh_token,
-        httponly=True,
-        secure=settings.is_production,
-        samesite="none" if settings.is_production else "lax",
-        max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 86400,
-        path=_REFRESH_COOKIE_PATH,
-        domain=settings.COOKIE_DOMAIN or None,
-    )
+    _set_refresh_token_cookie(response, new_refresh_token)
 
     return TokenResponse(access_token=new_access_token, is_new_user=False)
 

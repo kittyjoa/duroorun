@@ -63,6 +63,9 @@ _LAST_LOGIN_UPDATE_THRESHOLD = timedelta(minutes=5)
 
 # 신규 유저의 약관 동의 전 임시 가입정보(provider_type/provider_uid/name) 저장 키
 _PENDING_SIGNUP_PREFIX = "pending_signup:"
+# 같은 signup_token으로 들어온 동시 요청을 직렬화하는 락 (get→delete가 원자적이지 않아서 필요)
+_SIGNUP_LOCK_PREFIX = "signup_lock:"
+_SIGNUP_LOCK_TTL_SECONDS = 30
 
 
 @dataclass
@@ -133,7 +136,12 @@ async def _touch_last_login(user_id: int, db: AsyncSession) -> None:
 async def _check_not_banned(
     provider_type: ProviderType, provider_uid: str, db: AsyncSession
 ) -> None:
-    """강제 탈퇴로 차단된 소셜 계정인지 확인합니다. 신규 가입 직전에만 호출."""
+    """강제 탈퇴로 차단된 소셜 계정인지 확인합니다.
+
+    가입정보를 Redis에 임시 저장하는 시점(_finish_social_login)과 실제 계정을 생성하는
+    시점(complete_signup) 두 곳에서 호출된다 — 약관 동의 대기 시간(최대
+    PENDING_SIGNUP_EXPIRE_SECONDS) 동안 강제 탈퇴된 경우까지 이중으로 막기 위함.
+    """
     result = await db.execute(
         select(BannedAccount).where(
             BannedAccount.provider_type == provider_type,
@@ -550,65 +558,95 @@ async def complete_signup(
             detail="이용약관 및 개인정보처리방침에 동의해야 가입할 수 있습니다",
         )
 
-    key = f"{_PENDING_SIGNUP_PREFIX}{signup_token}"
+    # 가입정보 조회(get)와 소비(delete)가 원자적이지 않아, 같은 signup_token으로 거의
+    # 동시에 두 요청(더블클릭/네트워크 재시도)이 들어오면 둘 다 같은 가입정보를 읽어
+    # User 생성을 시도할 수 있다. SocialAccount의 (provider_type, provider_uid) 유니크
+    # 제약 덕분에 실제 데이터 손상은 없지만(하나는 409로 막힘), 락으로 아예 직렬화해서
+    # 그 경합 자체를 없앤다 (2026-09-11 리뷰 지적).
+    lock_key = f"{_SIGNUP_LOCK_PREFIX}{signup_token}"
     try:
-        raw = await redis.get(key)
+        acquired = await redis.set(lock_key, "1", nx=True, ex=_SIGNUP_LOCK_TTL_SECONDS)
     except RedisError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="서버 오류가 발생했습니다. 잠시 후 다시 시도해주세요",
         ) from None
-    if raw is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="가입 세션이 만료되었습니다. 처음부터 다시 로그인해주세요",
-        )
-
-    try:
-        await redis.delete(key)
-    except RedisError:
-        pass  # 삭제 실패해도 TTL로 자동 정리되므로 가입 자체는 계속 진행
-
-    pending = json.loads(raw)
-    provider_type = ProviderType(pending["provider_type"])
-    provider_uid = pending["provider_uid"]
-    name = pending["name"]
-
-    nickname = _validate_nickname(nickname)
-    location = _validate_location(location)
-
-    await _check_not_banned(provider_type, provider_uid, db)
-
-    try:
-        user = User(
-            name=name,
-            nickname=nickname,
-            location=location,
-            terms_agreed_at=datetime.now(UTC),
-        )
-        db.add(user)
-        await db.flush()
-        db.add(SocialAccount(
-            user_id=user.user_id,
-            provider_type=provider_type,
-            provider_uid=provider_uid,
-        ))
-        await db.commit()
-    except IntegrityError:
-        await db.rollback()
+    if not acquired:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="이미 사용 중인 닉네임이거나 이미 연동된 소셜 계정입니다",
-        ) from None
+            detail="이미 처리 중인 요청입니다. 잠시 후 다시 시도해주세요",
+        )
 
-    user_id = user.user_id
-    await _touch_last_login(user_id, db)
+    try:
+        key = f"{_PENDING_SIGNUP_PREFIX}{signup_token}"
+        try:
+            raw = await redis.get(key)
+        except RedisError:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="서버 오류가 발생했습니다. 잠시 후 다시 시도해주세요",
+            ) from None
+        if raw is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="가입 세션이 만료되었습니다. 처음부터 다시 로그인해주세요",
+            )
 
-    access_token = create_access_token(user_id)
-    refresh_token, refresh_jti = create_refresh_token(user_id)
-    await save_refresh_jti(user_id, refresh_jti, redis)
+        pending = json.loads(raw)
+        provider_type = ProviderType(pending["provider_type"])
+        provider_uid = pending["provider_uid"]
+        name = pending["name"]
 
-    return access_token, refresh_token
+        # 닉네임/거주지 형식 오류나 중복 닉네임은 흔한 입력 실패라 재시도가 정상 흐름이다.
+        # signup_token(pending 데이터)은 계정 생성이 실제로 성공한 뒤에만 소비해야, 실패
+        # 후 값만 고쳐 같은 토큰으로 재제출하는 게 가능하다 (2026-09-11 리뷰 지적 — 예전엔
+        # 여기 오기 전에 미리 지워버려서 실패할 때마다 소셜 로그인부터 다시 해야 했음)
+        nickname = _validate_nickname(nickname)
+        location = _validate_location(location)
+
+        await _check_not_banned(provider_type, provider_uid, db)
+
+        try:
+            user = User(
+                name=name,
+                nickname=nickname,
+                location=location,
+                terms_agreed_at=datetime.now(UTC),
+            )
+            db.add(user)
+            await db.flush()
+            db.add(SocialAccount(
+                user_id=user.user_id,
+                provider_type=provider_type,
+                provider_uid=provider_uid,
+            ))
+            await db.commit()
+        except IntegrityError:
+            await db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="이미 사용 중인 닉네임이거나 이미 연동된 소셜 계정입니다",
+            ) from None
+
+        # 계정 생성이 실제로 성공한 뒤에만 1회용 가입정보를 소비한다
+        try:
+            await redis.delete(key)
+        except RedisError:
+            pass  # 삭제 실패해도 TTL로 자동 정리되므로 가입 자체는 계속 진행
+
+        user_id = user.user_id
+        await _touch_last_login(user_id, db)
+
+        access_token = create_access_token(user_id)
+        refresh_token, refresh_jti = create_refresh_token(user_id)
+        await save_refresh_jti(user_id, refresh_jti, redis)
+
+        return access_token, refresh_token
+    finally:
+        try:
+            await redis.delete(lock_key)
+        except RedisError:
+            pass  # 락 삭제 실패해도 TTL(_SIGNUP_LOCK_TTL_SECONDS)로 자동 해제됨
 
 
 async def refresh_tokens(refresh_token: str, db: AsyncSession, redis: Redis) -> tuple[str, str]:
@@ -806,12 +844,18 @@ async def _delete_orphaned_custom_courses(user_id: int, db: AsyncSession) -> lis
 
     FK 제약(records/reviews.course_id NOT NULL) 때문에 자식 → 부모 순서로 지운다.
     반환값은 R2에서 같이 정리해야 할 이미지 URL 목록(코스 이미지 + 리뷰 이미지).
+
+    동시성 주의(2026-09-11 리뷰 지적): 아래 "엮여있는지 판정" 조회와 실제 DELETE 사이에
+    락이 없으면, 그 사이에 다른 유저가 이 코스로 막 완주/리뷰를 남겨도 그대로 같이
+    삭제되어버리는 경쟁 상태가 생긴다. `.with_for_update()`로 코스 row를 먼저 잠가두면,
+    Postgres가 자식 테이블(records/reviews) INSERT 시 부모 row에 거는 FK 락(FOR KEY SHARE)이
+    이 트랜잭션이 끝날 때까지 대기하게 되어 판정 시점과 삭제 시점 사이의 상태가 보장된다.
     """
     own_course_ids = (
         await db.execute(
-            select(Course.course_id).where(
-                Course.created_by == user_id, Course.course_type == CourseType.CUSTOM
-            )
+            select(Course.course_id)
+            .where(Course.created_by == user_id, Course.course_type == CourseType.CUSTOM)
+            .with_for_update()
         )
     ).scalars().all()
     if not own_course_ids:
@@ -857,8 +901,15 @@ async def _delete_orphaned_custom_courses(user_id: int, db: AsyncSession) -> lis
     ).scalars().all()
 
     await db.execute(delete(ReviewSummary).where(ReviewSummary.course_id.in_(orphan_course_ids)))
-    await db.execute(delete(Review).where(Review.course_id.in_(orphan_course_ids)))
-    await db.execute(delete(Record).where(Record.course_id.in_(orphan_course_ids)))
+    # course_id 조건만으로도 안전하지만(위 FOR UPDATE로 이미 보장됨), user_id 조건을
+    # 방어적으로 더해 둔다 — 판정 로직에 미래에 버그가 생겨도 조용히 남의 데이터를 지우는
+    # 대신 FK 위반으로 시끄럽게 실패하게 만들기 위함 (2026-09-11 리뷰 지적)
+    await db.execute(
+        delete(Review).where(Review.course_id.in_(orphan_course_ids), Review.user_id == user_id)
+    )
+    await db.execute(
+        delete(Record).where(Record.course_id.in_(orphan_course_ids), Record.user_id == user_id)
+    )
     await db.execute(delete(CourseImage).where(CourseImage.course_id.in_(orphan_course_ids)))
     await db.execute(
         delete(CourseWaypoint).where(CourseWaypoint.course_id.in_(orphan_course_ids))

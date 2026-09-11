@@ -9,6 +9,7 @@ import pytest
 import pytest_asyncio
 from fastapi import HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
+from redis.exceptions import RedisError
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
@@ -21,11 +22,13 @@ from app.core.security import (
     is_blacklisted,
     save_refresh_jti,
 )
-from app.domain.course.models import Course, CourseType
+from app.domain.course.models import Course, CourseImage, CourseType, CourseWaypoint
+from app.domain.facility.models import CourseFacility, Facility, FacilityType
 from app.domain.record.models import Record
-from app.domain.review.models import Review
+from app.domain.review.models import Review, ReviewImage, ReviewSummary
 from app.domain.user.models import ProviderType, SocialAccount, User
 from app.domain.user.service import (
+    _delete_orphaned_custom_courses,
     _touch_last_login,
     complete_signup,
     get_public_profile,
@@ -134,6 +137,123 @@ async def test_kakao_login_creates_new_user(db_session, ctx, redis_client):
 
     new_user = (await db_session.execute(select(User).where(User.user_id == user_id))).scalar_one()
     assert new_user.last_login_at is not None
+
+
+# 1-1. 닉네임 중복으로 가입 실패해도 signup_token은 소비되지 않아, 같은 토큰으로 다른
+# 닉네임을 넣어 재시도하면 성공한다 (2026-09-11 리뷰 지적 - 예전엔 실패해도 토큰이
+# 이미 지워진 뒤라 소셜 로그인부터 다시 해야 했음)
+async def test_complete_signup_allows_retry_after_duplicate_nickname(db_session, ctx, redis_client):
+    taken_nickname = uuid.uuid4().hex[:8]
+    existing = await _make_user(db_session, ctx)
+    existing.nickname = taken_nickname
+    await db_session.commit()
+
+    provider_uid = uuid.uuid4().hex
+    state = uuid.uuid4().hex
+    await redis_client.setex(f"oauth:state:kakao:{state}", 300, "1")
+    with patch("httpx.AsyncClient", return_value=_fake_kakao_client(provider_uid)):
+        login_result = await kakao_login(
+            code="fake-code", state=state, cookie_state=state, db=db_session, redis=redis_client
+        )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await complete_signup(
+            signup_token=login_result.signup_token,
+            agree_terms=True,
+            nickname=taken_nickname,
+            location="강원 속초시",
+            db=db_session,
+            redis=redis_client,
+        )
+    assert exc_info.value.status_code == 409
+
+    access_token, _ = await complete_signup(
+        signup_token=login_result.signup_token,
+        agree_terms=True,
+        nickname=uuid.uuid4().hex[:8],
+        location="강원 속초시",
+        db=db_session,
+        redis=redis_client,
+    )
+    ctx.user_ids.append(int(decode_token(access_token)["sub"]))
+
+
+# 1-2. 약관 미동의(agree_terms=False)로 실패해도 signup_token은 그대로 남아 재시도 가능
+async def test_complete_signup_rejects_missing_agreement_and_allows_retry(
+    db_session, ctx, redis_client
+):
+    provider_uid = uuid.uuid4().hex
+    state = uuid.uuid4().hex
+    await redis_client.setex(f"oauth:state:kakao:{state}", 300, "1")
+    with patch("httpx.AsyncClient", return_value=_fake_kakao_client(provider_uid)):
+        login_result = await kakao_login(
+            code="fake-code", state=state, cookie_state=state, db=db_session, redis=redis_client
+        )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await complete_signup(
+            signup_token=login_result.signup_token,
+            agree_terms=False,
+            nickname=uuid.uuid4().hex[:8],
+            location="강원 속초시",
+            db=db_session,
+            redis=redis_client,
+        )
+    assert exc_info.value.status_code == 400
+
+    access_token, _ = await complete_signup(
+        signup_token=login_result.signup_token,
+        agree_terms=True,
+        nickname=uuid.uuid4().hex[:8],
+        location="강원 속초시",
+        db=db_session,
+        redis=redis_client,
+    )
+    ctx.user_ids.append(int(decode_token(access_token)["sub"]))
+
+
+# 1-3. 존재하지 않거나 만료된 signup_token은 400
+async def test_complete_signup_rejects_unknown_token(db_session, redis_client):
+    with pytest.raises(HTTPException) as exc_info:
+        await complete_signup(
+            signup_token=uuid.uuid4().hex,
+            agree_terms=True,
+            nickname=uuid.uuid4().hex[:8],
+            location="강원 속초시",
+            db=db_session,
+            redis=redis_client,
+        )
+    assert exc_info.value.status_code == 400
+
+
+# 1-4. 같은 signup_token으로 처리 중인 요청이 이미 있으면(락 선점) 즉시 409로 막힘 -
+# get→delete가 원자적이지 않아 동시 요청이 같은 가입정보를 같이 읽는 경합을 막기 위한 락
+async def test_complete_signup_rejects_concurrent_duplicate_request(db_session, redis_client):
+    provider_uid = uuid.uuid4().hex
+    state = uuid.uuid4().hex
+    await redis_client.setex(f"oauth:state:kakao:{state}", 300, "1")
+    with patch("httpx.AsyncClient", return_value=_fake_kakao_client(provider_uid)):
+        login_result = await kakao_login(
+            code="fake-code", state=state, cookie_state=state, db=db_session, redis=redis_client
+        )
+
+    # 다른 요청이 이미 이 토큰을 처리 중인 상황을 흉내: 락을 미리 선점해둠
+    lock_key = f"signup_lock:{login_result.signup_token}"
+    await redis_client.set(lock_key, "1", nx=True, ex=30)
+
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            await complete_signup(
+                signup_token=login_result.signup_token,
+                agree_terms=True,
+                nickname=uuid.uuid4().hex[:8],
+                location="강원 속초시",
+                db=db_session,
+                redis=redis_client,
+            )
+        assert exc_info.value.status_code == 409
+    finally:
+        await redis_client.delete(lock_key)
 
 
 # 2. 같은 소셜 계정으로 재로그인 시 새 유저 안 만들고 기존 유저로 로그인
@@ -433,6 +553,119 @@ async def test_withdraw_user_hard_deletes_untouched_course(db_session, ctx, redi
     ).scalar_one_or_none() is None
 
 
+# 8-3. 이미 탈퇴해 user_id가 NULL인 다른 유저의 기록으로 얽힌 코스도 보존된다(하드삭제 안 됨)
+async def test_withdraw_user_preserves_course_entangled_by_withdrawn_other_user(
+    db_session, ctx, redis_client
+):
+    user = await _make_user(db_session, ctx)
+    course = Course(
+        course_type=CourseType.CUSTOM,
+        course_name=f"pytest-course-{uuid.uuid4().hex[:8]}",
+        created_by=user.user_id,
+    )
+    db_session.add(course)
+    await db_session.flush()
+    course_id = course.course_id
+    ctx.course_ids.append(course_id)
+
+    # user_id가 NULL인 기록 - 이미 탈퇴해 익명화된 "다른" 유저가 예전에 남긴 흔적을 흉내
+    db_session.add(
+        Record(
+            user_id=None,
+            course_id=course_id,
+            started_at=datetime.now(UTC),
+            ended_at=datetime.now(UTC),
+            is_completed=True,
+        )
+    )
+    await db_session.commit()
+
+    access_token = create_access_token(user.user_id)
+    await withdraw_user(user, access_token, db_session, redis_client)
+
+    refreshed_course = (
+        await db_session.execute(select(Course).where(Course.course_id == course_id))
+    ).scalar_one()
+    assert refreshed_course.created_by is None
+
+
+# 8-4. 하드삭제 시 코스 이미지/경유지/편의시설 매핑/리뷰 요약까지 전부 지워지고,
+# R2 정리용 반환값에 코스 이미지 + 리뷰 이미지 URL이 전부 포함된다
+async def test_delete_orphaned_custom_courses_removes_all_related_rows_and_returns_image_urls(
+    db_session, ctx
+):
+    user = await _make_user(db_session, ctx)
+    course = Course(
+        course_type=CourseType.CUSTOM,
+        course_name=f"pytest-course-{uuid.uuid4().hex[:8]}",
+        created_by=user.user_id,
+    )
+    db_session.add(course)
+    await db_session.flush()
+    course_id = course.course_id
+    ctx.course_ids.append(course_id)
+
+    course_image_url = f"https://example.com/course-{uuid.uuid4().hex[:8]}.jpg"
+    db_session.add(CourseWaypoint(course_id=course_id, sequence=0, latitude=1.0, longitude=1.0))
+    db_session.add(CourseImage(course_id=course_id, image_url=course_image_url))
+
+    facility = Facility(
+        facility_type=FacilityType.RESTROOM,
+        facility_name=f"pytest-facility-{uuid.uuid4().hex[:8]}",
+        latitude=1.0,
+        longitude=1.0,
+    )
+    db_session.add(facility)
+    await db_session.flush()
+    db_session.add(CourseFacility(course_id=course_id, facility_id=facility.facility_id))
+
+    review = Review(
+        user_id=user.user_id, course_id=course_id, content="본인 리뷰", difficulty="NORMAL"
+    )
+    db_session.add(review)
+    await db_session.flush()
+    review_image_url = f"https://example.com/review-{uuid.uuid4().hex[:8]}.jpg"
+    db_session.add(ReviewImage(review_id=review.review_id, image_url=review_image_url))
+    db_session.add(ReviewSummary(course_id=course_id, summary="요약", review_count=1))
+    await db_session.commit()
+
+    urls = await _delete_orphaned_custom_courses(user.user_id, db_session)
+    await db_session.commit()
+
+    assert set(urls) == {course_image_url, review_image_url}
+    assert (
+        await db_session.execute(select(Course).where(Course.course_id == course_id))
+    ).scalar_one_or_none() is None
+    assert (
+        await db_session.execute(
+            select(CourseWaypoint).where(CourseWaypoint.course_id == course_id)
+        )
+    ).scalar_one_or_none() is None
+    assert (
+        await db_session.execute(select(CourseImage).where(CourseImage.course_id == course_id))
+    ).scalar_one_or_none() is None
+    assert (
+        await db_session.execute(
+            select(CourseFacility).where(CourseFacility.course_id == course_id)
+        )
+    ).scalar_one_or_none() is None
+    assert (
+        await db_session.execute(
+            select(ReviewSummary).where(ReviewSummary.course_id == course_id)
+        )
+    ).scalar_one_or_none() is None
+
+    # facility 자체는 다른 코스와도 연결될 수 있는 공용 자원이라 삭제 대상이 아님
+    remaining_facility = (
+        await db_session.execute(
+            select(Facility).where(Facility.facility_id == facility.facility_id)
+        )
+    ).scalar_one()
+    assert remaining_facility is not None
+    await db_session.delete(remaining_facility)
+    await db_session.commit()
+
+
 # 9. 닉네임 형식 위반(특수문자) → 400
 async def test_update_profile_rejects_invalid_nickname(db_session, ctx):
     user = await _make_user(db_session, ctx)
@@ -564,3 +797,48 @@ async def test_get_public_profile_rejects_withdrawn_or_missing_user(db_session, 
     with pytest.raises(HTTPException) as exc_info:
         await get_public_profile(999_999_999, db_session)
     assert exc_info.value.status_code == 404
+
+
+# 16. 신규가입 가입정보 임시저장(Redis setex) 실패 시 503
+async def test_kakao_login_returns_503_on_redis_setex_failure(db_session, redis_client):
+    provider_uid = uuid.uuid4().hex
+    state = uuid.uuid4().hex
+    await redis_client.setex(f"oauth:state:kakao:{state}", 300, "1")
+
+    with (
+        patch("httpx.AsyncClient", return_value=_fake_kakao_client(provider_uid)),
+        patch.object(redis_client, "setex", side_effect=RedisError("boom")),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await kakao_login(
+                code="fake-code", state=state, cookie_state=state, db=db_session, redis=redis_client
+            )
+
+    assert exc_info.value.status_code == 503
+
+
+# 17. complete_signup에서 가입정보 조회(Redis get) 실패 시 503
+async def test_complete_signup_returns_503_on_redis_get_failure(db_session, redis_client):
+    provider_uid = uuid.uuid4().hex
+    state = uuid.uuid4().hex
+    await redis_client.setex(f"oauth:state:kakao:{state}", 300, "1")
+    with patch("httpx.AsyncClient", return_value=_fake_kakao_client(provider_uid)):
+        login_result = await kakao_login(
+            code="fake-code", state=state, cookie_state=state, db=db_session, redis=redis_client
+        )
+
+    try:
+        with patch.object(redis_client, "get", side_effect=RedisError("boom")):
+            with pytest.raises(HTTPException) as exc_info:
+                await complete_signup(
+                    signup_token=login_result.signup_token,
+                    agree_terms=True,
+                    nickname=uuid.uuid4().hex[:8],
+                    location="강원 속초시",
+                    db=db_session,
+                    redis=redis_client,
+                )
+        assert exc_info.value.status_code == 503
+    finally:
+        # 락은 finally에서 정상적으로 풀렸어야 하지만, 혹시 남아있으면 다음 테스트에 안 새게 정리
+        await redis_client.delete(f"signup_lock:{login_result.signup_token}")

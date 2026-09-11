@@ -21,12 +21,21 @@ const Onboarding = () => {
 
   // 신규 유저만 이 페이지에 signup_token을 들고 도착한다 (백엔드가 콜백에서 그렇게 리다이렉트함).
   // 이 값 없이는 계정을 만들 수 없으므로, 직접 URL로 들어온 경우 로그인부터 다시 시키기 위해 막는다.
-  const signupToken = new URLSearchParams(window.location.search).get('signup_token');
+  // 최초 렌더 시점에 한 번만 읽어 state로 옮겨 담는다 - 아래 effect가 URL에서 바로 지우므로,
+  // 이후 다시 읽으면 못 찾는다.
+  const [signupToken] = useState(
+    () => new URLSearchParams(window.location.search).get('signup_token')
+  );
 
   useEffect(() => {
     if (!signupToken) {
       navigate('/login', { replace: true });
+      return;
     }
+    // signup_token이 URL에 남아있으면 브라우저 히스토리/화면 공유/access log 등으로 새어나갈
+    // 수 있으니, state로 옮겨 담은 직후 바로 지운다 (2026-09-11 리뷰 지적 - 계정 생성 권한을
+    // 가진 1회용 토큰이 access_token/refresh_token과 달리 URL에 그대로 실려 있었음)
+    window.history.replaceState(null, '', '/onboarding');
   }, [signupToken, navigate]);
 
   const handleSubmit = async (event) => {

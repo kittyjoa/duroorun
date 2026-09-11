@@ -37,11 +37,20 @@ const UserProfile = () => {
     };
   }, []);
 
+  // 강제 탈퇴 요청이 응답을 기다리는 동안 다른 프로필로 이동했는지 판단하기 위한 기준값.
+  // userId는 handleForceWithdraw 안에서 캡처한 시점 값과 비교할 "현재" 값이 필요해서
+  // ref로 따로 들고 있는다(클로저로 캡처되는 값이 아니라 매 렌더 최신값을 봐야 함)
+  const currentUserIdRef = useRef(userId);
+  useEffect(() => {
+    currentUserIdRef.current = userId;
+  }, [userId]);
+
   // 보고 있던 프로필의 대상(userId)이 바뀌면, 이전 대상 기준으로 남아있던 강제 탈퇴
-  // 폼 상태(사유/에러/완료 표시)와 예약된 리다이렉트를 정리한다 — 안 그러면 A 탈퇴 처리
-  // 결과 메시지가 B 프로필로 이동한 뒤에도 남아있을 수 있음
+  // 폼 상태(사유/에러/완료 표시/처리중 표시)와 예약된 리다이렉트를 정리한다 — 안 그러면
+  // A 탈퇴 처리 결과 메시지가 B 프로필로 이동한 뒤에도 남아있을 수 있음
   useEffect(() => {
     setReason('');
+    setWithdrawing(false);
     setWithdrawError('');
     setWithdrawn(false);
     if (redirectTimeoutRef.current) {
@@ -117,13 +126,17 @@ const UserProfile = () => {
     }
     if (!window.confirm('정말 이 유저를 강제 탈퇴시키겠어요? 되돌릴 수 없어요.')) return;
 
+    // 요청 시작 시점의 대상을 고정 - 응답이 늦게 와서 그 사이 다른 프로필로 이동해도
+    // 그 프로필 화면에 이 요청의 결과(탈퇴 완료 메시지/리다이렉트)가 잘못 반영되지 않도록
+    const targetUserId = userId;
     setWithdrawing(true);
     setWithdrawError('');
     try {
-      const res = await apiFetch(`/v1/admin/users/${userId}`, {
+      const res = await apiFetch(`/v1/admin/users/${targetUserId}`, {
         method: 'DELETE',
         body: JSON.stringify({ reason }),
       });
+      if (currentUserIdRef.current !== targetUserId) return;
       if (!res.ok) {
         const data = await res.json().catch(() => null);
         setWithdrawError(data?.detail ?? '강제 탈퇴에 실패했어요');
@@ -132,10 +145,11 @@ const UserProfile = () => {
       setWithdrawn(true);
       redirectTimeoutRef.current = setTimeout(() => navigate('/admin'), WITHDRAW_REDIRECT_DELAY_MS);
     } catch (err) {
+      if (currentUserIdRef.current !== targetUserId) return;
       console.error('강제 탈퇴 실패:', err);
       setWithdrawError('서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.');
     } finally {
-      setWithdrawing(false);
+      if (currentUserIdRef.current === targetUserId) setWithdrawing(false);
     }
   };
 

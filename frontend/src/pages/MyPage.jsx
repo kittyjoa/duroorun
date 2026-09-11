@@ -59,6 +59,19 @@ const MyPage = () => {
   // loadingMoreReviews(state)는 리렌더 전까지 반영되지 않아, "더보기" 버튼이 disabled
   // 되기 전에 연달아 클릭되면 중복 요청이 나갈 수 있다 - ref로 클릭 시점에 즉시 막는다
   const loadingMoreReviewsRef = useRef(false);
+  // 더보기(fetchMyReviews append)와 삭제 후 재조회(reloadMyReviews)는 둘 다 myReviews를
+  // 직접 교체·병합한다 - 동시에 실행되면 reviewsRequestIdRef 하나로는 늦게 시작한 쪽이
+  // 먼저 시작한 쪽을 무조건 stale 처리해버려서, 더보기 버튼이 영영 안 풀리는 문제가 생긴다
+  // (리뷰 지적). RecordHistory.jsx와 동일하게 큐에 넣어 항상 하나씩 순서대로만 실행한다.
+  const listOpQueueRef = useRef(Promise.resolve());
+  const runListOpExclusive = (op) => {
+    const run = listOpQueueRef.current.then(op, op);
+    listOpQueueRef.current = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  };
 
   // 모달을 열 때마다 이전 세션의 리뷰 목록 상태를 처음으로 되돌린다
   const resetReviewsState = () => {
@@ -188,52 +201,56 @@ const MyPage = () => {
     // 다음 페이지만 이어붙이므로, 어긋난 상태 위에서 진행하면 리뷰가 하나 조용히
     // 누락될 수 있다)
     if (staleReviewIds.size > 0) return;
-    fetchMyReviews(reviewsPageRef.current + 1, { append: true });
+    runListOpExclusive(() => fetchMyReviews(reviewsPageRef.current + 1, { append: true }));
   };
 
   // 리뷰 삭제 후 전용 재조회 - RecordHistory.jsx의 reloadRecords와 동일한 이유로 로컬에서
   // 항목만 지우지 않는다: 그러면 이후 "더보기"가 요청하는 offset이 한 칸씩 밀려서 다른
   // 리뷰가 누락될 수 있다. 백엔드 size 상한(le=100)을 넘지 않게 더보기와 같은 size(20)로
   // 나눠서 지금까지 불러온 만큼 다시 병렬 조회한다.
-  const reloadMyReviews = async () => {
-    const requestId = ++reviewsRequestIdRef.current;
-    const isStale = () => reviewsUnmountedRef.current || reviewsRequestIdRef.current !== requestId;
-    const pagesToRefetch = Math.max(
-      Math.ceil(myReviewsRef.current.length / REVIEW_PAGE_SIZE),
-      1,
-    );
-    try {
-      const responses = await Promise.all(
-        Array.from({ length: pagesToRefetch }, (_, i) =>
-          apiFetch(`/v1/reviews/mine?page=${i + 1}&size=${REVIEW_PAGE_SIZE}`),
-        ),
-      );
-      if (isStale()) return true;
-      if (responses.some((res) => !res.ok)) return false;
-      const datas = await Promise.all(responses.map((res) => res.json()));
-      if (isStale()) return true;
+  const reloadMyReviews = () =>
+    runListOpExclusive(async () => {
+      const requestId = ++reviewsRequestIdRef.current;
+      const isStale = () =>
+        reviewsUnmountedRef.current || reviewsRequestIdRef.current !== requestId;
+      // myReviewsRef.current.length(고유 항목 수)가 아니라 reviewsPageRef(실제로 요청
+      // 성공한 페이지 수)를 기준으로 삼는다 - RecordHistory.jsx의 reloadRecords와 동일한
+      // 이유(리뷰 지적): 더보기로 불러온 페이지들 사이에 중복이 섞이면 고유 항목 수가
+      // 실제 요청 페이지 수보다 작아질 수 있고, 그러면 필요한 것보다 적은 페이지만
+      // 재조회해서 삭제 직후 화면에 있던 리뷰가 순간적으로 사라지는 문제가 생긴다
+      const pagesToRefetch = Math.max(reviewsPageRef.current, 1);
+      try {
+        const responses = await Promise.all(
+          Array.from({ length: pagesToRefetch }, (_, i) =>
+            apiFetch(`/v1/reviews/mine?page=${i + 1}&size=${REVIEW_PAGE_SIZE}`),
+          ),
+        );
+        if (isStale()) return true;
+        if (responses.some((res) => !res.ok)) return false;
+        const datas = await Promise.all(responses.map((res) => res.json()));
+        if (isStale()) return true;
 
-      const collectedIds = new Set();
-      const collected = [];
-      for (const data of datas) {
-        for (const review of data.items) {
-          if (collectedIds.has(review.review_id)) continue;
-          collectedIds.add(review.review_id);
-          collected.push(review);
+        const collectedIds = new Set();
+        const collected = [];
+        for (const data of datas) {
+          for (const review of data.items) {
+            if (collectedIds.has(review.review_id)) continue;
+            collectedIds.add(review.review_id);
+            collected.push(review);
+          }
         }
-      }
-      const latestTotal = datas.at(-1)?.total ?? 0;
+        const latestTotal = datas.at(-1)?.total ?? 0;
 
-      myReviewsRef.current = collected;
-      setMyReviews(collected);
-      setStaleReviewIds(new Set());
-      setReviewsTotal(latestTotal);
-      reviewsPageRef.current = pagesToRefetch;
-      return true;
-    } catch {
-      return isStale();
-    }
-  };
+        myReviewsRef.current = collected;
+        setMyReviews(collected);
+        setStaleReviewIds(new Set());
+        setReviewsTotal(latestTotal);
+        reviewsPageRef.current = pagesToRefetch;
+        return true;
+      } catch {
+        return isStale();
+      }
+    });
 
   const handleDeleteReview = async (reviewId) => {
     if (!window.confirm('정말 이 리뷰를 삭제하시겠어요?')) return;

@@ -300,3 +300,39 @@ async def test_get_my_record_stats_zero_when_no_completed_records(db_session):
     finally:
         await db_session.execute(delete(User).where(User.user_id == user.user_id))
         await db_session.commit()
+
+
+async def test_get_my_record_stats_route_not_shadowed_by_record_id(db_session):
+    """GET /records/stats가 /records/{record_id}(record_id: int)에 먼저 걸려서 "stats"를
+    int로 파싱하려다 422가 나지 않는지 확인한다 - get_my_record_stats 서비스 함수만
+    직접 호출하는 위 테스트들은 라우터의 등록 순서 자체를 검증하지 못하므로(리뷰 지적),
+    test_get_records_size_upper_bound와 동일하게 실제 ASGI 앱에 요청을 보내야 한다.
+    """
+    user = User(nickname=f"pytest-user-{uuid.uuid4().hex[:12]}")
+    db_session.add(user)
+    await db_session.commit()
+    await db_session.refresh(user)
+    token = create_access_token(user.user_id)
+
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            headers = {"Authorization": f"Bearer {token}"}
+            res = await client.get("/api/v1/records/stats", headers=headers)
+            assert res.status_code == 200
+            body = res.json()
+            assert body == {"total_distance_km": 0, "total_completions": 0}
+    finally:
+        await close_redis()
+        await db_session.execute(delete(User).where(User.user_id == user.user_id))
+        await db_session.commit()
+
+
+async def test_get_my_record_stats_rejects_unauthenticated():
+    """test_delete_record_rejects_unauthenticated와 동일한 패턴 - 인증 의존성이 실수로
+    빠지는 걸 잡기 위한 HTTP 레벨 테스트(리뷰 지적)."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.get("/api/v1/records/stats")
+
+    assert res.status_code == 401

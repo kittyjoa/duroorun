@@ -183,12 +183,19 @@ const RecordHistory = () => {
 
   // 누적 통계는 목록과 별개 엔드포인트라 실패해도 목록 자체엔 영향 없게 조용히 무시한다
   // (요약 정보일 뿐이지 핵심 기능이 아니므로 에러 UI를 따로 두지 않는다)
+  // unmountedRef만으로는 요청 순서를 구분 못한다 - 마운트 시 조회가 지연되는 동안 삭제
+  // 후 재조회가 먼저 끝나버리면, 나중에 도착한 마운트 시점 응답(오래된 수치)이 최신 응답을
+  // 덮어쓸 수 있다(리뷰 지적). requestRecordsRef 등과 동일한 패턴으로 요청 번호를 매겨
+  // 가장 최근 요청의 응답만 반영한다.
+  const statsRequestIdRef = useRef(0);
   const fetchStats = async () => {
+    const requestId = ++statsRequestIdRef.current;
+    const isStale = () => unmountedRef.current || statsRequestIdRef.current !== requestId;
     try {
       const res = await apiFetch('/v1/records/stats');
-      if (unmountedRef.current || !res.ok) return;
+      if (isStale() || !res.ok) return;
       const data = await res.json();
-      if (unmountedRef.current) return;
+      if (isStale()) return;
       setStats(data);
     } catch {
       // 통계 조회 실패는 조용히 무시
@@ -229,7 +236,12 @@ const RecordHistory = () => {
     runListOpExclusive(async () => {
       const requestId = ++requestIdRef.current;
       const isStale = () => unmountedRef.current || requestIdRef.current !== requestId;
-      const pagesToRefetch = Math.max(Math.ceil(recordsRef.current.length / RECORD_PAGE_SIZE), 1);
+      // recordsRef.current.length(고유 항목 수)가 아니라 lastFetchedPageRef(실제로 요청
+      // 성공한 페이지 수)를 기준으로 삼는다 - 다른 탭에서 새 기록이 여러 번 생겨 더보기로
+      // 불러온 페이지들 사이에 중복이 섞이면 고유 항목 수가 실제 요청 페이지 수보다 작아질
+      // 수 있고, 그러면 필요한 것보다 적은 페이지만 재조회해서 삭제 직후 화면에 있던
+      // 기록이 순간적으로 사라지는 문제가 생긴다(리뷰 지적) - handleLoadMore와 동일한 이유
+      const pagesToRefetch = Math.max(lastFetchedPageRef.current, 1);
       try {
         const responses = await Promise.all(
           Array.from({ length: pagesToRefetch }, (_, i) =>

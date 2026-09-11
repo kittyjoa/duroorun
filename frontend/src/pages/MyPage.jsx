@@ -38,8 +38,16 @@ const MyPage = () => {
   const [reviewsTotal, setReviewsTotal] = useState(0);
   const [loadingMoreReviews, setLoadingMoreReviews] = useState(false);
   const [loadMoreReviewsError, setLoadMoreReviewsError] = useState('');
+  // 삭제 진행 중인 리뷰 id들 - RecordHistory.jsx의 deletingIds와 동일하게 Set으로 둬서
+  // 여러 리뷰를 연달아 삭제해도 각자 독립적으로 버튼 비활성화 상태를 관리한다.
+  const [deletingReviewIds, setDeletingReviewIds] = useState(() => new Set());
+  const [reviewDeleteError, setReviewDeleteError] = useState('');
   // 화면에 렌더링되지 않는 값이라 state 대신 ref로 둔다 (불필요한 리렌더 방지)
   const reviewsPageRef = useRef(1);
+  // reloadMyReviews가 삭제 직후(setMyReviews 반영 전) 최신 개수를 동기적으로 읽을 수
+  // 있도록 미러링한다 - RecordHistory.jsx의 recordsRef와 동일한 이유(setRecords의
+  // updater는 렌더링 단계에서 나중에 실행되므로, 호출하는 자리에서 직접 갱신해야 한다)
+  const myReviewsRef = useRef(myReviews);
   // 모달이 닫힌 뒤 도착하는 응답이 setState를 시도하지 않도록 막는다
   const reviewsUnmountedRef = useRef(false);
   // 모달을 여러 번 열고 닫을 때, 먼저 시작된 요청의 응답이 늦게 도착해도 최신 요청만 반영한다
@@ -53,7 +61,9 @@ const MyPage = () => {
     setLoadingMoreReviews(false);
     loadingMoreReviewsRef.current = false;
     setLoadMoreReviewsError('');
+    setReviewDeleteError('');
     setMyReviews([]);
+    myReviewsRef.current = [];
     setReviewsTotal(0);
     reviewsPageRef.current = 1;
   };
@@ -123,13 +133,18 @@ const MyPage = () => {
       }
       const data = await res.json();
       if (isStale()) return;
-      setMyReviews((prev) => {
-        if (!append) return data.items;
+      // myReviewsRef.current를 prev로 쓴다 - setMyReviews(updaterFn)의 updater는 렌더링
+      // 단계에서 나중에 실행되므로, 여기서 곧바로 동기적으로 반영해야 삭제 직후 이어지는
+      // reloadMyReviews가 최신 개수를 즉시 읽을 수 있다(RecordHistory.jsx와 동일한 이유)
+      let next = data.items;
+      if (append) {
         // page 기반 페이지네이션은 그 사이 리뷰가 삭제되면 경계에서 겹칠 수 있다 -
         // review_id 기준으로 걸러서 중복 렌더링을 막는다
-        const existingIds = new Set(prev.map((r) => r.review_id));
-        return [...prev, ...data.items.filter((r) => !existingIds.has(r.review_id))];
-      });
+        const existingIds = new Set(myReviewsRef.current.map((r) => r.review_id));
+        next = [...myReviewsRef.current, ...data.items.filter((r) => !existingIds.has(r.review_id))];
+      }
+      myReviewsRef.current = next;
+      setMyReviews(next);
       reviewsPageRef.current = data.page;
       setReviewsTotal(data.total);
     } catch {
@@ -163,6 +178,76 @@ const MyPage = () => {
 
   const handleLoadMoreReviews = () => {
     fetchMyReviews(reviewsPageRef.current + 1, { append: true });
+  };
+
+  // 리뷰 삭제 후 전용 재조회 - RecordHistory.jsx의 reloadRecords와 동일한 이유로 로컬에서
+  // 항목만 지우지 않는다: 그러면 이후 "더보기"가 요청하는 offset이 한 칸씩 밀려서 다른
+  // 리뷰가 누락될 수 있다. 백엔드 size 상한(le=100)을 넘지 않게 더보기와 같은 size(20)로
+  // 나눠서 지금까지 불러온 만큼 다시 병렬 조회한다.
+  const reloadMyReviews = async () => {
+    const requestId = ++reviewsRequestIdRef.current;
+    const isStale = () => reviewsUnmountedRef.current || reviewsRequestIdRef.current !== requestId;
+    const pagesToRefetch = Math.max(
+      Math.ceil(myReviewsRef.current.length / REVIEW_PAGE_SIZE),
+      1,
+    );
+    try {
+      const responses = await Promise.all(
+        Array.from({ length: pagesToRefetch }, (_, i) =>
+          apiFetch(`/v1/reviews/mine?page=${i + 1}&size=${REVIEW_PAGE_SIZE}`),
+        ),
+      );
+      if (isStale()) return true;
+      if (responses.some((res) => !res.ok)) return false;
+      const datas = await Promise.all(responses.map((res) => res.json()));
+      if (isStale()) return true;
+
+      const collectedIds = new Set();
+      const collected = [];
+      for (const data of datas) {
+        for (const review of data.items) {
+          if (collectedIds.has(review.review_id)) continue;
+          collectedIds.add(review.review_id);
+          collected.push(review);
+        }
+      }
+      const latestTotal = datas.at(-1)?.total ?? 0;
+
+      myReviewsRef.current = collected;
+      setMyReviews(collected);
+      setReviewsTotal(latestTotal);
+      reviewsPageRef.current = pagesToRefetch;
+      return true;
+    } catch {
+      return isStale();
+    }
+  };
+
+  const handleDeleteReview = async (reviewId) => {
+    if (!window.confirm('정말 이 리뷰를 삭제하시겠어요?')) return;
+    setReviewDeleteError('');
+    setDeletingReviewIds((prev) => new Set(prev).add(reviewId));
+    try {
+      const res = await apiFetch(`/v1/reviews/${reviewId}`, { method: 'DELETE' });
+      if (!res.ok) {
+        setReviewDeleteError('리뷰 삭제에 실패했어요.');
+        return;
+      }
+      const reloaded = await reloadMyReviews();
+      if (!reloaded) {
+        setReviewDeleteError(
+          '삭제는 됐지만 목록을 새로고침하지 못했어요. 모달을 닫았다가 다시 열어주세요.',
+        );
+      }
+    } catch {
+      setReviewDeleteError('서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.');
+    } finally {
+      setDeletingReviewIds((prev) => {
+        const next = new Set(prev);
+        next.delete(reviewId);
+        return next;
+      });
+    }
   };
 
   const handleSubmit = async (event) => {
@@ -404,6 +489,8 @@ const MyPage = () => {
 
             {reviewsLoading && <p className="course-list-status">불러오는 중...</p>}
             {reviewsError && <p className="course-list-status error">{reviewsError}</p>}
+            {/* 목록 조회 에러와 분리 - 삭제 실패가 이미 불러온 목록을 숨기면 안 됨 */}
+            {reviewDeleteError && <p className="course-list-status error">{reviewDeleteError}</p>}
 
             {!reviewsLoading && !reviewsError && myReviews.length === 0 && (
               <p className="course-list-status">아직 작성한 리뷰가 없어요.</p>
@@ -411,29 +498,58 @@ const MyPage = () => {
 
             {!reviewsLoading && !reviewsError && myReviews.length > 0 && (
               <ul className="review-list">
-                {myReviews.map((review) => (
-                  <li key={review.review_id} className="review-item">
-                    {/* 수정/삭제는 코스 상세에서 하므로 여기서는 이동 링크만 제공 */}
-                    <Link
-                      className="text-button"
-                      to={`/courses/${review.course_type.toLowerCase()}/${review.course_id}`}
-                      onClick={() => setIsReviewOpen(false)}
-                    >
-                      {review.course_name}
-                    </Link>
-                    <div className="review-item-header">
-                      <span
-                        className={`review-difficulty-badge ${DIFFICULTY_COLOR[review.difficulty] ?? ''}`}
+                {myReviews.map((review) =>
+                  review.course_is_active ? (
+                    <li key={review.review_id} className="review-item">
+                      {/* 코스가 살아있으면 수정/삭제는 코스 상세에서 하므로 이동 링크만 제공 */}
+                      <Link
+                        className="text-button"
+                        to={`/courses/${review.course_type.toLowerCase()}/${review.course_id}`}
+                        onClick={() => setIsReviewOpen(false)}
                       >
-                        {DIFFICULTY_LABEL[review.difficulty]}
+                        {review.course_name}
+                      </Link>
+                      <div className="review-item-header">
+                        <span
+                          className={`review-difficulty-badge ${DIFFICULTY_COLOR[review.difficulty] ?? ''}`}
+                        >
+                          {DIFFICULTY_LABEL[review.difficulty]}
+                        </span>
+                        <span className="record-hint">
+                          {new Date(review.created_at).toLocaleDateString('ko-KR')}
+                        </span>
+                      </div>
+                      <p className="review-item-content">{review.content}</p>
+                    </li>
+                  ) : (
+                    <li key={review.review_id} className="review-item">
+                      {/* 코스가 삭제(비활성화)되면 코스 상세 API가 404라 그쪽 수정/삭제
+                          버튼에 닿을 수 없다 - 여기서 직접 지울 수 있게 한다(리뷰 지적) */}
+                      <span className="text-button" aria-disabled="true">
+                        {review.course_name} (삭제된 코스)
                       </span>
-                      <span className="record-hint">
-                        {new Date(review.created_at).toLocaleDateString('ko-KR')}
-                      </span>
-                    </div>
-                    <p className="review-item-content">{review.content}</p>
-                  </li>
-                ))}
+                      <div className="review-item-header">
+                        <span
+                          className={`review-difficulty-badge ${DIFFICULTY_COLOR[review.difficulty] ?? ''}`}
+                        >
+                          {DIFFICULTY_LABEL[review.difficulty]}
+                        </span>
+                        <span className="record-hint">
+                          {new Date(review.created_at).toLocaleDateString('ko-KR')}
+                        </span>
+                      </div>
+                      <p className="review-item-content">{review.content}</p>
+                      <button
+                        type="button"
+                        className="record-history-delete"
+                        onClick={() => handleDeleteReview(review.review_id)}
+                        disabled={deletingReviewIds.has(review.review_id)}
+                      >
+                        {deletingReviewIds.has(review.review_id) ? '삭제 중...' : '삭제'}
+                      </button>
+                    </li>
+                  ),
+                )}
               </ul>
             )}
 

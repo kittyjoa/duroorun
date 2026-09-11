@@ -75,6 +75,10 @@ class MyReviewResponse(BaseModel):
     course_name: str
     # 프론트가 코스 상세 URL(/courses/{course_type}/{course_id})을 만들 수 있도록 포함
     course_type: CourseType
+    # 코스가 삭제(소프트 삭제)되면 코스 상세 API가 404를 반환해서 그쪽 경로의 수정/삭제
+    # 버튼에 닿을 수 없다 - 프론트가 이걸로 "삭제된 코스" 표시 + 모달 내 직접 삭제를
+    # 판단한다(리뷰 지적)
+    course_is_active: bool
     content: str
     difficulty: Difficulty
     created_at: datetime

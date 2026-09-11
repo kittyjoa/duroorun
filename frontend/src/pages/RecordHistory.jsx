@@ -19,7 +19,6 @@ const RecordHistory = () => {
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [loadingMore, setLoadingMore] = useState(false);
   // "더보기" 실패는 error(초기 로딩 에러)와 분리한다 - error를 같이 쓰면 render 조건이
@@ -66,6 +65,12 @@ const RecordHistory = () => {
   // 반면 큐는 Promise 체이닝(마이크로태스크)이라 다음 작업이 더 먼저 시작돼버려서 값이
   // 갱신되기 전일 수 있다 - setRecords를 호출하는 자리에서 직접 동기적으로 같이 갱신한다
   const recordsRef = useRef(records);
+  // "다음 더보기가 요청할 서버 페이지"를 화면에 남은 고유 항목 수(recordsRef.current.length)
+  // 로 역산하면 안 된다 - 다른 탭의 변경으로 응답의 항목이 기존 목록과 전부(또는 일부)
+  // 중복돼 dedup으로 걸러지면, 고유 항목 수가 늘지 않아 같은 페이지를 반복 요청하게 된다
+  // (리뷰 지적). 실제로 요청에 성공한 서버 페이지 번호를 이 ref에 직접 기록해서, 항목 수와
+  // 무관하게 "다음엔 몇 페이지를 요청해야 하는지"를 별도로 관리한다.
+  const lastFetchedPageRef = useRef(0);
 
   const fetchRecords = async (targetPage = 1, { append = false } = {}) => {
     const requestId = ++requestIdRef.current;
@@ -109,6 +114,10 @@ const RecordHistory = () => {
       }
       recordsRef.current = next;
       setRecords(next);
+      // 이 요청이 실제로 요청한 페이지(targetPage) 번호를 그대로 기록한다 - 응답 항목이
+      // 기존 목록과 겹쳐 dedup으로 전부/일부 걸러져도, "이 페이지는 이미 조회했다"는 사실은
+      // 변하지 않으므로 항목 수가 아니라 targetPage 자체를 신뢰한다(리뷰 지적)
+      lastFetchedPageRef.current = targetPage;
       // append(더보기)는 다음 페이지만 새로 받아올 뿐, 이미 화면에 있던(그중 "새로고침
       // 필요" 상태인 유령 기록 포함) 항목은 이 요청으로 전혀 재확인되지 않는다 - 여기서
       // 지우면 재검증 없이 방어가 풀려버린다(리뷰 지적). 전체를 새로 받아오는 첫 페이지
@@ -116,11 +125,6 @@ const RecordHistory = () => {
       if (!append) {
         setStaleRecordIds(new Set());
       }
-      // data.page(요청한 페이지 번호)를 그대로 믿지 않는다 - 삭제 후 재조회 뒤에 큐에
-      // 남아있던 더보기 요청이 빈 페이지를 받아도 백엔드는 요청받은 page 번호를 그대로
-      // 돌려주므로, 실제로 로드된 개수 기준으로 역산해야 다음 더보기 위치가 안 어긋난다
-      // (reloadRecords와 동일한 방식, 리뷰 지적)
-      setPage(Math.max(Math.ceil(next.length / RECORD_PAGE_SIZE), 1));
       setTotal(data.total);
     } catch {
       if (!isStale()) {
@@ -175,23 +179,34 @@ const RecordHistory = () => {
 
   const handleLoadMore = () => {
     if (loadingMoreRef.current) return;
+    // 목록에 "새로고침 필요"(재조회 실패로 서버와 어긋난) 기록이 남아있으면 더보기를
+    // 막는다 - 더보기는 기존 목록을 재검증하지 않고 다음 페이지만 이어붙이므로, 어긋난
+    // 상태 위에서 진행하면 삭제로 밀린 offset 때문에 기록이 하나 조용히 누락될 수 있다
+    // (리뷰 지적). 전체 재조회(reloadRecords)가 성공해서 staleRecordIds가 비워질 때까지
+    // 기다려야 한다.
+    if (staleRecordIds.size > 0) return;
     loadingMoreRef.current = true;
     // 큐에서 대기하는 동안(삭제 후 재조회가 앞에 있는 경우)에도 버튼이 바로 비활성화되고
     // "불러오는 중..."으로 보이도록, fetchRecords가 실제로 시작되기 전에 미리 켜둔다
     setLoadingMore(true);
     setLoadMoreError('');
-    runListOpExclusive(() => fetchRecords(page + 1, { append: true }));
+    // page(state)나 화면 항목 수를 클릭 시점에 미리 캡처해서 넘기지 않는다 - 앞에 대기
+    // 중인 reloadRecords가 먼저 끝나면 그 사이 값이 달라진다. lastFetchedPageRef는 실제로
+    // 요청에 성공한 서버 페이지 번호만 담고 있어 화면 항목 수(dedup으로 줄어들 수 있는
+    // 값)와 무관하게 신뢰할 수 있다(리뷰 지적) - 실행 시점(큐 대기 후)에 읽는다.
+    runListOpExclusive(() => fetchRecords(lastFetchedPageRef.current + 1, { append: true }));
   };
 
   // 삭제 후 재조회 전용 - fetchRecords(1)을 그대로 쓰면 loading을 true로 바꿔 목록이
   // 잠깐 사라진다. MyCourses.jsx(usePaginatedCourses.reload)와 동일하게 loading은
   // 건드리지 않는다. 예전엔 지금까지 불러온 개수만큼 size를 한 번에 늘려서 요청했는데,
   // 백엔드가 size<=100으로 막아놔서 100개 넘게 불러온 뒤 삭제하면 목록이 100개로
-  // 잘리면서 page는 그대로라 다음 "더보기"가 잘려나간 구간을 건너뛰는 문제가 있었다
-  // (리뷰 지적). 매 요청을 더보기와 똑같은 size(20)로 나눠서 필요한 페이지 수만큼
-  // 조회하고, 실제로 받아온 개수 기준으로 page를 다시 계산해 다음 더보기가 정확한
-  // 위치를 요청하게 한다. 순차(await 체인)로 하면 페이지 수만큼 왕복시간이 쌓여
-  // 기록이 많은 유저일수록 삭제할 때 체감 지연이 길어지므로(리뷰 지적) 병렬로 요청한다.
+  // 잘리면서 다음 "더보기"가 잘려나간 구간을 건너뛰는 문제가 있었다(리뷰 지적). 매
+  // 요청을 더보기와 똑같은 size(20)로 나눠서 필요한 페이지 수만큼 조회한다 - 다음
+  // 더보기는 lastFetchedPageRef(실제로 요청한 페이지 번호) 기준으로 위치를 계산하므로
+  // (handleLoadMore 참고) 여기서도 pagesToRefetch를 그대로 기록해두기만 하면 된다. 순차
+  // (await 체인)로 하면 페이지 수만큼 왕복시간이 쌓여 기록이 많은 유저일수록 삭제할 때
+  // 체감 지연이 길어지므로(리뷰 지적) 병렬로 요청한다.
   const reloadRecords = () =>
     runListOpExclusive(async () => {
       const requestId = ++requestIdRef.current;
@@ -225,9 +240,11 @@ const RecordHistory = () => {
 
         recordsRef.current = collected;
         setRecords(collected);
+        // pagesToRefetch개 페이지를 실제로 다 요청했으므로, 그 개수와 무관하게(dedup으로
+        // 고유 항목이 줄었어도) 다음 더보기는 그 다음 페이지부터 시작해야 한다(리뷰 지적)
+        lastFetchedPageRef.current = pagesToRefetch;
         setStaleRecordIds(new Set());
         setTotal(latestTotal);
-        setPage(Math.max(Math.ceil(collected.length / RECORD_PAGE_SIZE), 1));
         return true;
       } catch {
         return isStale();
@@ -241,8 +258,15 @@ const RecordHistory = () => {
     try {
       const res = await apiFetch(`/v1/records/${recordId}`, { method: 'DELETE' });
       if (!res.ok) {
-        // 진행 중인 기록 삭제 시도(409)는 이유가 명확하니 구분해서 보여준다(리뷰 지적) -
-        // 그 외(403/404 등)는 UI상 발생하기 어려운 경우들이라 뭉뚱그려도 무방
+        // 다른 탭/기기에서 이미 이 기록을 지웠으면 404가 온다 - "이 PR 전체의 동기"인
+        // 다른 탭과의 충돌 시나리오에서 오히려 흔하게 생길 수 있는 경우라, 이미 삭제된
+        // 것으로 간주해 staleRecordIds에 추가한다(재시도해도 404만 반복되는 걸 막음).
+        // 진행 중인 기록 삭제 시도(409)는 이유가 명확하니 구분해서 보여준다(리뷰 지적)
+        if (res.status === 404) {
+          setDeleteError('이미 삭제된 기록이에요. 목록을 새로고침 해주세요.');
+          setStaleRecordIds((prev) => new Set(prev).add(recordId));
+          return;
+        }
         const message =
           res.status === 409 ? '진행 중인 기록은 삭제할 수 없어요.' : '삭제에 실패했어요.';
         setDeleteError(message);
@@ -334,9 +358,13 @@ const RecordHistory = () => {
             type="button"
             className="text-button review-load-more"
             onClick={handleLoadMore}
-            disabled={loadingMore}
+            disabled={loadingMore || staleRecordIds.size > 0}
           >
-            {loadingMore ? '불러오는 중...' : '기록 더보기'}
+            {loadingMore
+              ? '불러오는 중...'
+              : staleRecordIds.size > 0
+                ? '새로고침 필요'
+                : '기록 더보기'}
           </button>
         )}
 

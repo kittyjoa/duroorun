@@ -8,9 +8,9 @@ from sqlalchemy import delete, select
 from app.domain.course.models import Course, CourseType
 from app.domain.record.models import Record
 from app.domain.review.models import Review, ReviewImage
-from app.domain.review.service import get_my_reviews
-from app.domain.user.models import User
-from tests.conftest import add_completed_reviews
+from app.domain.review.service import delete_review, get_my_reviews
+from app.domain.user.models import User, UserRole
+from tests.conftest import FakeBackgroundTasks, add_completed_reviews
 
 
 async def test_get_my_reviews_includes_course_name_type_and_images(db_session, review_test_course):
@@ -35,6 +35,7 @@ async def test_get_my_reviews_includes_course_name_type_and_images(db_session, r
     assert item.course_id == review_test_course.course_id
     assert item.course_name
     assert item.course_type == CourseType.CUSTOM
+    assert item.course_is_active is True
     assert len(item.images) == 1
     assert item.images[0].image_url == "https://example.com/a.jpg"
 
@@ -155,5 +156,72 @@ async def test_get_my_reviews_pagination_does_not_overlap(db_session):
             await db_session.execute(delete(Review).where(Review.review_id == review.review_id))
         for course in courses:
             await db_session.execute(delete(Course).where(Course.course_id == course.course_id))
+        await db_session.execute(delete(User).where(User.user_id == owner.user_id))
+        await db_session.commit()
+
+
+async def test_review_survives_and_is_deletable_after_course_deactivated(db_session):
+    """리뷰 작성 → 코스 비활성화 → 내 리뷰 조회 및 삭제 시나리오.
+
+    코스가 삭제(소프트 삭제, is_active=False)돼도 그 코스에 쓴 리뷰는 목록에서 사라지지
+    않고 여전히 보여야 하며(코스 상세 페이지로는 더 이상 못 가더라도, 모달에서 직접 삭제할
+    수 있도록) course_is_active로 그 상태를 구분할 수 있어야 한다. 삭제 자체도 코스가
+    비활성이라는 이유로 막히면 안 된다(리뷰 지적).
+    """
+    owner = User(nickname=f"pytest-owner-{uuid.uuid4().hex[:12]}")
+    db_session.add(owner)
+    await db_session.flush()
+
+    course = Course(
+        course_type=CourseType.CUSTOM,
+        course_name=f"pytest-course-{uuid.uuid4().hex[:8]}",
+        created_by=owner.user_id,
+        distance=5.0,
+        difficulty="NORMAL",
+        estimated_time=60,
+        start_lat=37.75,
+        start_lng=128.9,
+        end_lat=37.76,
+        end_lng=128.91,
+    )
+    db_session.add(course)
+    await db_session.flush()
+
+    review = Review(
+        user_id=owner.user_id,
+        course_id=course.course_id,
+        content=f"pytest 리뷰 {uuid.uuid4().hex[:8]}",
+        difficulty="NORMAL",
+    )
+    db_session.add(review)
+    await db_session.commit()
+    await db_session.refresh(review)
+
+    try:
+        # 코스 비활성화(소프트 삭제) - delete_course와 동일한 효과
+        course.is_active = False
+        await db_session.commit()
+
+        result = await get_my_reviews(session=db_session, user_id=owner.user_id, page=1, size=20)
+        assert result.total == 1
+        assert result.items[0].review_id == review.review_id
+        assert result.items[0].course_is_active is False
+
+        # 코스가 비활성이어도 본인 리뷰 삭제는 막히지 않아야 한다
+        await delete_review(
+            session=db_session,
+            user_id=owner.user_id,
+            review_id=review.review_id,
+            user_role=UserRole.USER,
+            background_tasks=FakeBackgroundTasks(),
+        )
+
+        remaining = await db_session.scalar(
+            select(Review).where(Review.review_id == review.review_id)
+        )
+        assert remaining is None
+    finally:
+        await db_session.execute(delete(Review).where(Review.course_id == course.course_id))
+        await db_session.execute(delete(Course).where(Course.course_id == course.course_id))
         await db_session.execute(delete(User).where(User.user_id == owner.user_id))
         await db_session.commit()

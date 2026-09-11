@@ -588,7 +588,7 @@ async def get_my_reviews(
     total_result = await session.execute(select(func.count()).select_from(Review).where(*filters))
     total = total_result.scalar_one()
     result = await session.execute(
-        select(Review, Course.course_name, Course.course_type)
+        select(Review, Course.course_name, Course.course_type, Course.is_active)
         .join(Course, Course.course_id == Review.course_id)
         .where(*filters)
         .order_by(Review.created_at.desc(), Review.review_id.desc())
@@ -596,10 +596,11 @@ async def get_my_reviews(
         .limit(size)
     )
     items = []
-    for review, course_name, course_type in result.all():
+    for review, course_name, course_type, course_is_active in result.all():
         # Review 모델의 실제 컬럼이 아니라 이 응답 한정으로만 붙이는 값 - DB에는 저장되지 않는다.
         review.course_name = course_name
         review.course_type = course_type
+        review.course_is_active = course_is_active
         items.append(MyReviewResponse.model_validate(review))
     return MyReviewListResponse(items=items, total=total, page=page, size=size)
 

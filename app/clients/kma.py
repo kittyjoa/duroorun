@@ -1,7 +1,6 @@
 """기상청(kma) API 연동
-ㅡ 단기예보(좌표 기반) + 기상특보(강원 전체, stnId=105)."""
+ㅡ 단기예보(좌표 기반) + 기상특보(전국 현재 상태 조회, 강원 관련 줄만 필터링)."""
 
-import asyncio
 import re
 from datetime import datetime, timedelta
 from math import cos, log, pi, sin, tan
@@ -143,39 +142,24 @@ async def get_short_term_forecast(nx: int, ny: int) -> list[dict]:
     return [item for item in relevant if item["fcstDate"] == earliest_date]
 
 
-# ===== 기상특보 (강원 전체, stnId=105 고정) =====
-_WARNING_LIST_URL = f"{settings.KMA_BASE_URL}/WthrWrnInfoService/getWthrWrnList"
-_WARNING_MSG_URL = f"{settings.KMA_BASE_URL}/WthrWrnInfoService/getWthrWrnMsg"
-_STN_ID_GANGWON = "105"
-_WARNING_TYPES = (
-    "강풍",
-    "풍랑",
-    "호우",
-    "대설",
-    "태풍",
-    "한파",
-    "폭염",
-    "건조",
-    "안개",
-    "황사",
-    "열대야",
-    "폭풍해일",
-    "지진해일",
+# ===== 기상특보 (전국 특보현황조회 getPwnStatus 기반) =====
+# ㅡ 기존: 목록/통보문 조회(getWthrWrnList/getWthrWrnMsg) 2개 결합
+# → "같은 종류가 여러 지역에 발효 중인데 일부만 해제"되는 경우를 구분할 수 없었음.
+# ㅡ 변경: 특보현황조회(getPwnStatus)는 KMA가 지역별로 정리한 현재 상태 텍스트(t6) 줌,
+# 그 텍스트에서 강원 관련 + 동해 관련만 골라내는 방식으로 교체.
+_PWN_STATUS_URL = f"{settings.KMA_BASE_URL}/WthrWrnInfoService/getPwnStatus"
+
+# t6 텍스트 안에 이 키워드 중 하나라도 있어야 강원 관련 줄로 판단.
+# ㅡ 시군 18개(find_sigungu()가 반환하는 이름과 동일, course/schemas.py)
+# ㅡ "강원" 자체: 강원도 육상 + 강원북/중/남부앞바다(해상)까지 전부 이 글자를 포함
+# ㅡ "동해중부": 강원 앞바다를 포괄하는 상위 해상 구역명
+_GANGWON_KEYWORDS = (
+    "강원",
+    "동해중부",
+    "춘천시", "원주시", "강릉시", "동해시", "태백시", "속초시", "삼척시",
+    "홍천군", "횡성군", "영월군", "평창군", "정선군", "철원군", "화천군",
+    "양구군", "인제군", "고성군", "양양군",
 )
-# 특보 제목에 종류가 여러 개 붙어 나오는 경우 발견.
-# (예: "강풍주의보·풍랑주의보 해제·풍랑주의보 변경")
-# 그래서 2단계로 수정:
-#   1) 그룹 1: "강풍주의보·풍랑주의보"처럼 ·로 이어붙은 종류 덩어리 전체를 통으로 잡음
-#   2) 그룹 2: 그 덩어리 바로 뒤에 오는 액션(해제/발표/변경) 하나를 잡음
-# → 그룹 1 안에서 종류 이름("강풍", "풍랑")을 하나씩 다시 뽑아내서,
-#   그룹 2에서 잡은 액션을 그 종류들 전부에 똑같이 적용.
-_TYPE_ALTERNATION = "|".join(_WARNING_TYPES)
-_ACTION_GROUP_PATTERN = re.compile(
-    rf"((?:(?:{_TYPE_ALTERNATION})(?:주의보|경보)?[·,]?)+)\s*(해제|발표|변경)"
-)
-_TYPE_PATTERN = re.compile(_TYPE_ALTERNATION)
-# 원문 조립 시 실제 내용이 있는 필드만 포함 (t5는 타임스탬프, "없음" 플레이스홀더는 제외)
-_MSG_TEXT_FIELDS = ("t1", "t2", "t3", "t4", "t6", "t7")
 
 
 async def _kma_get(url: str, params: dict) -> dict:
@@ -207,90 +191,57 @@ async def _kma_get(url: str, params: dict) -> dict:
         raise KmaAPIError(f"기상청 특보 API 응답 구조가 예상과 다릅니다: {e}") from None
 
 
-def _format_warning_message(item: dict) -> str | None:
-    lines = []
-    for key in _MSG_TEXT_FIELDS:
-        value = (item.get(key) or "").strip()
-        if value and "없음" not in value:
-            lines.append(value)
-    return "\n".join(lines) if lines else None
-
-
 async def get_weather_warning() -> str | None:
-    """강원 전체(stnId=105) 기준 현재 발효 중인 기상특보 원문을 조회.
+    """전국 특보 현재 상태(getPwnStatus)를 조회해 강원 관련 줄만 골라 반환.
 
-    특보는 발표/해제/변경 이벤트의 흐름이라 날짜로 필터링 X.
-    ㅡ 최근 이벤트 목록을 종류별로 그룹핑해 각 종류의 최신 상태만 남기고,
-    아직 해제되지 않은 종류만 원문을 가져와 이어붙임.
+    KMA가 이미 "지금 시점 기준으로 뭐가 활성인지"를 정리해서 주는 값
+    ㅡ 발표/해제 이벤트를 우리가 직접 추적해 활성 여부를 판단할 필요 X
+    ㅡ 가이드 파일과 응답 예시 참고해서 코딩
 
-    fromTmFc/toTmFc 날짜 범위 파라미터는 딕셔너리에서 뺌.
-    ㅡ 실측 결과 이 파라미터를 넣으면 서버가 거의 항상 DB_ERROR 반환,
-    아예 빼면 성공 + 최근/현재 이벤트만 자동으로 돌려줌.
-    ㅡ 날짜 필터 넣었다가 실패하면 "특보 없음"으로 잘못 처리된 경우도 있었음.
+    t6(특보발효현황 내용): 한 줄에 종류+지역이 같이 있음
+    t7(예비특보 발효현황): 종류 줄과 지역 줄이 분리돼있어 줄 단위로 거르지않고,
+    강원 키워드 하나라도 포함되면 통쨰로 포함.
     """
     body = await _kma_get(
-        _WARNING_LIST_URL,
+        _PWN_STATUS_URL,
         {
             "serviceKey": settings.KMA_API_KEY,
             "pageNo": 1,
-            "numOfRows": 100,
+            "numOfRows": 1,
             "dataType": "JSON",
-            "stnId": _STN_ID_GANGWON,
         },
     )
-    # _kma_get은 자기 안에서만 KeyError/TypeError를 KmaAPIError로 바꿈.
-    # ㅡ try/except로 감싸 항상 KmaAPIError만 던지도록
-    # ㅡ 기상특보 쪽이 이상한 응답 줘도 단기예보 결과까지 같이 죽지 않도록
     try:
         raw_items = body.get("items")
         if not raw_items:
             return None
         items = raw_items["item"]
-        if isinstance(items, dict):
-            items = [items]
-    except (KeyError, TypeError) as e:
-        raise KmaAPIError(f"기상청 특보 목록 응답 구조가 예상과 다릅니다: {e}") from None
+        item = items[0] if isinstance(items, list) else items
+    except (KeyError, TypeError, IndexError) as e:
+        raise KmaAPIError(f"기상청 특보현황 응답 구조가 예상과 다릅니다: {e}") from None
 
-    # tmFc 오름차순으로 훑으면서 종류별 최신 상태(action)를 계속 덮어쓴다
-    items_sorted = sorted(items, key=lambda it: (it.get("tmFc", 0), it.get("tmSeq", 0)))
-    latest_action: dict[str, str] = {}
-    latest_item: dict[str, dict] = {}
-    for item in items_sorted:
-        title = item.get("title", "")
-        for types_blob, action in _ACTION_GROUP_PATTERN.findall(title):
-            for warning_type in _TYPE_PATTERN.findall(types_blob):
-                latest_action[warning_type] = action
-                latest_item[warning_type] = item
+    parts = _gangwon_relevant_lines(item.get("t6"))
+    t7_block = _gangwon_relevant_block(item.get("t7"))
+    if t7_block:
+        parts.append(t7_block)
+    return "\n".join(parts) if parts else None
 
-    active_types = [wtype for wtype, action in latest_action.items() if action != "해제"]
-    if not active_types:
-        return None
 
-    async def _fetch_message(wtype: str) -> str | None:
-        item = latest_item[wtype]
-        msg_body = await _kma_get(
-            _WARNING_MSG_URL,
-            {
-                "serviceKey": settings.KMA_API_KEY,
-                "pageNo": 1,
-                "numOfRows": 5,
-                "dataType": "JSON",
-                "stnId": item.get("stnId", _STN_ID_GANGWON),
-                "tmFc": item["tmFc"],
-            },
-        )
-        try:
-            msg_items = msg_body.get("items")
-            if not msg_items:
-                return None
-            msg_item = msg_items["item"]
-            if isinstance(msg_item, list):
-                msg_item = msg_item[0]
-        except (KeyError, TypeError) as e:
-            raise KmaAPIError(f"기상청 특보 통보문 응답 구조가 예상과 다릅니다: {e}") from None
-        return _format_warning_message(msg_item)
+def _has_content(text: str | None) -> str:
+    """"없음" 자리에 공백이 섞여 오는 경우 실측함(예: "o 없 음") - 공백 제거 후 비교."""
+    text = (text or "").strip()
+    return "" if not text or "없음" in re.sub(r"\s+", "", text) else text
 
-    # 활성 종류가 여러 개(예: 태풍 시즌에 강풍+풍랑+호우 동시 발효)일 때 순차 호출하면
-    # 종류 수만큼 왕복시간이 누적됨 → 병렬 조회 방식으로 변경.
-    texts = await asyncio.gather(*(_fetch_message(wtype) for wtype in active_types))
-    return "\n\n".join(text for text in texts if text) or None
+
+def _gangwon_relevant_lines(text: str | None) -> list[str]:
+    text = _has_content(text)
+    if not text:
+        return []
+    return [line for line in text.splitlines() if any(kw in line for kw in _GANGWON_KEYWORDS)]
+
+
+def _gangwon_relevant_block(text: str | None) -> str | None:
+    text = _has_content(text)
+    if text and any(kw in text for kw in _GANGWON_KEYWORDS):
+        return text
+    return None

@@ -470,3 +470,4 @@ DB 트랜잭션 성공(commit) 후에 R2 삭제 API 호출. 트랜잭션 실패 
 - **`COOKIE_DOMAIN` 환경변수 설정**: `.env.example`에 안내된 대로 프로덕션에서 `.duroorun.com` 형태로 설정 필요 (프론트/API가 다른 서브도메인이면 필수)
 - **`JWT_SECRET_KEY` 길이 확인**: 로컬 개발 중 `InsecureKeyLengthWarning`(HMAC 키가 32바이트 미만) 경고가 뜬 적 있음. 배포용 시크릿 키는 32바이트 이상으로 새로 생성
 - **자동화된 인증 테스트 부재**: 현재 `tests/` 디렉토리가 비어있고 CI 체크도 없음. 최소한 로그인/토큰 재발급/실패 케이스 테스트 추가 검토
+- **`ix_users_nickname_trgm` 인덱스 정상 생성 확인** (`CREATE INDEX CONCURRENTLY`, `53a73e916494`): CONCURRENTLY는 중간에 실패해도 알아채기 어렵게 INVALID 인덱스를 조용히 남길 수 있음. 이 마이그레이션을 배포한 뒤 `SELECT indexrelid::regclass, indisvalid FROM pg_index WHERE indexrelid = 'ix_users_nickname_trgm'::regclass;`로 `indisvalid`가 `true`인지 확인. `false`면 `DROP INDEX CONCURRENTLY ix_users_nickname_trgm` 후 재실행

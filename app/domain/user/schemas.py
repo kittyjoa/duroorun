@@ -2,6 +2,8 @@
 
 from pydantic import BaseModel, ConfigDict
 
+from app.domain.user.models import UserRole
+
 
 class TokenResponse(BaseModel):
     """소셜 로그인 성공 응답."""
@@ -23,9 +25,11 @@ class ProfileImageResponse(BaseModel):
     profile_image_url: str
 
 
-class UserOnboardingRequest(BaseModel):
-    """최초 가입 완료 요청. 닉네임/거주지 둘 다 필수."""
+class CompleteSignupRequest(BaseModel):
+    """소셜 로그인 최초 시도 후 약관 동의 + 프로필을 받아 가입을 완료하는 요청."""
 
+    signup_token: str
+    agree_terms: bool
     nickname: str
     location: str
 
@@ -47,3 +51,20 @@ class UserResponse(BaseModel):
     nickname: str | None
     profile_image_url: str | None
     location: str | None
+    user_role: UserRole
+
+
+class PublicProfileResponse(BaseModel):
+    """다른 유저의 공개 프로필 조회 응답 (마이페이지보다 훨씬 적은 정보만 노출).
+
+    user_role은 프론트가 관리자 프로필에서 강제 탈퇴 폼을 아예 안 띄우기 위해 포함한다
+    (최종 차단은 어차피 백엔드가 하지만, 항상 실패할 폼을 보여주지 않기 위한 UX 목적).
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    user_id: int
+    nickname: str | None
+    location: str | None
+    profile_image_url: str | None
+    user_role: UserRole

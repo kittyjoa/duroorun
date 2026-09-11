@@ -132,6 +132,29 @@ async def delete_refresh_token(user_id: int, redis: Redis) -> None:
 
 
 # ──────────────────────────────────────────
+# Redis — 짧은 임시 락 (SET NX EX로 잡고, fencing token으로 안전하게 해제)
+# ──────────────────────────────────────────
+
+# 조건 없이 무조건 DEL하면, 락을 잡은 요청의 처리가 TTL을 넘겨 락이 자연 만료된 뒤
+# 다른 요청이 같은 키로 새 락을 잡았을 때, 뒤늦게 finally에 도달한 원래 요청이 그
+# "남의" 락을 지워버릴 수 있음 — 내가 SET할 때 넣어둔 고유 토큰과 지금 저장된 값이
+# 같을 때만(=아직 내가 소유 중일 때만) 지우도록 Lua로 원자적으로 확인 후 삭제한다.
+_RELEASE_LOCK_IF_OWNER_SCRIPT = """
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+    return redis.call('DEL', KEYS[1])
+else
+    return 0
+end
+"""
+
+
+async def release_lock_if_owner(key: str, token: str, redis: Redis) -> bool:
+    """key에 저장된 값이 token과 같을 때만(내가 아직 소유 중일 때만) 삭제합니다."""
+    result = await redis.eval(_RELEASE_LOCK_IF_OWNER_SCRIPT, 1, key, token)
+    return result == 1
+
+
+# ──────────────────────────────────────────
 # FastAPI 의존성 — 다른 도메인에서 import해서 씀
 # ──────────────────────────────────────────
 

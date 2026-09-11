@@ -53,6 +53,8 @@ class User(Base):
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # 로그인/토큰 재발급 시각 갱신 (활성 유저 통계용). 최초 가입 시 NULL
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # 이용약관/개인정보처리방침 동의 시각. 가입 완료(complete-signup) 시점에 기록
+    terms_agreed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     social_accounts: Mapped[list["SocialAccount"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
@@ -94,6 +96,9 @@ class BannedAccount(Base):
     banned_by: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("users.user_id"), nullable=True
     )
+    # 익명화 직전 닉네임 스냅샷 - 관리자 밴 목록에서 "이게 누구였는지" 구분하기 위한 용도.
+    # 공개 화면엔 노출 안 함(관리자 전용), 탈퇴 유저 본인의 익명화 정책과는 별개
+    banned_nickname: Mapped[str | None] = mapped_column(String(30), nullable=True)
     banned_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

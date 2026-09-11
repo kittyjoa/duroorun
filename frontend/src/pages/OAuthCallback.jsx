@@ -21,6 +21,8 @@ const OAuthCallback = () => {
 
     (async () => {
       try {
+        // 이 경로는 이미 가입된(기존) 유저만 탄다 — 신규 유저는 계정이 아직 없어
+        // 백엔드가 여기 대신 /onboarding?signup_token=...으로 바로 보낸다.
         // access_token은 URL에 노출하지 않고, 쿠키로 온 refresh_token으로 즉시 재발급받는다.
         const accessToken = await refreshAccessToken();
         if (!accessToken) {
@@ -28,8 +30,6 @@ const OAuthCallback = () => {
           return;
         }
 
-        // is_new_user 대신 실제 프로필(닉네임/거주지) 값 기준으로 온보딩 필요 여부를 판단한다.
-        // 온보딩을 중간에 그만둔 유저도 다음 로그인 때 다시 온보딩으로 보내기 위함.
         // refreshUser()가 전역 상태(Context)도 같이 채워서 헤더가 바로 반영된다.
         const { user, hasError } = await refreshUser();
         if (!user) {
@@ -41,9 +41,8 @@ const OAuthCallback = () => {
           goToLoginWithError(navigate, message);
           return;
         }
-        const needsOnboarding = !user.nickname || !user.location;
 
-        navigate(needsOnboarding ? '/onboarding' : '/', { replace: true });
+        navigate('/', { replace: true });
       } catch {
         goToLoginWithError(navigate, '로그인 처리 중 오류가 발생했어요. 다시 시도해주세요.');
       }

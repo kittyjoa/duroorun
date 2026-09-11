@@ -1,11 +1,13 @@
 """관리자 대시보드 - 비즈니스 로직 (통계 집계 등)."""
 
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException, status
 from redis.asyncio import Redis
-from sqlalchemy import case, delete, func, select
+from sqlalchemy import Select, case, delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
@@ -20,6 +22,7 @@ from app.domain.admin.schemas import (
     MonthlyYearlyCountResponse,
     PeriodCountResponse,
     RecordStatsResponse,
+    UserSearchListResponse,
     UserStatsResponse,
 )
 from app.domain.course.models import Course, CourseType
@@ -27,9 +30,22 @@ from app.domain.facility.models import Facility, FacilityType
 from app.domain.record.models import Record
 from app.domain.review.models import Review
 from app.domain.user.models import BannedAccount, User, UserRole
+from app.domain.user.schemas import PublicProfileResponse
 from app.domain.user.service import force_withdraw_user as _force_withdraw_user
 
 KST = ZoneInfo("Asia/Seoul")
+
+
+async def _paginate(
+    db: AsyncSession, select_stmt: Select[Any], count_stmt: Select[Any], page: int, size: int
+) -> tuple[Sequence[Any], int]:
+    """count 조회 + offset/limit 조회를 묶어서 (items, total)을 반환합니다.
+
+    밴 목록/유저 검색처럼 정렬만 다르고 나머지는 동일한 offset 페이지네이션 골격을 공유한다.
+    """
+    total = (await db.execute(count_stmt)).scalar_one()
+    items = (await db.execute(select_stmt.offset((page - 1) * size).limit(size))).scalars().all()
+    return items, total
 
 
 async def force_withdraw_user(
@@ -69,15 +85,13 @@ async def force_withdraw_user(
 
 async def get_banned_accounts(page: int, size: int, db: AsyncSession) -> BannedAccountListResponse:
     """밴(재가입 차단) 계정 목록 조회."""
-    total = (await db.execute(select(func.count()).select_from(BannedAccount))).scalar_one()
-
-    result = await db.execute(
-        select(BannedAccount)
-        .order_by(BannedAccount.banned_at.desc(), BannedAccount.id.desc())
-        .offset((page - 1) * size)
-        .limit(size)
+    items, total = await _paginate(
+        db,
+        select(BannedAccount).order_by(BannedAccount.banned_at.desc(), BannedAccount.id.desc()),
+        select(func.count()).select_from(BannedAccount),
+        page,
+        size,
     )
-    items = result.scalars().all()
 
     return BannedAccountListResponse(
         items=[BannedAccountResponse.model_validate(b) for b in items],
@@ -96,6 +110,44 @@ async def unban_account(banned_id: int, db: AsyncSession) -> None:
             detail="존재하지 않는 밴 계정입니다",
         )
     await db.commit()
+
+
+async def search_users(
+    nickname: str, page: int, size: int, db: AsyncSession
+) -> UserSearchListResponse:
+    """닉네임으로 유저를 검색합니다 (부분일치, 관리자 등급 제외).
+
+    강제 탈퇴 대상을 다른 관리자에게 전달받았을 때 프로필을 찾아가기 위한 용도.
+    탈퇴한 유저는 익명화로 nickname이 NULL이라 조건상 자동으로 제외된다.
+    """
+    nickname = nickname.strip()
+    if not nickname:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="검색할 닉네임을 입력해주세요",
+        )
+
+    # %, _는 LIKE 와일드카드로 해석되므로 이스케이프하지 않으면 "%"만 검색해도
+    # 전체 유저가 조회되어, 검색어 없이는 조회 안 되게 한 프론트 가드가 무의미해짐
+    escaped = nickname.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    where_clause = (User.user_role != UserRole.ADMIN) & User.nickname.ilike(
+        f"%{escaped}%", escape="\\"
+    )
+
+    items, total = await _paginate(
+        db,
+        select(User).where(where_clause).order_by(User.nickname.asc(), User.user_id.asc()),
+        select(func.count()).select_from(User).where(where_clause),
+        page,
+        size,
+    )
+
+    return UserSearchListResponse(
+        items=[PublicProfileResponse.model_validate(u) for u in items],
+        total=total,
+        page=page,
+        size=size,
+    )
 
 
 def _period_boundaries(now: datetime) -> tuple[datetime, datetime, datetime, datetime]:
@@ -233,6 +285,7 @@ async def _get_popular_courses(
         select(
             Course.course_id,
             Course.course_name,
+            Course.course_type,
             func.count(Record.record_id).label("completion_count"),
         )
         .join(Record, Record.course_id == Course.course_id)
@@ -241,7 +294,7 @@ async def _get_popular_courses(
     if course_type is not None:
         query = query.where(Course.course_type == course_type)
     query = (
-        query.group_by(Course.course_id, Course.course_name)
+        query.group_by(Course.course_id, Course.course_name, Course.course_type)
         .order_by(
             func.count(Record.record_id).desc(),
             review_count_subquery.desc(),
@@ -255,6 +308,7 @@ async def _get_popular_courses(
         CoursePopularityItem(
             course_id=row.course_id,
             course_name=row.course_name,
+            course_type=row.course_type,
             completion_count=row.completion_count,
         )
         for row in rows

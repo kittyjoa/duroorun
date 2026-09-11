@@ -42,6 +42,10 @@ const MyPage = () => {
   // 여러 리뷰를 연달아 삭제해도 각자 독립적으로 버튼 비활성화 상태를 관리한다.
   const [deletingReviewIds, setDeletingReviewIds] = useState(() => new Set());
   const [reviewDeleteError, setReviewDeleteError] = useState('');
+  // DELETE는 성공했는데 그 뒤 reloadMyReviews()가 실패하면, 서버에는 이미 없는 리뷰가
+  // 화면엔 그대로 남고 삭제 버튼도 다시 눌리는 상태가 된다 - RecordHistory.jsx의
+  // staleRecordIds와 동일한 이유로 이런 리뷰를 표시해서 재시도 대신 새로고침을 유도한다.
+  const [staleReviewIds, setStaleReviewIds] = useState(() => new Set());
   // 화면에 렌더링되지 않는 값이라 state 대신 ref로 둔다 (불필요한 리렌더 방지)
   const reviewsPageRef = useRef(1);
   // reloadMyReviews가 삭제 직후(setMyReviews 반영 전) 최신 개수를 동기적으로 읽을 수
@@ -62,6 +66,8 @@ const MyPage = () => {
     loadingMoreReviewsRef.current = false;
     setLoadMoreReviewsError('');
     setReviewDeleteError('');
+    setDeletingReviewIds(new Set());
+    setStaleReviewIds(new Set());
     setMyReviews([]);
     myReviewsRef.current = [];
     setReviewsTotal(0);
@@ -177,6 +183,11 @@ const MyPage = () => {
   }, [isReviewOpen]);
 
   const handleLoadMoreReviews = () => {
+    // 목록에 "새로고침 필요"(재조회 실패로 서버와 어긋난) 리뷰가 남아있으면 더보기를
+    // 막는다 - RecordHistory.jsx와 동일한 이유(더보기는 기존 목록을 재검증하지 않고
+    // 다음 페이지만 이어붙이므로, 어긋난 상태 위에서 진행하면 리뷰가 하나 조용히
+    // 누락될 수 있다)
+    if (staleReviewIds.size > 0) return;
     fetchMyReviews(reviewsPageRef.current + 1, { append: true });
   };
 
@@ -215,6 +226,7 @@ const MyPage = () => {
 
       myReviewsRef.current = collected;
       setMyReviews(collected);
+      setStaleReviewIds(new Set());
       setReviewsTotal(latestTotal);
       reviewsPageRef.current = pagesToRefetch;
       return true;
@@ -230,6 +242,14 @@ const MyPage = () => {
     try {
       const res = await apiFetch(`/v1/reviews/${reviewId}`, { method: 'DELETE' });
       if (!res.ok) {
+        // 다른 곳에서 이미 이 리뷰를 지웠으면 404가 온다 - RecordHistory.jsx와 동일하게
+        // 이미 삭제된 것으로 간주해 staleReviewIds에 추가한다(재시도해도 404만 반복되는
+        // 걸 막음, 리뷰 지적)
+        if (res.status === 404) {
+          setReviewDeleteError('이미 삭제된 리뷰예요. 목록을 새로고침 해주세요.');
+          setStaleReviewIds((prev) => new Set(prev).add(reviewId));
+          return;
+        }
         setReviewDeleteError('리뷰 삭제에 실패했어요.');
         return;
       }
@@ -238,6 +258,9 @@ const MyPage = () => {
         setReviewDeleteError(
           '삭제는 됐지만 목록을 새로고침하지 못했어요. 모달을 닫았다가 다시 열어주세요.',
         );
+        // 서버에는 이미 없는 리뷰가 화면엔 남아있는 상태다 - 삭제 버튼을 다시 활성화하면
+        // 재시도해도 404만 반복되니, 재조회가 성공할 때까지 비활성 상태를 유지한다
+        setStaleReviewIds((prev) => new Set(prev).add(reviewId));
       }
     } catch {
       setReviewDeleteError('서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.');
@@ -543,9 +566,16 @@ const MyPage = () => {
                         type="button"
                         className="record-history-delete"
                         onClick={() => handleDeleteReview(review.review_id)}
-                        disabled={deletingReviewIds.has(review.review_id)}
+                        disabled={
+                          deletingReviewIds.has(review.review_id) ||
+                          staleReviewIds.has(review.review_id)
+                        }
                       >
-                        {deletingReviewIds.has(review.review_id) ? '삭제 중...' : '삭제'}
+                        {deletingReviewIds.has(review.review_id)
+                          ? '삭제 중...'
+                          : staleReviewIds.has(review.review_id)
+                            ? '새로고침 필요'
+                            : '삭제'}
                       </button>
                     </li>
                   ),
@@ -562,9 +592,13 @@ const MyPage = () => {
                 type="button"
                 className="text-button review-load-more"
                 onClick={handleLoadMoreReviews}
-                disabled={loadingMoreReviews}
+                disabled={loadingMoreReviews || staleReviewIds.size > 0}
               >
-                {loadingMoreReviews ? '불러오는 중...' : '리뷰 더보기'}
+                {loadingMoreReviews
+                  ? '불러오는 중...'
+                  : staleReviewIds.size > 0
+                    ? '새로고침 필요'
+                    : '리뷰 더보기'}
               </button>
             )}
           </div>

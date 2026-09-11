@@ -100,6 +100,7 @@ async def test_force_withdraw_anonymizes_user_and_records_ban(db_session, ctx):
     user, provider_uid = await _make_user_with_social(db_session, ctx)
     admin_user, _ = await _make_user_with_social(db_session, ctx, user_role=UserRole.ADMIN)
     admin_id = admin_user.user_id
+    original_nickname = user.nickname
 
     await force_withdraw_user(user, admin_id, "욕설", db_session, _FakeRedis())
 
@@ -118,6 +119,44 @@ async def test_force_withdraw_anonymizes_user_and_records_ban(db_session, ctx):
     assert banned.provider_type == ProviderType.KAKAO
     assert banned.reason == "욕설"
     assert banned.banned_by == admin_id
+    # 관리자 밴 목록에서 식별할 수 있게, 익명화되기 전 닉네임이 스냅샷으로 남아야 함
+    assert banned.banned_nickname == original_nickname
+
+
+# 2-1. 강제 탈퇴도 본인 탈퇴와 동일하게, 다른 유저와 안 엮인 커스텀 코스는 하드삭제한다
+async def test_force_withdraw_hard_deletes_course_with_only_own_records(db_session, ctx):
+    user, _ = await _make_user_with_social(db_session, ctx)
+    admin_user, _ = await _make_user_with_social(db_session, ctx, user_role=UserRole.ADMIN)
+
+    course = Course(
+        course_type=CourseType.CUSTOM,
+        course_name=f"pytest-course-{uuid.uuid4().hex[:8]}",
+        created_by=user.user_id,
+    )
+    db_session.add(course)
+    await db_session.flush()
+    course_id = course.course_id
+    ctx.course_ids.append(course_id)
+
+    db_session.add(
+        Record(
+            user_id=user.user_id,
+            course_id=course_id,
+            started_at=datetime.now(UTC),
+            ended_at=datetime.now(UTC),
+            is_completed=True,
+        )
+    )
+    await db_session.commit()
+
+    await force_withdraw_user(user, admin_user.user_id, "욕설", db_session, _FakeRedis())
+
+    assert (
+        await db_session.execute(select(Course).where(Course.course_id == course_id))
+    ).scalar_one_or_none() is None
+    assert (
+        await db_session.execute(select(Record).where(Record.course_id == course_id))
+    ).scalar_one_or_none() is None
 
 
 # 3. 강제 탈퇴 중 오류 발생 시 둘 다 롤백됨
@@ -475,3 +514,110 @@ async def test_total_distance_uses_snapshot_not_live_course_distance(db_session,
 
     # 코스 거리가 바뀌어도 이미 완주한 기록의 통계 기여분은 스냅샷(10.0) 그대로여야 함
     assert after.total_distance_km == pytest.approx(before.total_distance_km + 10.0)
+
+
+# 19. 유저 검색 - 닉네임 부분일치, 관리자 계정은 결과에서 제외
+async def test_search_users_matches_partial_nickname_and_excludes_admin(db_session, ctx):
+    token = uuid.uuid4().hex[:12]
+    matching_user = User(nickname=f"pytest-{token}-user", user_role=UserRole.USER)
+    matching_admin = User(nickname=f"pytest-{token}-admin", user_role=UserRole.ADMIN)
+    non_matching_user = User(
+        nickname=f"pytest-admin-{uuid.uuid4().hex[:12]}", user_role=UserRole.USER
+    )
+    db_session.add_all([matching_user, matching_admin, non_matching_user])
+    await db_session.commit()
+    ctx.user_ids.extend([matching_user.user_id, matching_admin.user_id, non_matching_user.user_id])
+
+    result = await admin_service.search_users(token, 1, 20, db_session)
+
+    result_ids = {item.user_id for item in result.items}
+    assert result_ids == {matching_user.user_id}
+
+
+# 20. 유저 검색 - 강제 탈퇴로 익명화된(닉네임 NULL) 유저는 검색되지 않음
+async def test_search_users_excludes_withdrawn_user(db_session, ctx):
+    token = uuid.uuid4().hex[:12]
+    admin_user, _ = await _make_user_with_social(db_session, ctx, user_role=UserRole.ADMIN)
+    target = User(nickname=f"pytest-{token}-target", user_role=UserRole.USER)
+    db_session.add(target)
+    await db_session.flush()
+    ctx.user_ids.append(target.user_id)
+    db_session.add(
+        SocialAccount(
+            user_id=target.user_id,
+            provider_type=ProviderType.KAKAO,
+            provider_uid=uuid.uuid4().hex,
+        )
+    )
+    await db_session.commit()
+
+    await force_withdraw_user(target, admin_user.user_id, "테스트 사유", db_session, _FakeRedis())
+
+    result = await admin_service.search_users(token, 1, 20, db_session)
+
+    assert target.user_id not in {item.user_id for item in result.items}
+
+
+# 21. 유저 검색 - %, _는 SQL 와일드카드가 아닌 리터럴 문자로 취급됨
+async def test_search_users_treats_like_wildcards_as_literals(db_session, ctx):
+    token = uuid.uuid4().hex[:12]
+    user = User(nickname=f"pytest-{token}-user", user_role=UserRole.USER)
+    db_session.add(user)
+    await db_session.commit()
+    ctx.user_ids.append(user.user_id)
+
+    # "%"만 검색해도 전체 유저가 조회되면 안 됨 (와일드카드 이스케이프 확인)
+    result = await admin_service.search_users("%", 1, 20, db_session)
+    assert user.user_id not in {item.user_id for item in result.items}
+
+
+# 22. 유저 검색 - 공백만 입력하면 422
+async def test_search_users_rejects_blank_nickname(db_session):
+    with pytest.raises(HTTPException) as exc_info:
+        await admin_service.search_users("   ", 1, 20, db_session)
+
+    assert exc_info.value.status_code == 422
+
+
+# 23. 유저 검색 - page가 실제로 다음 슬라이스를 가져오고 정렬(nickname asc, user_id asc) 순서를 지킴
+async def test_search_users_pagination_returns_distinct_ordered_slices(db_session, ctx):
+    token = uuid.uuid4().hex[:12]
+    nicknames = [f"pytest-{token}-a", f"pytest-{token}-b", f"pytest-{token}-c"]
+    users = [User(nickname=name, user_role=UserRole.USER) for name in nicknames]
+    db_session.add_all(users)
+    await db_session.commit()
+    ctx.user_ids.extend([u.user_id for u in users])
+
+    page1 = await admin_service.search_users(token, 1, 2, db_session)
+    page2 = await admin_service.search_users(token, 2, 2, db_session)
+
+    assert [item.nickname for item in page1.items] == nicknames[:2]
+    assert [item.nickname for item in page2.items] == nicknames[2:]
+    assert page1.total == 3
+    assert page2.total == 3
+
+
+# 24. 온보딩 전(닉네임 없음) 유저가 강제 탈퇴되면 banned_nickname은 None으로 저장됨
+async def test_force_withdraw_user_without_nickname_leaves_banned_nickname_none(db_session, ctx):
+    provider_uid = uuid.uuid4().hex
+    user = User(nickname=None)
+    db_session.add(user)
+    await db_session.flush()
+    ctx.user_ids.append(user.user_id)
+    db_session.add(
+        SocialAccount(
+            user_id=user.user_id, provider_type=ProviderType.KAKAO, provider_uid=provider_uid
+        )
+    )
+    admin_user, _ = await _make_user_with_social(db_session, ctx, user_role=UserRole.ADMIN)
+    await db_session.commit()
+
+    await force_withdraw_user(user, admin_user.user_id, "테스트 사유", db_session, _FakeRedis())
+
+    banned = (
+        await db_session.execute(
+            select(BannedAccount).where(BannedAccount.provider_uid == provider_uid)
+        )
+    ).scalar_one()
+    ctx.banned_ids.append(banned.id)
+    assert banned.banned_nickname is None

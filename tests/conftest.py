@@ -16,16 +16,19 @@ from datetime import UTC, datetime
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
+import httpx
 import pytest_asyncio
 from redis.asyncio import Redis
 from sqlalchemy import delete
 
 from app.config import settings
-from app.database import AsyncSessionLocal
+from app.database import AsyncSessionLocal, get_db
 from app.domain.course.models import Course, CourseType
 from app.domain.record.models import Record
 from app.domain.review.models import Review, ReviewSummary
 from app.domain.user.models import User
+from app.main import app
+from app.redis import get_redis
 
 
 @dataclass
@@ -61,6 +64,29 @@ async def redis_client():
     redis = Redis.from_url(settings.REDIS_URL, decode_responses=True)
     yield redis
     await redis.aclose()
+
+
+@pytest_asyncio.fixture
+async def async_client(db_session, redis_client):
+    """HTTP 레벨 통합 테스트용 클라이언트 - 라우터에 걸린 Depends(get_current_admin) 등
+    의존성 자체를 검증할 때 사용 (서비스 함수 직접 호출로는 이 부분을 건너뛰게 됨).
+
+    get_db/get_redis만 테스트 픽스처로 오버라이드하고, 그 외 인증/권한 로직은
+    실제 코드 그대로 태운다.
+    """
+
+    async def override_get_db():
+        yield db_session
+
+    async def override_get_redis():
+        return redis_client
+
+    app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_redis] = override_get_redis
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        yield client
+    app.dependency_overrides.clear()
 
 
 @pytest_asyncio.fixture

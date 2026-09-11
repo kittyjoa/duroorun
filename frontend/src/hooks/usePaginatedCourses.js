@@ -92,29 +92,35 @@ export const usePaginatedCourses = (path, buildQuery, deps) => {
   };
 
   // 삭제 등으로 서버 쪽 정렬이 틀어졌을 때 쓰는 전체 재조회.
-  // ㅡ 더보기(UI)는 offset 방식 위에서 동작하고 있음. 
-  // ㅡ 코스 삭제 후 더보기 시 항목 누락될 수 있어서: 
+  // ㅡ 더보기(UI)는 offset 방식 위에서 동작하고 있음.
+  // ㅡ 코스 삭제 후 더보기 시 항목 누락될 수 있어서:
   //   예전 로컬 필터링 대신 서버한테 새로 요청하는 방식으로 변경(reload),
   //   page는 그대로 둠(다음 '더보기'가 요청할 위치 계산이 안 어긋나서)
   // ㅡ 성공/실패는 값만 반환하고 에러 메시지는
-  //   삭제 자체 실패와 새로고침 실패 구분하기 위해 여기서 안 띄움. 
+  //   삭제 자체 실패와 새로고침 실패 구분하기 위해 여기서 안 띄움.
+  // ㅡ 예전엔 courses.length만큼(백엔드 size 상한 100으로 캡) 한 번에 재조회했는데,
+  //   100개 넘게 불러온 뒤 재조회하면 뒷부분이 캡에 잘리는데 page는 그대로 두다 보니
+  //   다음 더보기가 잘린 구간을 건너뛰는 문제가 있었다 (2026-09-09 리뷰 지적). 대신
+  //   지금까지 불러온 범위(1~page)를 원래 페이지 크기 그대로 여러 요청으로 복원한다.
   const reload = async () => {
     if (!path) return false;
     const myRequestId = ++requestIdRef.current;
     setLoadingMore(false);
     setLoadMoreError('');
-    // KNOWN BUG: 백엔드 size 상한(le=100)에 걸려 courses.length가 100 넘으면 잘림.
-    // 리뷰 팀원이 제대로 된 방식으로 고쳤으니 메인 머지 이후 참고해서 통일시킬것.
-    const size = Math.min(Math.max(courses.length, 1), 100);
+    const pageCount = Math.max(page, 1);
     try {
-      const query = buildQuery(1, size);
-      const res = await apiFetch(query ? `${path}?${query}` : path);
+      const responses = await Promise.all(
+        Array.from({ length: pageCount }, (_, i) => {
+          const query = buildQuery(i + 1);
+          return apiFetch(query ? `${path}?${query}` : path);
+        })
+      );
       if (requestIdRef.current !== myRequestId) return true; // 그 사이 더 최신 요청이 덮어씀
-      if (!res.ok) return false;
-      const data = await res.json();
+      if (responses.some((res) => !res.ok)) return false;
+      const pages = await Promise.all(responses.map((res) => res.json()));
       if (requestIdRef.current !== myRequestId) return true;
-      setCourses(data.items);
-      setTotal(data.total);
+      setCourses(pages.flatMap((data) => data.items));
+      setTotal(pages[pages.length - 1].total);
       return true;
     } catch (err) {
       if (requestIdRef.current === myRequestId) {

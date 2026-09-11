@@ -55,7 +55,8 @@ async def test_incompatible_cached_json_falls_back_to_recompute(
         # 깨진 캐시를 500 없이 캐시 미스처럼 취급해 실제로 재계산했는지 확인
         mock_forecast.assert_called_once()
         mock_briefing.assert_called_once()
-        assert response.briefing == "테스트용 브리핑\n\n현재 발효 중인 특보는 없습니다."
+        assert response.briefing == "테스트용 브리핑"
+        assert response.warning_comment == "현재 발효 중인 특보는 없습니다."
 
         # 재계산 결과가 새 스키마로 다시 캐싱됐는지도 확인
         recached = await redis_client.get(cache_key)

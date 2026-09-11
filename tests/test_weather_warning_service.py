@@ -7,6 +7,7 @@ thundering herd 방지 락)를 검증한다.
 """
 
 import asyncio
+import contextlib
 import hashlib
 import json
 from unittest.mock import AsyncMock, patch
@@ -15,6 +16,8 @@ import app.redis as app_redis
 from app.clients import kma
 from app.clients.kma import KmaAPIError
 from app.domain.course import weather_service
+from app.domain.course.models import Course, CourseType
+from app.domain.course.weather_service import _get_location_hint
 
 
 async def test_warning_fetch_failure_is_not_reported_as_no_warning(
@@ -59,8 +62,7 @@ async def test_warning_fetch_failure_is_not_reported_as_no_warning(
             )
 
         assert response.warning_raw_text is None
-        assert "특보 정보를 확인하지 못했습니다" in response.briefing
-        assert "현재 발효 중인 특보는 없습니다" not in response.briefing
+        assert response.warning_comment == "특보 정보를 확인하지 못했습니다."
 
         cached = json.loads(await redis_client.get(weather_service._WARNING_RAW_CACHE_KEY))
         assert cached == {"ok": False, "text": None}
@@ -145,3 +147,100 @@ async def test_warning_comment_lock_prevents_duplicate_gemini_calls(redis_client
         assert all(r == "동시성 테스트 코멘트" for r in results)
     finally:
         await redis_client.delete(cache_key, lock_key)
+
+
+def test_location_hint_combines_start_and_end_when_different():
+    """시작/종료 지역이 다르면 둘 다 포함."""
+    course = Course(course_type=CourseType.CUSTOM, sigun="강원 강릉시", end_sigun="강원 속초시")
+    hint = _get_location_hint(course)
+    assert "강릉시" in hint
+    assert "속초시" in hint
+
+
+def test_location_hint_dedupes_when_start_and_end_same():
+    course = Course(course_type=CourseType.DRNB, sigun="강원 강릉시", end_sigun="강원 강릉시")
+    assert _get_location_hint(course) == "강원 강릉시"
+
+
+def test_location_hint_falls_back_to_whichever_side_is_set():
+    assert _get_location_hint(Course(course_type=CourseType.DRNB, sigun="강원 강릉시")) == (
+        "강원 강릉시"
+    )
+    assert _get_location_hint(
+        Course(course_type=CourseType.CUSTOM, end_sigun="강원 속초시")
+    ) == "강원 속초시"
+    assert _get_location_hint(Course(course_type=CourseType.DRNB)) is None
+
+
+async def test_briefing_passes_both_regions_when_start_has_no_warning_relevance(
+    db_session, redis_client
+):
+    """시작 지역에는 특보가 없어 보여도(관련성 판단은 AI 몫) 종료 지역이 다르면 AI에게
+    시작/종료 지역을 모두 전달."""
+    app_redis._redis = None
+    course = Course(
+        course_type=CourseType.CUSTOM,
+        course_name="지역힌트 테스트 코스",
+        sigun="강원 강릉시",
+        end_sigun="강원 속초시",
+        start_lat=1.0,
+        start_lng=1.0,
+        end_lat=2.0,
+        end_lng=2.0,
+    )
+    db_session.add(course)
+    await db_session.commit()
+    await db_session.refresh(course)
+    course_id = course.course_id
+
+    nx, ny = kma.latlng_to_grid(1.5, 1.5)
+    forecast_cache_key = f"weather_forecast_briefing:{nx}:{ny}"
+    await redis_client.delete(forecast_cache_key)
+    await redis_client.delete(weather_service._WARNING_RAW_CACHE_KEY)
+
+    try:
+        with (
+            patch(
+                "app.domain.course.weather_service.kma.get_short_term_forecast",
+                new_callable=AsyncMock,
+            ) as mock_forecast,
+            patch(
+                "app.domain.course.weather_service.kma.get_weather_warning",
+                new_callable=AsyncMock,
+            ) as mock_warning,
+            patch(
+                "app.domain.course.weather_service.generate_forecast_summary",
+                new_callable=AsyncMock,
+            ) as mock_forecast_summary,
+            patch(
+                "app.domain.course.weather_service.generate_warning_relevance_comment",
+                new_callable=AsyncMock,
+            ) as mock_comment,
+        ):
+            mock_forecast.return_value = [
+                {"fcstDate": "20260908", "fcstTime": "1400", "category": "TMP", "fcstValue": "20"}
+            ]
+            mock_warning.return_value = "속초시 일대 호우주의보 발표"
+            mock_forecast_summary.return_value = "테스트 예보 요약"
+            mock_comment.return_value = "속초시는 특보 지역과 관련 있어 보입니다."
+
+            await weather_service.get_weather_briefing(
+                session=db_session, course_id=course_id, client_ip="127.0.0.1"
+            )
+
+        assert mock_comment.await_count == 1
+        location_hint_arg = mock_comment.await_args.args[0]
+        assert "강릉시" in location_hint_arg
+        assert "속초시" in location_hint_arg
+
+        warning_hash = hashlib.sha256("속초시 일대 호우주의보 발표".encode()).hexdigest()[:16]
+        comment_cache_key = f"weather_warning_comment:{location_hint_arg}:{warning_hash}"
+    finally:
+        await redis_client.delete(forecast_cache_key)
+        await redis_client.delete(weather_service._WARNING_RAW_CACHE_KEY)
+        await redis_client.delete("ratelimit:weather_briefing_fetch:127.0.0.1")
+        with contextlib.suppress(NameError):
+            await redis_client.delete(comment_cache_key)
+        await db_session.delete(course)
+        await db_session.commit()
+        app_redis._redis = None

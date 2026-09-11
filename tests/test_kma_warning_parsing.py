@@ -70,6 +70,15 @@ async def test_no_warning_returns_none():
     assert await _call_with("") is None
 
 
+async def test_warning_survives_unrelated_line_containing_no_warning_word():
+    """"없음"이라는 단어가 무관한 줄에 서술형으로 섞여 있어도,
+    그거 때문에 다른 줄에 있는 진짜 활성 특보까지 같이 사라지면 X
+    ㅡ 이전에 "없음"을 전체 텍스트 기준으로 판정해서 None이 되던 버그 발생."""
+    t6 = "o 안개주의보 해제(위험요소 없음)\no 호우주의보 : 강원도 강릉시"
+    result = await _call_with(t6)
+    assert result == "o 호우주의보 : 강원도 강릉시"
+
+
 async def test_gangwon_sigun_line_is_returned():
     t6 = "o 호우주의보 : 강원도 강릉시, 속초시"
     result = await _call_with(t6)

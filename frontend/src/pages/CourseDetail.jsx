@@ -563,7 +563,7 @@ const CourseDetail = () => {
               {course.course_name}
               {courseType === 'custom' && (
                 <span className="course-detail-creator-inline">
-                  ( 제작자 : {' '}
+                  ( 제작자 :{' '}
                   {course.created_by != null ? (
                     <Link to={`/users/${course.created_by}`}>{course.creator_nickname ?? '알 수 없음'}</Link>
                   ) : (

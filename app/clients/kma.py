@@ -1,7 +1,6 @@
 """기상청(kma) API 연동
 ㅡ 단기예보(좌표 기반) + 기상특보(전국 현재 상태 조회, 강원 관련 줄만 필터링)."""
 
-import re
 from datetime import datetime, timedelta
 from math import cos, log, pi, sin, tan
 from zoneinfo import ZoneInfo
@@ -200,7 +199,7 @@ async def get_weather_warning() -> str | None:
 
     t6(특보발효현황 내용): 한 줄에 종류+지역이 같이 있음
     t7(예비특보 발효현황): 종류 줄과 지역 줄이 분리돼있어 줄 단위로 거르지않고,
-    강원 키워드 하나라도 포함되면 통쨰로 포함.
+    강원 키워드 하나라도 포함되면 통째로 포함.
     """
     body = await _kma_get(
         _PWN_STATUS_URL,
@@ -227,21 +226,20 @@ async def get_weather_warning() -> str | None:
     return "\n".join(parts) if parts else None
 
 
-def _has_content(text: str | None) -> str:
-    """"없음" 자리에 공백이 섞여 오는 경우 실측함(예: "o 없 음") - 공백 제거 후 비교."""
-    text = (text or "").strip()
-    return "" if not text or "없음" in re.sub(r"\s+", "", text) else text
-
-
 def _gangwon_relevant_lines(text: str | None) -> list[str]:
-    text = _has_content(text)
+    """t6: '없음' 여부 별도 판단 X.
+    ㅡ "위험요소 없음" 처럼 무관한 내용도 걸러질 위험 있고,
+    강원 관련 키워드가 없으면 이미 알아서 걸러짐."""
+    text = (text or "").strip()
     if not text:
         return []
     return [line for line in text.splitlines() if any(kw in line for kw in _GANGWON_KEYWORDS)]
 
 
 def _gangwon_relevant_block(text: str | None) -> str | None:
-    text = _has_content(text)
+    """t7: 종류/지역이 줄로 안 나뉘어 통째로 판단
+    ㅡ t6와 동일하게 "없음" 여부 안 보고 강원 키워드 포함 여부만 본다."""
+    text = (text or "").strip()
     if text and any(kw in text for kw in _GANGWON_KEYWORDS):
         return text
     return None

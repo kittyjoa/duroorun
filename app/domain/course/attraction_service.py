@@ -1,6 +1,7 @@
 """코스 주변 관광지 추천 - 비즈니스 로직."""
 
 import contextlib
+import hashlib
 import json
 import logging
 
@@ -72,10 +73,21 @@ async def _fetch_points(points: list[tuple[float, float]]) -> tuple[list[dict], 
     return merged, all_ok
 
 
+def build_attractions_cache_key(course_id: int, course: Course) -> str:
+    """코스 시작/종료 좌표 해시를 포함한 캐시 키.
+
+    코스 좌표가 수정되면(update_course) 자동으로 다른 키를 참조해 이전 지역 캐시가
+    반환되지 않는다. (이전 course_id 방식 변경)
+    """
+    coord_key = f"{course.start_lat}:{course.start_lng}:{course.end_lat}:{course.end_lng}"
+    coord_hash = hashlib.sha256(coord_key.encode()).hexdigest()[:16]
+    return f"nearby_attractions:{course_id}:{coord_hash}"
+
+
 async def get_nearby_attractions(
     session: AsyncSession, course_id: int, client_ip: str
 ) -> NearbyAttractionListResponse:
-    """코스 시작/종료점 주변 관광지를 조회. course_id 단위로 캐싱."""
+    """코스 시작/종료점 주변 관광지를 조회. (course_id, 시작/종료 좌표) 단위로 캐싱."""
     course = await session.get(Course, course_id)
     if course is None or not course.is_active:
         raise HTTPException(
@@ -85,7 +97,7 @@ async def get_nearby_attractions(
     if not course.has_verification_coords:
         return NearbyAttractionListResponse(items=[])
 
-    cache_key = f"nearby_attractions:{course_id}"
+    cache_key = build_attractions_cache_key(course_id, course)
 
     # Redis는 최적화 수단 / 장애 시 캐시 없이 진행.
     try:

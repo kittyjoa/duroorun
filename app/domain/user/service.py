@@ -1,8 +1,10 @@
 """회원/인증 - 비즈니스 로직."""
 
+import json
 import logging
 import re
 import secrets
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlencode
 
@@ -25,12 +27,14 @@ from app.core.security import (
     decode_token_ignore_exp,
     delete_refresh_token,
     get_active_user,
+    release_lock_if_owner,
     rotate_refresh_jti,
     save_refresh_jti,
 )
-from app.domain.course.models import Course
+from app.domain.course.models import Course, CourseImage, CourseType, CourseWaypoint
+from app.domain.facility.models import CourseFacility
 from app.domain.record.models import Record
-from app.domain.review.models import Review
+from app.domain.review.models import Review, ReviewImage, ReviewSummary
 from app.domain.user.models import BannedAccount, ProviderType, SocialAccount, User
 
 logger = logging.getLogger(__name__)
@@ -57,6 +61,50 @@ _NICKNAME_PATTERN = re.compile(r"^[가-힣a-zA-Z0-9]+$")
 _LOCATION_PATTERN = re.compile(r"^[가-힣a-zA-Z0-9\s]+$")
 
 _LAST_LOGIN_UPDATE_THRESHOLD = timedelta(minutes=5)
+
+# 신규 유저의 약관 동의 전 임시 가입정보(provider_type/provider_uid/name) 저장 키
+_PENDING_SIGNUP_PREFIX = "pending_signup:"
+# 같은 signup_token으로 들어온 동시 요청을 직렬화하는 락 (get→delete가 원자적이지 않아서 필요)
+_SIGNUP_LOCK_PREFIX = "signup_lock:"
+_SIGNUP_LOCK_TTL_SECONDS = 30
+
+
+@dataclass
+class SocialLoginResult:
+    """소셜 로그인 콜백 처리 결과.
+
+    기존 유저면 access/refresh 토큰이 채워지고, 신규 유저면 계정을 만들지 않은 채
+    signup_token만 채워진다 (약관 동의 + 프로필 입력 후 complete_signup()에서 실제 생성).
+    """
+
+    access_token: str | None = None
+    refresh_token: str | None = None
+    signup_token: str | None = None
+
+
+def _validate_nickname(nickname: str) -> str:
+    nickname = nickname.strip()
+    valid_length = settings.NICKNAME_MIN_LENGTH <= len(nickname) <= settings.NICKNAME_MAX_LENGTH
+    if not valid_length or not _NICKNAME_PATTERN.match(nickname):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"닉네임은 한글/영문/숫자 {settings.NICKNAME_MIN_LENGTH}"
+                f"~{settings.NICKNAME_MAX_LENGTH}자로 입력해주세요"
+            ),
+        )
+    return nickname
+
+
+def _validate_location(location: str) -> str:
+    location = location.strip()
+    valid_length = 1 <= len(location) <= settings.LOCATION_MAX_LENGTH
+    if not valid_length or not _LOCATION_PATTERN.match(location):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"거주지는 한글/영문/숫자 1~{settings.LOCATION_MAX_LENGTH}자로 입력해주세요",
+        )
+    return location
 
 
 async def _touch_last_login(user_id: int, db: AsyncSession) -> None:
@@ -89,7 +137,12 @@ async def _touch_last_login(user_id: int, db: AsyncSession) -> None:
 async def _check_not_banned(
     provider_type: ProviderType, provider_uid: str, db: AsyncSession
 ) -> None:
-    """강제 탈퇴로 차단된 소셜 계정인지 확인합니다. 신규 가입 직전에만 호출."""
+    """강제 탈퇴로 차단된 소셜 계정인지 확인합니다.
+
+    가입정보를 Redis에 임시 저장하는 시점(_finish_social_login)과 실제 계정을 생성하는
+    시점(complete_signup) 두 곳에서 호출된다 — 약관 동의 대기 시간(최대
+    PENDING_SIGNUP_EXPIRE_SECONDS) 동안 강제 탈퇴된 경우까지 이중으로 막기 위함.
+    """
     result = await db.execute(
         select(BannedAccount).where(
             BannedAccount.provider_type == provider_type,
@@ -101,6 +154,61 @@ async def _check_not_banned(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="강제 탈퇴 처리된 계정으로는 재가입할 수 없습니다",
         )
+
+
+async def _finish_social_login(
+    provider_type: ProviderType, provider_uid: str, name: str | None, db: AsyncSession, redis: Redis
+) -> SocialLoginResult:
+    """provider_uid로 기존/신규 유저를 판별해 로그인을 마무리합니다.
+
+    기존 유저는 바로 토큰을 발급하지만, 신규 유저는 약관 동의 전이므로 계정을 만들지
+    않는다 — 대신 가입정보를 Redis에 잠깐(PENDING_SIGNUP_EXPIRE_SECONDS) 저장해두고
+    signup_token만 돌려준다. 이 값은 이후 complete_signup()에서 약관 동의 + 닉네임/거주지와
+    함께 와야 실제 User/SocialAccount row가 생성된다 (동의 안 하고 이탈하면 TTL로 자동 소멸).
+    """
+    result = await db.execute(
+        select(SocialAccount).where(
+            SocialAccount.provider_type == provider_type,
+            SocialAccount.provider_uid == provider_uid,
+        )
+    )
+    social = result.scalar_one_or_none()
+
+    if social is None:
+        await _check_not_banned(provider_type, provider_uid, db)
+        signup_token = secrets.token_urlsafe(32)
+        payload = json.dumps({
+            "provider_type": provider_type.value,
+            "provider_uid": provider_uid,
+            "name": name,
+        })
+        try:
+            await redis.setex(
+                f"{_PENDING_SIGNUP_PREFIX}{signup_token}",
+                settings.PENDING_SIGNUP_EXPIRE_SECONDS,
+                payload,
+            )
+        except RedisError:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="서버 오류가 발생했습니다. 잠시 후 다시 시도해주세요",
+            ) from None
+        return SocialLoginResult(signup_token=signup_token)
+
+    result = await db.execute(select(User).where(User.user_id == social.user_id))
+    user = result.scalar_one()
+
+    # _touch_last_login 내부에서 rollback이 나면 이 세션에 속한 user 객체의 속성이
+    # 전부 만료되어, 이후 user.user_id처럼 다시 접근하는 순간 동기 컨텍스트에서 지연 로딩이
+    # 시도되며 MissingGreenlet 에러로 이어질 수 있음 — 정수로 미리 꺼내 그 위험을 없앤다.
+    user_id = user.user_id
+    await _touch_last_login(user_id, db)
+
+    access_token = create_access_token(user_id)
+    refresh_token, refresh_jti = create_refresh_token(user_id)
+    await save_refresh_jti(user_id, refresh_jti, redis)
+
+    return SocialLoginResult(access_token=access_token, refresh_token=refresh_token)
 
 
 def _has_valid_image_signature(content_type: str, file_bytes: bytes) -> bool:
@@ -135,8 +243,8 @@ async def get_kakao_auth_url(redis: Redis) -> tuple[str, str]:
 
 async def kakao_login(
     code: str, state: str, cookie_state: str | None, db: AsyncSession, redis: Redis
-) -> tuple[str, str]:
-    """카카오 OAuth 콜백을 처리하고 (access_token, refresh_token)을 반환합니다."""
+) -> SocialLoginResult:
+    """카카오 OAuth 콜백을 처리합니다."""
     # 콜백을 받은 브라우저가 로그인을 시작한 브라우저와 같은지 먼저 확인 (로그인 CSRF 방지)
     if not cookie_state or cookie_state != state:
         raise HTTPException(
@@ -214,48 +322,7 @@ async def kakao_login(
     provider_uid = str(provider_uid)
     name = user_info.get("kakao_account", {}).get("name")
 
-    result = await db.execute(
-        select(SocialAccount).where(
-            SocialAccount.provider_type == ProviderType.KAKAO,
-            SocialAccount.provider_uid == provider_uid,
-        )
-    )
-    social = result.scalar_one_or_none()
-
-    is_new_user = social is None
-    if is_new_user:
-        await _check_not_banned(ProviderType.KAKAO, provider_uid, db)
-        try:
-            user = User(name=name)
-            db.add(user)
-            await db.flush()
-            db.add(SocialAccount(
-                user_id=user.user_id,
-                provider_type=ProviderType.KAKAO,
-                provider_uid=provider_uid,
-            ))
-            await db.commit()
-        except IntegrityError:
-            await db.rollback()
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="이미 연동된 소셜 계정입니다",
-            ) from None
-    else:
-        result = await db.execute(select(User).where(User.user_id == social.user_id))
-        user = result.scalar_one()
-
-    # _touch_last_login 내부에서 rollback이 나면 이 세션에 속한 user 객체의 속성이
-    # 전부 만료되어, 이후 user.user_id처럼 다시 접근하는 순간 동기 컨텍스트에서 지연 로딩이
-    # 시도되며 MissingGreenlet 에러로 이어질 수 있음 — 정수로 미리 꺼내 그 위험을 없앤다.
-    user_id = user.user_id
-    await _touch_last_login(user_id, db)
-
-    access_token = create_access_token(user_id)
-    refresh_token, refresh_jti = create_refresh_token(user_id)
-    await save_refresh_jti(user_id, refresh_jti, redis)
-
-    return access_token, refresh_token
+    return await _finish_social_login(ProviderType.KAKAO, provider_uid, name, db, redis)
 
 
 async def get_naver_auth_url(redis: Redis) -> tuple[str, str]:
@@ -279,8 +346,8 @@ async def get_naver_auth_url(redis: Redis) -> tuple[str, str]:
 
 async def naver_login(
     code: str, state: str, cookie_state: str | None, db: AsyncSession, redis: Redis
-) -> tuple[str, str]:
-    """네이버 OAuth 콜백을 처리하고 (access_token, refresh_token)을 반환합니다."""
+) -> SocialLoginResult:
+    """네이버 OAuth 콜백을 처리합니다."""
     # 콜백을 받은 브라우저가 로그인을 시작한 브라우저와 같은지 먼저 확인 (로그인 CSRF 방지)
     if not cookie_state or cookie_state != state:
         raise HTTPException(
@@ -366,48 +433,7 @@ async def naver_login(
     provider_uid = str(provider_uid)
     name = naver_response.get("name")
 
-    result = await db.execute(
-        select(SocialAccount).where(
-            SocialAccount.provider_type == ProviderType.NAVER,
-            SocialAccount.provider_uid == provider_uid,
-        )
-    )
-    social = result.scalar_one_or_none()
-
-    is_new_user = social is None
-    if is_new_user:
-        await _check_not_banned(ProviderType.NAVER, provider_uid, db)
-        try:
-            user = User(name=name)
-            db.add(user)
-            await db.flush()
-            db.add(SocialAccount(
-                user_id=user.user_id,
-                provider_type=ProviderType.NAVER,
-                provider_uid=provider_uid,
-            ))
-            await db.commit()
-        except IntegrityError:
-            await db.rollback()
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="이미 연동된 소셜 계정입니다",
-            ) from None
-    else:
-        result = await db.execute(select(User).where(User.user_id == social.user_id))
-        user = result.scalar_one()
-
-    # _touch_last_login 내부에서 rollback이 나면 이 세션에 속한 user 객체의 속성이
-    # 전부 만료되어, 이후 user.user_id처럼 다시 접근하는 순간 동기 컨텍스트에서 지연 로딩이
-    # 시도되며 MissingGreenlet 에러로 이어질 수 있음 — 정수로 미리 꺼내 그 위험을 없앤다.
-    user_id = user.user_id
-    await _touch_last_login(user_id, db)
-
-    access_token = create_access_token(user_id)
-    refresh_token, refresh_jti = create_refresh_token(user_id)
-    await save_refresh_jti(user_id, refresh_jti, redis)
-
-    return access_token, refresh_token
+    return await _finish_social_login(ProviderType.NAVER, provider_uid, name, db, redis)
 
 
 async def get_google_auth_url(redis: Redis) -> tuple[str, str]:
@@ -432,8 +458,8 @@ async def get_google_auth_url(redis: Redis) -> tuple[str, str]:
 
 async def google_login(
     code: str, state: str, cookie_state: str | None, db: AsyncSession, redis: Redis
-) -> tuple[str, str]:
-    """구글 OAuth 콜백을 처리하고 (access_token, refresh_token)을 반환합니다."""
+) -> SocialLoginResult:
+    """구글 OAuth 콜백을 처리합니다."""
     # 콜백을 받은 브라우저가 로그인을 시작한 브라우저와 같은지 먼저 확인 (로그인 CSRF 방지)
     if not cookie_state or cookie_state != state:
         raise HTTPException(
@@ -511,24 +537,95 @@ async def google_login(
     provider_uid = str(provider_uid)
     name = user_info.get("name")
 
-    result = await db.execute(
-        select(SocialAccount).where(
-            SocialAccount.provider_type == ProviderType.GOOGLE,
-            SocialAccount.provider_uid == provider_uid,
-        )
-    )
-    social = result.scalar_one_or_none()
+    return await _finish_social_login(ProviderType.GOOGLE, provider_uid, name, db, redis)
 
-    is_new_user = social is None
-    if is_new_user:
-        await _check_not_banned(ProviderType.GOOGLE, provider_uid, db)
+
+async def complete_signup(
+    signup_token: str,
+    agree_terms: bool,
+    nickname: str,
+    location: str,
+    db: AsyncSession,
+    redis: Redis,
+) -> tuple[str, str]:
+    """약관 동의 + 닉네임/거주지를 받아 대기 중이던 신규 계정을 실제로 생성합니다.
+
+    signup_token은 소셜 로그인 최초 시도(callback) 시 Redis에 잠깐 저장해둔 가입정보의
+    열쇠 — 1회용이라 성공하면 즉시 삭제하고, TTL이 지났으면 처음부터 다시 로그인해야 한다.
+    """
+    if not agree_terms:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="이용약관 및 개인정보처리방침에 동의해야 가입할 수 있습니다",
+        )
+
+    # 가입정보 조회(get)와 소비(delete)가 원자적이지 않아, 같은 signup_token으로 거의
+    # 동시에 두 요청(더블클릭/네트워크 재시도)이 들어오면 둘 다 같은 가입정보를 읽어
+    # User 생성을 시도할 수 있다. SocialAccount의 (provider_type, provider_uid) 유니크
+    # 제약 덕분에 실제 데이터 손상은 없지만(하나는 409로 막힘), 락으로 아예 직렬화해서
+    # 그 경합 자체를 없앤다 (2026-09-11 리뷰 지적).
+    #
+    # 락 값은 "1" 같은 고정값이 아니라 이 요청만의 고유 토큰이다 — 처리 시간이 TTL을
+    # 넘겨 락이 자연 만료되고 다른 요청이 새로 락을 잡은 뒤, 뒤늦게 원래 요청이
+    # finally에 도달해 무조건 DEL하면 "남의" 락을 지워버릴 수 있다. 해제 시
+    # release_lock_if_owner로 내가 저장한 토큰이 아직 그대로인지 확인 후에만 지운다
+    # (2026-09-11 후속 리뷰 지적 — fencing token 없는 해제).
+    lock_key = f"{_SIGNUP_LOCK_PREFIX}{signup_token}"
+    lock_token = secrets.token_urlsafe(16)
+    try:
+        acquired = await redis.set(lock_key, lock_token, nx=True, ex=_SIGNUP_LOCK_TTL_SECONDS)
+    except RedisError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="서버 오류가 발생했습니다. 잠시 후 다시 시도해주세요",
+        ) from None
+    if not acquired:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="이미 처리 중인 요청입니다. 잠시 후 다시 시도해주세요",
+        )
+
+    try:
+        key = f"{_PENDING_SIGNUP_PREFIX}{signup_token}"
         try:
-            user = User(name=name)
+            raw = await redis.get(key)
+        except RedisError:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="서버 오류가 발생했습니다. 잠시 후 다시 시도해주세요",
+            ) from None
+        if raw is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="가입 세션이 만료되었습니다. 처음부터 다시 로그인해주세요",
+            )
+
+        pending = json.loads(raw)
+        provider_type = ProviderType(pending["provider_type"])
+        provider_uid = pending["provider_uid"]
+        name = pending["name"]
+
+        # 닉네임/거주지 형식 오류나 중복 닉네임은 흔한 입력 실패라 재시도가 정상 흐름이다.
+        # signup_token(pending 데이터)은 계정 생성이 실제로 성공한 뒤에만 소비해야, 실패
+        # 후 값만 고쳐 같은 토큰으로 재제출하는 게 가능하다 (2026-09-11 리뷰 지적 — 예전엔
+        # 여기 오기 전에 미리 지워버려서 실패할 때마다 소셜 로그인부터 다시 해야 했음)
+        nickname = _validate_nickname(nickname)
+        location = _validate_location(location)
+
+        await _check_not_banned(provider_type, provider_uid, db)
+
+        try:
+            user = User(
+                name=name,
+                nickname=nickname,
+                location=location,
+                terms_agreed_at=datetime.now(UTC),
+            )
             db.add(user)
             await db.flush()
             db.add(SocialAccount(
                 user_id=user.user_id,
-                provider_type=ProviderType.GOOGLE,
+                provider_type=provider_type,
                 provider_uid=provider_uid,
             ))
             await db.commit()
@@ -536,23 +633,28 @@ async def google_login(
             await db.rollback()
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="이미 연동된 소셜 계정입니다",
+                detail="이미 사용 중인 닉네임이거나 이미 연동된 소셜 계정입니다",
             ) from None
-    else:
-        result = await db.execute(select(User).where(User.user_id == social.user_id))
-        user = result.scalar_one()
 
-    # _touch_last_login 내부에서 rollback이 나면 이 세션에 속한 user 객체의 속성이
-    # 전부 만료되어, 이후 user.user_id처럼 다시 접근하는 순간 동기 컨텍스트에서 지연 로딩이
-    # 시도되며 MissingGreenlet 에러로 이어질 수 있음 — 정수로 미리 꺼내 그 위험을 없앤다.
-    user_id = user.user_id
-    await _touch_last_login(user_id, db)
+        # 계정 생성이 실제로 성공한 뒤에만 1회용 가입정보를 소비한다
+        try:
+            await redis.delete(key)
+        except RedisError:
+            pass  # 삭제 실패해도 TTL로 자동 정리되므로 가입 자체는 계속 진행
 
-    access_token = create_access_token(user_id)
-    refresh_token, refresh_jti = create_refresh_token(user_id)
-    await save_refresh_jti(user_id, refresh_jti, redis)
+        user_id = user.user_id
+        await _touch_last_login(user_id, db)
 
-    return access_token, refresh_token
+        access_token = create_access_token(user_id)
+        refresh_token, refresh_jti = create_refresh_token(user_id)
+        await save_refresh_jti(user_id, refresh_jti, redis)
+
+        return access_token, refresh_token
+    finally:
+        try:
+            await release_lock_if_owner(lock_key, lock_token, redis)
+        except RedisError:
+            pass  # 락 삭제 실패해도 TTL(_SIGNUP_LOCK_TTL_SECONDS)로 자동 해제됨
 
 
 async def refresh_tokens(refresh_token: str, db: AsyncSession, redis: Redis) -> tuple[str, str]:
@@ -608,32 +710,26 @@ async def logout(access_token: str, redis: Redis) -> None:
     await delete_refresh_token(user_id, redis)
 
 
+async def get_public_profile(user_id: int, db: AsyncSession) -> User:
+    """다른 유저의 공개 프로필 정보를 조회합니다. 탈퇴했거나 없는 유저는 404."""
+    user = await get_active_user(user_id, db)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="존재하지 않는 사용자입니다",
+        )
+    return user
+
+
 async def update_profile(
     user: User, nickname: str | None, location: str | None, db: AsyncSession
 ) -> User:
-    """닉네임/거주지를 수정합니다. 최초 가입 완료와 마이페이지 수정 모두 이 함수로 처리합니다."""
+    """닉네임/거주지를 수정합니다 (마이페이지)."""
     if nickname is not None:
-        nickname = nickname.strip()
-        valid_length = settings.NICKNAME_MIN_LENGTH <= len(nickname) <= settings.NICKNAME_MAX_LENGTH
-        if not valid_length or not _NICKNAME_PATTERN.match(nickname):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    f"닉네임은 한글/영문/숫자 {settings.NICKNAME_MIN_LENGTH}"
-                    f"~{settings.NICKNAME_MAX_LENGTH}자로 입력해주세요"
-                ),
-            )
-        user.nickname = nickname
+        user.nickname = _validate_nickname(nickname)
 
     if location is not None:
-        location = location.strip()
-        valid_length = 1 <= len(location) <= settings.LOCATION_MAX_LENGTH
-        if not valid_length or not _LOCATION_PATTERN.match(location):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"거주지는 한글/영문/숫자 1~{settings.LOCATION_MAX_LENGTH}자로 입력해주세요",
-            )
-        user.location = location
+        user.location = _validate_location(location)
 
     try:
         await db.commit()
@@ -732,15 +828,120 @@ async def delete_profile_image(user: User, db: AsyncSession) -> None:
         logger.warning("기존 이미지 정리 실패 (R2): user_id=%s, url=%s", user.user_id, old_url)
 
 
-async def _anonymize_user_data(user: User, db: AsyncSession) -> str | None:
+@dataclass
+class _AnonymizeResult:
+    """탈퇴 처리 결과 - R2 정리용 URL 모음.
+
+    profile_image_url: 탈퇴 전 프로필 이미지 URL
+    orphaned_image_urls: 하드삭제된(아무도 안 쓴) 커스텀 코스의 코스 이미지 + 리뷰 이미지 URL
+    """
+
+    profile_image_url: str | None
+    orphaned_image_urls: list[str]
+
+
+async def _delete_orphaned_custom_courses(user_id: int, db: AsyncSession) -> list[str]:
+    """탈퇴 유저의 커스텀 코스 중 다른 유저와 전혀 얽히지 않은 것을 완전히 삭제합니다.
+
+    (2026-09-10 팀 결정) 탈퇴 유저의 커스텀 코스는:
+    - 다른 유저의 기록/리뷰가 하나라도 얽혀있으면(이미 탈퇴해 user_id가 NULL인 것도
+      "다른 사람이 쓴 흔적"으로 포함) → 건드리지 않는다. 뒤이은 익명화 단계에서
+      지금처럼 created_by만 NULL 처리되어 서비스에 계속 노출된다.
+    - 본인 기록/리뷰뿐이거나 아예 아무 기록도 없으면 → 주인 없이 영원히 남을 찌꺼기이므로
+      코스 자체를 완전히 삭제한다. 본인의 기록/리뷰도 이 코스에 딸린 것이라 같이 사라진다.
+
+    FK 제약(records/reviews.course_id NOT NULL) 때문에 자식 → 부모 순서로 지운다.
+    반환값은 R2에서 같이 정리해야 할 이미지 URL 목록(코스 이미지 + 리뷰 이미지).
+
+    동시성 주의(2026-09-11 리뷰 지적): 아래 "엮여있는지 판정" 조회와 실제 DELETE 사이에
+    락이 없으면, 그 사이에 다른 유저가 이 코스로 막 완주/리뷰를 남겨도 그대로 같이
+    삭제되어버리는 경쟁 상태가 생긴다. `.with_for_update()`로 코스 row를 먼저 잠가두면,
+    Postgres가 자식 테이블(records/reviews) INSERT 시 부모 row에 거는 FK 락(FOR KEY SHARE)이
+    이 트랜잭션이 끝날 때까지 대기하게 되어 판정 시점과 삭제 시점 사이의 상태가 보장된다.
+    """
+    own_course_ids = (
+        await db.execute(
+            select(Course.course_id)
+            .where(Course.created_by == user_id, Course.course_type == CourseType.CUSTOM)
+            .with_for_update()
+        )
+    ).scalars().all()
+    if not own_course_ids:
+        return []
+
+    # 이 코스들 중, 본인이 아닌 다른 유저(이미 탈퇴해 NULL인 유저 포함)의 기록/리뷰가
+    # 하나라도 있는 코스 id만 추림 — 나머지가 하드삭제 대상(고아 코스)
+    entangled_course_ids = {
+        row[0]
+        for row in (
+            await db.execute(
+                select(Record.course_id)
+                .where(
+                    Record.course_id.in_(own_course_ids),
+                    or_(Record.user_id.is_(None), Record.user_id != user_id),
+                )
+                .union(
+                    select(Review.course_id).where(
+                        Review.course_id.in_(own_course_ids),
+                        or_(Review.user_id.is_(None), Review.user_id != user_id),
+                    )
+                )
+            )
+        ).all()
+    }
+    orphan_course_ids = [cid for cid in own_course_ids if cid not in entangled_course_ids]
+    if not orphan_course_ids:
+        return []
+
+    course_image_urls = (
+        await db.execute(
+            select(CourseImage.image_url).where(CourseImage.course_id.in_(orphan_course_ids))
+        )
+    ).scalars().all()
+    # review_images는 reviews.review_id에 ondelete=CASCADE가 걸려있어 DB가 알아서 지워주지만,
+    # R2 파일은 DB가 못 지워주므로 행이 사라지기 전에 URL을 먼저 뽑아둔다
+    review_image_urls = (
+        await db.execute(
+            select(ReviewImage.image_url)
+            .join(Review, Review.review_id == ReviewImage.review_id)
+            .where(Review.course_id.in_(orphan_course_ids))
+        )
+    ).scalars().all()
+
+    await db.execute(delete(ReviewSummary).where(ReviewSummary.course_id.in_(orphan_course_ids)))
+    # course_id 조건만으로도 안전하지만(위 FOR UPDATE로 이미 보장됨), user_id 조건을
+    # 방어적으로 더해 둔다 — 판정 로직에 미래에 버그가 생겨도 조용히 남의 데이터를 지우는
+    # 대신 FK 위반으로 시끄럽게 실패하게 만들기 위함 (2026-09-11 리뷰 지적)
+    await db.execute(
+        delete(Review).where(Review.course_id.in_(orphan_course_ids), Review.user_id == user_id)
+    )
+    await db.execute(
+        delete(Record).where(Record.course_id.in_(orphan_course_ids), Record.user_id == user_id)
+    )
+    await db.execute(delete(CourseImage).where(CourseImage.course_id.in_(orphan_course_ids)))
+    await db.execute(
+        delete(CourseWaypoint).where(CourseWaypoint.course_id.in_(orphan_course_ids))
+    )
+    await db.execute(
+        delete(CourseFacility).where(CourseFacility.course_id.in_(orphan_course_ids))
+    )
+    await db.execute(delete(Course).where(Course.course_id.in_(orphan_course_ids)))
+
+    return [*course_image_urls, *review_image_urls]
+
+
+async def _anonymize_user_data(user: User, db: AsyncSession) -> _AnonymizeResult:
     """탈퇴 공통 처리: 개인정보 익명화 + 소셜 계정 삭제 + 연관 데이터 익명화.
 
     commit은 호출자가 수행 (강제 탈퇴 시 banned_accounts 기록과 같은 트랜잭션으로 묶기 위함).
-    반환값은 삭제 전 프로필 이미지 URL (R2 정리용).
     """
     now = datetime.now(tz=UTC)
 
     old_profile_image_url = user.profile_image_url
+
+    # 익명화(아래)로 이 유저의 기록/리뷰 user_id가 NULL로 바뀌기 전에, 아직 이 유저
+    # 소유임이 명확한 상태에서 "다른 유저와 안 얽힌 코스"를 먼저 골라 하드삭제한다
+    orphaned_image_urls = await _delete_orphaned_custom_courses(user.user_id, db)
 
     # row 삭제 없이 익명화 — 탈퇴 후에도 통계 집계에 계속 활용
     user.name = None
@@ -753,20 +954,24 @@ async def _anonymize_user_data(user: User, db: AsyncSession) -> str | None:
     await db.execute(delete(SocialAccount).where(SocialAccount.user_id == user.user_id))
 
     # Soft Delete이므로 DB 트리거 미발동 — 서비스 레이어에서 직접 NULL 처리
+    # (하드삭제된 코스의 본인 기록/리뷰는 이미 위에서 지워졌으므로 여기서 자동으로 제외됨)
     await db.execute(update(Record).where(Record.user_id == user.user_id).values(user_id=None))
 
     await db.execute(update(Review).where(Review.user_id == user.user_id).values(user_id=None))
 
+    # 하드삭제된 코스는 이미 위에서 지워졌으므로, 여기서는 얽혀있어 남아있는 코스만 걸림
     await db.execute(
         update(Course).where(Course.created_by == user.user_id).values(created_by=None)
     )
 
-    return old_profile_image_url
+    return _AnonymizeResult(
+        profile_image_url=old_profile_image_url, orphaned_image_urls=orphaned_image_urls
+    )
 
 
 async def withdraw_user(user: User, access_token: str, db: AsyncSession, redis: Redis) -> None:
     """회원 탈퇴(본인) - 단일 트랜잭션 처리."""
-    old_profile_image_url = await _anonymize_user_data(user, db)
+    result = await _anonymize_user_data(user, db)
     await db.commit()
 
     # Redis 정리 실패해도 DB 탈퇴는 완료 — get_current_user가 deleted_at으로 차단하므로 정상 응답
@@ -779,15 +984,25 @@ async def withdraw_user(user: User, access_token: str, db: AsyncSession, redis: 
     except RedisError:
         logger.warning("탈퇴 시 refresh token 정리 실패 (Redis): user_id=%s", user.user_id)
 
-    # R2 정리 실패해도 탈퇴는 완료 — DB에는 이미 NULL 처리됨(고아 파일로만 남음)
-    if old_profile_image_url:
+    # R2 정리 실패해도 탈퇴는 완료 — DB에는 이미 NULL/삭제 처리됨(고아 파일로만 남음)
+    if result.profile_image_url:
         try:
-            await delete_file(old_profile_image_url)
+            await delete_file(result.profile_image_url)
         except (ClientError, BotoCoreError):
             logger.warning(
                 "탈퇴 시 프로필 이미지 정리 실패 (R2): user_id=%s, url=%s",
                 user.user_id,
-                old_profile_image_url,
+                result.profile_image_url,
+            )
+
+    for url in result.orphaned_image_urls:
+        try:
+            await delete_file(url)
+        except (ClientError, BotoCoreError):
+            logger.warning(
+                "탈퇴 시 하드삭제된 코스 이미지 정리 실패 (R2): user_id=%s, url=%s",
+                user.user_id,
+                url,
             )
 
 
@@ -803,7 +1018,10 @@ async def force_withdraw_user(
     result = await db.execute(select(SocialAccount).where(SocialAccount.user_id == user.user_id))
     social = result.scalar_one_or_none()
 
-    old_profile_image_url = await _anonymize_user_data(user, db)
+    # 익명화로 지워지기 전에 닉네임을 캡처 - 밴 목록에서 관리자가 식별할 수 있게 하기 위함
+    nickname_before_anonymize = user.nickname
+
+    result = await _anonymize_user_data(user, db)
 
     if social is not None:
         db.add(BannedAccount(
@@ -811,6 +1029,7 @@ async def force_withdraw_user(
             provider_uid=social.provider_uid,
             reason=reason,
             banned_by=admin_id,
+            banned_nickname=nickname_before_anonymize,
         ))
 
     await db.commit()
@@ -821,13 +1040,23 @@ async def force_withdraw_user(
     except RedisError:
         logger.warning("강제 탈퇴 시 refresh token 정리 실패 (Redis): user_id=%s", user.user_id)
 
-    # R2 정리 실패해도 탈퇴는 완료 — DB에는 이미 NULL 처리됨(고아 파일로만 남음)
-    if old_profile_image_url:
+    # R2 정리 실패해도 탈퇴는 완료 — DB에는 이미 NULL/삭제 처리됨(고아 파일로만 남음)
+    if result.profile_image_url:
         try:
-            await delete_file(old_profile_image_url)
+            await delete_file(result.profile_image_url)
         except (ClientError, BotoCoreError):
             logger.warning(
                 "강제 탈퇴 시 프로필 이미지 정리 실패 (R2): user_id=%s, url=%s",
                 user.user_id,
-                old_profile_image_url,
+                result.profile_image_url,
+            )
+
+    for url in result.orphaned_image_urls:
+        try:
+            await delete_file(url)
+        except (ClientError, BotoCoreError):
+            logger.warning(
+                "강제 탈퇴 시 하드삭제된 코스 이미지 정리 실패 (R2): user_id=%s, url=%s",
+                user.user_id,
+                url,
             )

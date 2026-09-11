@@ -14,9 +14,6 @@ nav { display:flex; gap:42px; font-size:15px; color:#264748; }
 nav a { position:relative; }
 nav a:first-child:after { content:''; position:absolute; height:2px; background:var(--green); left:0; right:0; bottom:-9px; }
 .header-actions { display:flex; gap:10px; align-items:center; }
-.icon-button { width:40px; height:40px; border:0; background:transparent; display:grid; place-items:center; cursor:pointer; }
-.search-icon { width:17px; height:17px; border:2px solid var(--ink); border-radius:50%; position:relative; }
-.search-icon:after { content:''; position:absolute; width:7px; height:2px; background:var(--ink); transform:rotate(45deg); right:-6px; bottom:-3px; }
 .login-button { border:1px solid #b7c3bd; border-radius:22px; background:rgba(255,255,255,.65); padding:10px 21px; color:var(--ink); cursor:pointer; }
 .hero { min-height:720px; background:linear-gradient(105deg,#f8f6ef 0%,#f2f6ed 48%,#dfece7 100%); display:grid; grid-template-columns:52% 48%; position:relative; overflow:hidden; padding-top:84px; }
 .hero-copy { padding:110px 30px 50px clamp(28px,8vw,124px); position:relative; z-index:3; }
@@ -27,6 +24,7 @@ h1 em { font-style:normal; color:var(--blue); }
 .hero-copy>p { margin:0; color:#5c706c; font-family:'Apple SD Gothic Neo',sans-serif; font-size:16px; line-height:1.9; }
 .hero-buttons { display:flex; align-items:center; gap:28px; margin-top:35px; }
 .primary-button { background:var(--green); color:white; padding:16px 22px; border-radius:4px; box-shadow:0 8px 20px rgba(13,177,75,.18); }
+.primary-button.danger-button { background:var(--red); box-shadow:none; }
 .primary-button span { margin-left:25px; }
 .text-button { color:#345452; font-size:14px; border-bottom:1px solid #9cafaa; padding-bottom:5px; }
 .text-button span { margin-left:8px; color:var(--blue); }
@@ -123,6 +121,9 @@ h2 { font-size:36px; letter-spacing:-1.5px; margin:8px 0 0; line-height:1.25; }
 .onboarding-card .primary-button { width:100%; margin-top:26px; border:0; border-radius:8px; cursor:pointer; text-align:center; }
 .onboarding-card .primary-button:disabled { opacity:.6; cursor:not-allowed; }
 .onboarding-error { color:var(--red); font-size:13px; margin:14px 0 0; }
+.onboarding-terms-box { white-space:pre-wrap; max-height:120px; overflow-y:auto; background:#f6f8f7; border:1px solid #e4eae6; border-radius:8px; padding:12px 14px; font-size:12px; color:#5c706c; line-height:1.6; margin-top:8px; }
+.onboarding-checkbox { display:flex; align-items:center; gap:8px; font-size:13px; color:var(--ink); margin:12px 0 0; }
+.onboarding-checkbox input { width:auto; }
 .oauth-callback { min-height:100vh; display:flex; align-items:center; justify-content:center; color:var(--ink); font-family:'Apple SD Gothic Neo',sans-serif; }
 
 /* 헤더 — 로그인 상태 프로필 메뉴 */
@@ -153,6 +154,52 @@ button.mypage-image-upload:disabled { opacity:.6; cursor:not-allowed; }
 .mypage-review-button { display:flex; justify-content:space-between; align-items:center; width:100%; max-width:360px; margin-top:32px; padding:16px 4px; border:0; border-top:1px solid #e1e7e2; background:transparent; color:var(--ink); font-size:14px; cursor:pointer; }
 .mypage-review-button span { color:#9aa9a5; }
 button.profile-avatar { border:0; padding:0; font:inherit; cursor:pointer; }
+
+/* 공개 프로필 (다른 유저 닉네임/거주지/만든 코스, 관리자면 강제 탈퇴 패널도 노출) */
+.profile-page { max-width:720px; margin:0 auto; padding:124px 24px 80px; min-height:100vh; }
+.profile-header { display:flex; align-items:center; gap:20px; }
+.profile-header h1 { font-size:26px; letter-spacing:-1px; margin:0; }
+.profile-location { margin:6px 0 0; color:#5c706c; font-size:14px; }
+.profile-admin-panel { margin-top:28px; padding:20px; border:1px solid #f4a3b7; border-radius:10px; background:#fdecee; }
+.profile-admin-form { display:flex; flex-direction:column; align-items:flex-start; gap:10px; }
+.profile-admin-form label { font-size:13px; font-weight:700; color:var(--red); }
+.profile-admin-form input { width:100%; padding:12px 14px; border:1px solid #dadce0; border-radius:8px; font-size:14px; }
+.profile-admin-form .primary-button { border:0; border-radius:8px; cursor:pointer; padding:9px 18px; font-size:13px; box-shadow:none; }
+.profile-admin-form .primary-button:disabled { opacity:.6; cursor:not-allowed; }
+.profile-courses { margin-top:40px; }
+.profile-courses h2 { font-size:22px; margin:0 0 16px; }
+
+/* 관리자 페이지 (대시보드 통계 + 밴 목록) */
+.admin-page { max-width:1080px; margin:0 auto; padding:124px 24px 80px; min-height:100vh; }
+.admin-page h1 { font-size:28px; letter-spacing:-1px; margin:0 0 32px; }
+.admin-section { margin-bottom:48px; }
+.admin-section h2 { font-size:20px; margin:0 0 6px; }
+.admin-section-hint { margin:0 0 20px; color:#5c706c; font-size:13px; }
+.admin-stat-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:16px; }
+.admin-stat-card { padding:20px; border:1px solid #e1e7e2; border-radius:10px; background:#fff; }
+.admin-stat-card h3 { font-size:15px; margin:0 0 14px; color:var(--ink); }
+.admin-stat-simple, .admin-stat-period { margin:0; display:flex; flex-direction:column; gap:8px; }
+.admin-stat-simple div, .admin-stat-period div { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.admin-stat-simple dt, .admin-stat-period dt { color:#82928e; font-size:13px; }
+.admin-stat-simple dd, .admin-stat-period dd { margin:0; font-size:15px; color:var(--ink); font-weight:600; }
+.admin-popular-course-list { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:10px; }
+.admin-popular-course-list li { display:flex; align-items:center; justify-content:space-between; gap:12px; font-size:13px; }
+.admin-popular-course-list a { color:var(--ink); font-weight:600; text-decoration:underline; }
+.admin-popular-course-list span { color:#82928e; white-space:nowrap; }
+.admin-banned-list { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:10px; }
+.admin-banned-item { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:16px 20px; border:1px solid #e1e7e2; border-radius:10px; }
+.admin-banned-item > div { display:flex; align-items:center; gap:12px; flex-wrap:wrap; font-size:13px; }
+.admin-banned-item strong { color:var(--ink); }
+.admin-banned-item span { color:#5c706c; }
+.admin-unban-button { border:1px solid #dadce0; background:#fff; color:var(--ink); border-radius:8px; padding:8px 16px; font-size:13px; cursor:pointer; white-space:nowrap; }
+.admin-unban-button:disabled { opacity:.6; cursor:not-allowed; }
+.admin-search-form { display:flex; gap:10px; margin-bottom:20px; }
+.admin-search-form input { flex:1; max-width:320px; padding:10px 14px; border:1px solid #dadce0; border-radius:8px; font-size:14px; }
+.admin-search-form .primary-button { border:0; border-radius:8px; cursor:pointer; padding:10px 20px; font-size:13px; box-shadow:none; }
+.admin-search-results { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:10px; }
+.admin-search-results li { display:flex; align-items:center; gap:14px; padding:14px 20px; border:1px solid #e1e7e2; border-radius:10px; font-size:14px; }
+.admin-search-results a { color:var(--ink); font-weight:600; text-decoration:underline; }
+.admin-search-results span { color:#82928e; font-size:13px; }
 
 /* 공용 모달 오버레이 (프로필 사진 원본 보기, 내 리뷰 관리 등) */
 .modal-overlay { position:fixed; inset:0; background:rgba(16,42,43,.85); display:flex; align-items:center; justify-content:center; z-index:100; padding:24px; }
@@ -223,6 +270,7 @@ button.text-button { background:transparent; border:0; border-radius:0; padding:
 .review-load-more { display:block; margin:18px auto 0; }
 .review-item { padding:18px 20px; border:1px solid #e1e7e2; border-radius:10px; }
 .review-item-header { display:flex; align-items:center; gap:10px; margin-bottom:8px; }
+.review-author-link { margin-left:auto; font-size:12px; }
 .review-item-content { margin:0; color:#3d524f; font-family:'Apple SD Gothic Neo',sans-serif; font-size:17px; line-height:1.7; white-space:pre-wrap; }
 .review-difficulty-badge { font-size:13px; font-weight:700; padding:5px 12px; border-radius:14px; color:#fff; }
 .review-difficulty-badge.green { background:var(--green); }

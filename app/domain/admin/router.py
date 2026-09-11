@@ -11,6 +11,7 @@ from app.domain.admin.schemas import (
     BannedAccountListResponse,
     DashboardStatsResponse,
     ForceWithdrawRequest,
+    UserSearchListResponse,
 )
 from app.domain.user.models import User
 from app.domain.user.schemas import MessageResponse
@@ -30,6 +31,18 @@ async def force_withdraw(
     """지속적으로 문제가 되는 유저를 강제 탈퇴 처리합니다."""
     await admin_service.force_withdraw_user(admin.user_id, user_id, body.reason, db, redis)
     return MessageResponse(message="유저가 강제 탈퇴 처리되었습니다")
+
+
+@router.get("/users/search", response_model=UserSearchListResponse, summary="닉네임으로 유저 검색")
+async def search_users(
+    nickname: str = Query(min_length=1, max_length=30),
+    page: int = Query(default=1, ge=1),
+    size: int = Query(default=20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    admin: User = Depends(get_current_admin),
+) -> UserSearchListResponse:
+    """닉네임 일부로 유저를 검색합니다 (관리자 계정 제외). 강제 탈퇴 대상을 찾을 때 사용."""
+    return await admin_service.search_users(nickname, page, size, db)
 
 
 @router.get("/banned-accounts", response_model=BannedAccountListResponse, summary="밴 목록 조회")

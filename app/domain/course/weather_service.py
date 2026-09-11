@@ -80,6 +80,15 @@ class _WarningRaw(BaseModel):
     text: str | None
 
 
+def _get_location_hint(course: Course) -> str | None:
+    """특보 관련성 코멘트/캐시 키에 쓸 지역 힌트.
+
+    ㅡ 커스텀코스는 시작/종료 좌표 지역 다를 수 있어서 둘 다 전달."""
+    if course.sigun and course.end_sigun and course.sigun != course.end_sigun:
+        return f"{course.sigun}, {course.end_sigun}"
+    return course.sigun or course.end_sigun
+
+
 def _get_representative_point(course: Course) -> tuple[float, float] | None:
     """완주 인증 기준점(start/end)의 중간점을 대표 좌표로 사용.
 
@@ -159,8 +168,8 @@ def _get_current_condition(items: list[dict]) -> str | None:
 def _get_temp_stats(items: list[dict]) -> tuple[float | None, float | None]:
     """예보 항목에서 그날 최저/최고 기온을 뽑기.
 
-    특보가 없을 때 모달 안에 통계칩으로 보여주는 용도
-    ㅡ 이미 받아온 단기예보 데이터에서 계산만 함."""
+    모달 안에 통계칩으로 항상 보여주는 용도
+    ㅡ 이미 받아온 단기예보 데이터에서 계산만."""
     temps = [float(item["fcstValue"]) for item in items if item.get("category") == "TMP"]
     if not temps:
         return None, None
@@ -170,9 +179,8 @@ def _get_temp_stats(items: list[dict]) -> tuple[float | None, float | None]:
 def _get_weather_tip(min_temp: float | None, max_temp: float | None) -> str | None:
     """최저/최고 기온 기준 규칙 기반 팁 한 줄 만들기.
 
-    특보가 없을 때만 프론트가 노출.
+    특보 유무와 무관하게 프론트가 항상 노출.
     ㅡ AI 호출 없이 서버에서 계산하므로 추가 지연/비용 X
-    (특보 있을 때는 이미 특보원문+판단코멘트로 모달이 충분히 풍부)
     """
     if min_temp is None or max_temp is None:
         return None
@@ -421,7 +429,9 @@ async def get_weather_briefing(
     if not warning_raw.ok:
         warning_paragraph_coro = _immediate("특보 정보를 확인하지 못했습니다.")
     elif warning_raw.text:
-        warning_paragraph_coro = _get_warning_comment(redis, course.sigun, warning_raw.text)
+        warning_paragraph_coro = _get_warning_comment(
+            redis, _get_location_hint(course), warning_raw.text
+        )
     else:
         warning_paragraph_coro = _immediate("현재 발효 중인 특보는 없습니다.")
 
@@ -440,7 +450,8 @@ async def get_weather_briefing(
 
     return WeatherBriefingResponse(
         warning_raw_text=warning_raw.text,
-        briefing=f"{forecast_briefing.paragraph}\n\n{warning_paragraph}",
+        briefing=forecast_briefing.paragraph,
+        warning_comment=warning_paragraph,
         condition=forecast_briefing.condition,
         min_temp=forecast_briefing.min_temp,
         max_temp=forecast_briefing.max_temp,

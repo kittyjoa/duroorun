@@ -12,6 +12,7 @@ from shapely.geometry.base import BaseGeometry
 from app.domain.course.models import Difficulty
 from app.domain.review.schemas import ReviewSummaryResponse
 
+
 # 아래 두 geojson은 이 모듈이 임포트되는 순간(앱 기동 시점) 즉시 읽어서 shapely
 # 도형으로 변환해둔다. 둘 중 하나라도 없으면 앱 전체 기동 X.
 # TODO(배포 담당자): CI/배포 파이프라인에 아래 두 파일이 git에 tracked 상태인지
@@ -234,16 +235,20 @@ class DrnbCourseDetailResponse(BaseModel):
 class WeatherBriefingResponse(BaseModel):
     """코스 날씨·안전 브리핑 응답 - "코스 날씨·안전 브리핑" 버튼 클릭 시 조회"""
 
-    # 기상청 특보 통보문 원문 그대로 (발효 중인 특보 없으면 None)
+    # 기상청 특보 현황 원문 그대로 (발효 중인 특보 없으면 None)
     # ㅡ AI가 다시 쓰지 않고 그대로 노출
     warning_raw_text: str | None
-    # AI가 만든 오늘 하루 날씨 요약 + (특보 원문이 있다면) 코스 지역과의 관련성 판단 코멘트
+    # AI가 만든 오늘 하루 날씨 요약 (특보 관련 문구는 안 섞임)
     briefing: str
+    # 특보 관련 한 줄 - 특보 원문 있으면 AI의 코스 지역 관련성 판단 코멘트,
+    # 없으면 "현재 발효 중인 특보는 없습니다" 같은 고정 문구.
+    # (특보 없을 때는 중립색, 있을 때는 원문 박스 아래 텍스트로).
+    warning_comment: str
     # 현재 시각과 가장 가까운 예보 슬롯의 하늘상태/강수형태 ("맑음"/"구름많음"/"흐림"/"비"/
     # "비/눈"/"눈"/"소나기") - 프론트가 날씨 아이콘/애니메이션을 고르는 용도.
     # 예보 데이터를 아예 못 가져온 경우 None
     condition: str | None
-    # 그날 최고/최저 기온 - 특보 없는 경우만: 최고/최저 통계칩 + 기온별 간단팁 노출
+    # 그날 최고/최저 기온 - 항상 표시: 최고/최저 통계칩 + 기온별 간단팁 노출
     # tip은 ai 호출 안 하고 서버에서 계산
     # ㅡ 예보 데이터를 못 가져온 경우 None
     min_temp: float | None

@@ -33,6 +33,10 @@ const LOADING_ICON_INTERVAL_MS = 700;
 // 무한정 기다리게 하지 않고 더 빨리 통제권(재시도) 돌려주기.
 const WEATHER_BRIEFING_TIMEOUT_MS = 20000;
 
+// 특보 원문은 백엔드에서 5분(WEATHER_WARNING_RAW_CACHE_TTL_SECONDS) 캐싱
+// ㅡ 모달 다시 열 때 이보다 오래됐으면 재조회, 그사이 새로 발표된 특보 반영.
+const WEATHER_REFETCH_STALE_MS = 5 * 60 * 1000;
+
 const DifficultyPicker = ({ value, onChange }) => (
   <div className="review-difficulty-picker" role="group" aria-label="체감 난이도">
     {Object.entries(DIFFICULTY_LABEL).map(([level, label]) => (
@@ -76,9 +80,10 @@ const CourseDetail = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  // 코스 날씨·안전 브리핑 - 버튼(모달) 처음 열 때만 조회(lazy), 이후 재오픈 시 재요청 X
+  // 코스 날씨·안전 브리핑 - 버튼(모달) 처음 열 때 조회(lazy). 이후 재오픈 시엔
+  // WEATHER_REFETCH_STALE_MS 안이면 재요청 생략, 지났으면 재조회.
   const weatherModalRef = useRef(null);
-  const weatherFetchedRef = useRef(false);
+  const weatherFetchedAtRef = useRef(null);
   // fetchReviews와 동일한 staleness(오래됨) 체크용
   // ㅡ 새 코스 화면에 이전 코스 날씨 덮어쓰는거 방지
   const weatherRequestSeqRef = useRef(0);
@@ -204,7 +209,7 @@ const CourseDetail = () => {
     setIsWeatherModalOpen(false);
     setWeatherBriefing(null);
     setWeatherError('');
-    weatherFetchedRef.current = false;
+    weatherFetchedAtRef.current = null;
   }, [courseId]);
 
   // 관광지 카드는 페이지 진입 시 바로 조회.
@@ -231,7 +236,7 @@ const CourseDetail = () => {
 
   const fetchWeatherBriefing = async () => {
     const isStale = createStaleChecker(weatherRequestSeqRef);
-    weatherFetchedRef.current = true;
+    weatherFetchedAtRef.current = Date.now();
     setWeatherLoading(true);
     setWeatherError('');
 
@@ -245,7 +250,7 @@ const CourseDetail = () => {
       if (!res.ok) {
         const data = await res.json().catch(() => null);
         setWeatherError(data?.detail ?? '날씨 정보를 불러오지 못했어요.');
-        weatherFetchedRef.current = false; // 실패했으니 다음에 다시 열면 재시도 허용
+        weatherFetchedAtRef.current = null; // 실패했으니 다음에 다시 열면 재시도 허용
         return;
       }
       const data = await res.json();
@@ -258,7 +263,7 @@ const CourseDetail = () => {
             ? '응답이 너무 오래 걸리고 있어요. 잠시 후 다시 시도해주세요.'
             : '서버에 연결할 수 없어요.',
         );
-        weatherFetchedRef.current = false; // 실패했으니 다음에 다시 열면 재시도 허용
+        weatherFetchedAtRef.current = null; // 실패했으니 다음에 다시 열면 재시도 허용
       }
     } finally {
       clearTimeout(timeoutId);
@@ -268,7 +273,10 @@ const CourseDetail = () => {
 
   const handleOpenWeatherModal = () => {
     setIsWeatherModalOpen(true);
-    if (!weatherFetchedRef.current) fetchWeatherBriefing();
+    const fetchedAt = weatherFetchedAtRef.current;
+    if (fetchedAt === null || Date.now() - fetchedAt >= WEATHER_REFETCH_STALE_MS) {
+      fetchWeatherBriefing();
+    }
   };
 
   // "더보기"는 offset(이미 불러온 개수)만큼 건너뛰고 그 다음 항목만 받아서 이어붙인다.
@@ -941,24 +949,28 @@ const CourseDetail = () => {
                 )}
                 <p className="weather-briefing-text">{weatherBriefing.briefing}</p>
                 {weatherBriefing.warning_raw_text ? (
-                  <p className="weather-warning-quote">{weatherBriefing.warning_raw_text}</p>
-                ) : (
-                  // 특보 있을때: 원문+판단 코멘트로 이미 모달이 차 있어서 안 보여줌
-                  // 특보 없는 경우만: 통계칩/팁을 더해서 날씨 정보 추가 제공
                   <>
-                    {weatherBriefing.min_temp != null && weatherBriefing.max_temp != null && (
-                      <div className="weather-stat-chips">
-                        <span className="weather-stat-chip">
-                          🔵 최저 {Math.round(weatherBriefing.min_temp)}°
-                        </span>
-                        <span className="weather-stat-chip">
-                          🔴 최고 {Math.round(weatherBriefing.max_temp)}°
-                        </span>
-                      </div>
-                    )}
-                    {weatherBriefing.tip && <p className="weather-tip">{weatherBriefing.tip}</p>}
+                    <p className="weather-warning-quote">{weatherBriefing.warning_raw_text}</p>
+                    <p className="weather-warning-comment">{weatherBriefing.warning_comment}</p>
                   </>
+                ) : (
+                  // 특보 없음/확인 실패 문구도 원문처럼 눈에 띄는 박스
+                  // ㅡ 중립색 박스(weather-no-warning)를 따로 둔다.
+                  <p className="weather-no-warning">{weatherBriefing.warning_comment}</p>
                 )}
+                {/* 특보현황조회(getPwnStatus) 기반으로 바뀌면서 원문이 강원 관련 줄만
+                    골라낸 짧은 요약이 됨 - 통계칩/팁을 특보 유무와 무관하게 항상 표시. */}
+                {weatherBriefing.min_temp != null && weatherBriefing.max_temp != null && (
+                  <div className="weather-stat-chips">
+                    <span className="weather-stat-chip">
+                      🔵 최저 {Math.round(weatherBriefing.min_temp)}°
+                    </span>
+                    <span className="weather-stat-chip">
+                      🔴 최고 {Math.round(weatherBriefing.max_temp)}°
+                    </span>
+                  </div>
+                )}
+                {weatherBriefing.tip && <p className="weather-tip">{weatherBriefing.tip}</p>}
               </>
             )}
           </div>

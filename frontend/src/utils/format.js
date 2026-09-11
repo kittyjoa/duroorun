@@ -1,4 +1,4 @@
-// 러닝 기록 화면(RecordStart, RecordHistory)에서 공통으로 쓰는 시간/페이스 표시 포맷터
+// 러닝 기록(시간/페이스)과 코스 카드(지역 배지) 등 여러 화면에서 쓰는 공통 표시 포맷터
 
 export const formatElapsed = (totalSeconds) => {
   if (totalSeconds == null) return '정보 없음';

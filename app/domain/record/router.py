@@ -8,6 +8,7 @@ from app.database import get_db
 from app.domain.record import service as record_service
 from app.domain.record.schemas import (
     MyRecordListResponse,
+    MyRecordStatsResponse,
     RecordEndRequest,
     RecordResponse,
     RecordStartRequest,
@@ -39,6 +40,18 @@ async def end_record(
     """러닝종료"""
     return await record_service.end_record(
         session=session, user_id=current_user.user_id, record_id=record_id, body=body
+    )
+
+
+@router.get("/stats", response_model=MyRecordStatsResponse)
+async def get_my_record_stats(
+    session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """내 러닝기록 누적 통계(완주한 기록 기준 총 거리/횟수) - /{record_id}보다 먼저 등록해야
+    한다. 안 그러면 "stats"가 record_id(int)로 파싱 시도되다가 422로 막힌다."""
+    return await record_service.get_my_record_stats(
+        session=session, user_id=current_user.user_id
     )
 
 

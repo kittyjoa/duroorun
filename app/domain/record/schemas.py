@@ -74,3 +74,10 @@ class MyRecordListResponse(BaseModel):
     total: int
     page: int
     size: int
+
+
+class MyRecordStatsResponse(BaseModel):
+    """내 러닝기록 누적 통계 (완주한 기록 기준) - FEATURES.md "내 러닝 기록 조회" 항목"""
+
+    total_distance_km: float
+    total_completions: int

@@ -14,6 +14,7 @@ from app.domain.record.models import Record
 from app.domain.record.schemas import (
     MyRecordListResponse,
     MyRecordResponse,
+    MyRecordStatsResponse,
     RecordEndRequest,
     RecordResponse,
     RecordStartRequest,
@@ -350,4 +351,26 @@ async def get_records(
         total=total,
         page=page,
         size=size,
+    )
+
+
+async def get_my_record_stats(session: AsyncSession, user_id: int) -> MyRecordStatsResponse:
+    """내 러닝기록 누적 통계(완주한 기록 기준) - admin/service.py의 get_record_stats와 동일한
+    쿼리 패턴(사이트 전체 대신 user_id로 필터링)이다. 완주 시점에 스냅샷 저장된
+    distance_km을 합산 - Course.distance를 그때그때 합산하면 나중에 코스 거리가 수정될 때
+    과거 완주 기록의 누적 거리까지 소급으로 바뀌어버린다.
+    """
+    total_distance_km, total_completions = (
+        await session.execute(
+            select(
+                func.coalesce(func.sum(Record.distance_km), 0),
+                func.count(Record.record_id),
+            )
+            .select_from(Record)
+            .where(Record.user_id == user_id, Record.is_completed.is_(True))
+        )
+    ).one()
+    return MyRecordStatsResponse(
+        total_distance_km=total_distance_km,
+        total_completions=total_completions,
     )

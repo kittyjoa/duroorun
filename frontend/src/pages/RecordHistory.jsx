@@ -20,6 +20,9 @@ const RecordHistory = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [total, setTotal] = useState(0);
+  // 누적 통계(총 거리/완주 횟수) - 목록과 별개 엔드포인트라 별도 state로 관리. 더보기를
+  // 여러 번 눌러도 이 값은 안 바뀌므로 목록 fetch 로직에 묶지 않고 마운트 시 한 번만 받는다.
+  const [stats, setStats] = useState(null);
   const [loadingMore, setLoadingMore] = useState(false);
   // "더보기" 실패는 error(초기 로딩 에러)와 분리한다 - error를 같이 쓰면 render 조건이
   // !error를 요구해서, 더보기만 실패해도 이미 불러온 목록 전체가 화면에서 사라져버린다
@@ -172,10 +175,25 @@ const RecordHistory = () => {
     loadingMoreRef.current = false;
     setLoadMoreError('');
     fetchRecords(1);
+    fetchStats();
     return () => {
       unmountedRef.current = true;
     };
   }, [userLoading, user]);
+
+  // 누적 통계는 목록과 별개 엔드포인트라 실패해도 목록 자체엔 영향 없게 조용히 무시한다
+  // (요약 정보일 뿐이지 핵심 기능이 아니므로 에러 UI를 따로 두지 않는다)
+  const fetchStats = async () => {
+    try {
+      const res = await apiFetch('/v1/records/stats');
+      if (unmountedRef.current || !res.ok) return;
+      const data = await res.json();
+      if (unmountedRef.current) return;
+      setStats(data);
+    } catch {
+      // 통계 조회 실패는 조용히 무시
+    }
+  };
 
   const handleLoadMore = () => {
     if (loadingMoreRef.current) return;
@@ -279,6 +297,9 @@ const RecordHistory = () => {
         // 재시도해도 404만 반복되니, 새로고침 전까지는 비활성 상태를 유지한다(리뷰 지적)
         setStaleRecordIds((prev) => new Set(prev).add(recordId));
       }
+      // 완주(is_completed=true) 기록을 지웠으면 누적 통계도 줄어들어야 한다 - 삭제된
+      // 기록이 완주였는지 여기서 구분하지 않고 항상 다시 받아온다(실패해도 조용히 무시됨)
+      fetchStats();
     } catch {
       setDeleteError('서버에 연결할 수 없어요. 잠시 후 다시 시도해주세요.');
     } finally {
@@ -298,6 +319,15 @@ const RecordHistory = () => {
           <span className="section-kicker">러닝 기록</span>
           <h1>내 러닝 히스토리</h1>
         </div>
+
+        {/* 완주 기록 기준 누적 통계 - 실패해도 목록 자체엔 영향 없어야 하므로 stats가
+            아직 없을 땐(로딩 중이거나 실패) 그냥 아무것도 안 보여준다 */}
+        {stats && (
+          <div className="record-history-stats-summary">
+            <span>누적 거리 {stats.total_distance_km.toFixed(1)}km</span>
+            <span>완주 {stats.total_completions}회</span>
+          </div>
+        )}
 
         {loading && <p className="course-list-status">불러오는 중...</p>}
         {error && <p className="course-list-status error">{error}</p>}

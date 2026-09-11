@@ -12,7 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from app.core.security import create_access_token
 from app.domain.course.models import Course
 from app.domain.record.models import Record
-from app.domain.record.service import delete_record
+from app.domain.record.service import delete_record, get_my_record_stats
 from app.domain.user.models import User
 from app.main import app
 from app.redis import close_redis
@@ -219,3 +219,84 @@ async def test_in_progress_record_without_ended_at_saves_normally(db_session):
     await db_session.execute(delete(Record).where(Record.record_id == record.record_id))
     await db_session.execute(delete(Course).where(Course.course_id == course.course_id))
     await db_session.commit()
+
+
+async def test_get_my_record_stats_sums_only_completed_records(db_session):
+    """완주(is_completed=True)한 기록의 distance_km만 합산하고, 진행 중인 기록은 통계에서
+    제외된다. 다른 유저의 완주 기록도 섞어서 user_id 필터가 정확히 걸리는지 확인한다.
+    """
+    course = await _make_course(db_session)
+    owner = User(nickname=f"pytest-owner-{uuid.uuid4().hex[:12]}")
+    other_user = User(nickname=f"pytest-other-{uuid.uuid4().hex[:12]}")
+    db_session.add_all([owner, other_user])
+    await db_session.flush()
+
+    db_session.add_all(
+        [
+            # 완주 기록 2개 (5.5km + 3.2km = 8.7km, 완주 2회) - 통계에 합산돼야 함
+            Record(
+                user_id=owner.user_id,
+                course_id=course.course_id,
+                started_at=datetime.now(UTC),
+                ended_at=datetime.now(UTC),
+                is_completed=True,
+                distance_km=5.5,
+            ),
+            Record(
+                user_id=owner.user_id,
+                course_id=course.course_id,
+                started_at=datetime.now(UTC),
+                ended_at=datetime.now(UTC),
+                is_completed=True,
+                distance_km=3.2,
+            ),
+            # 진행 중(미완주) 기록 - 통계에서 제외돼야 함
+            Record(
+                user_id=owner.user_id,
+                course_id=course.course_id,
+                started_at=datetime.now(UTC),
+                ended_at=None,
+                is_completed=False,
+            ),
+            # 다른 유저의 완주 기록 - owner의 통계에 섞이면 안 됨
+            Record(
+                user_id=other_user.user_id,
+                course_id=course.course_id,
+                started_at=datetime.now(UTC),
+                ended_at=datetime.now(UTC),
+                is_completed=True,
+                distance_km=100.0,
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    try:
+        result = await get_my_record_stats(session=db_session, user_id=owner.user_id)
+        assert result.total_completions == 2
+        assert result.total_distance_km == pytest.approx(8.7)
+    finally:
+        await db_session.execute(
+            delete(Record).where(Record.user_id.in_([owner.user_id, other_user.user_id]))
+        )
+        await db_session.execute(
+            delete(User).where(User.user_id.in_([owner.user_id, other_user.user_id]))
+        )
+        await db_session.execute(delete(Course).where(Course.course_id == course.course_id))
+        await db_session.commit()
+
+
+async def test_get_my_record_stats_zero_when_no_completed_records(db_session):
+    """완주 기록이 하나도 없으면 0km/0회를 반환한다 (NULL 대신 coalesce로 0 처리)."""
+    user = User(nickname=f"pytest-user-{uuid.uuid4().hex[:12]}")
+    db_session.add(user)
+    await db_session.commit()
+    await db_session.refresh(user)
+
+    try:
+        result = await get_my_record_stats(session=db_session, user_id=user.user_id)
+        assert result.total_completions == 0
+        assert result.total_distance_km == 0
+    finally:
+        await db_session.execute(delete(User).where(User.user_id == user.user_id))
+        await db_session.commit()

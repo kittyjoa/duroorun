@@ -27,6 +27,7 @@ from app.core.security import (
     decode_token_ignore_exp,
     delete_refresh_token,
     get_active_user,
+    release_lock_if_owner,
     rotate_refresh_jti,
     save_refresh_jti,
 )
@@ -563,9 +564,16 @@ async def complete_signup(
     # User 생성을 시도할 수 있다. SocialAccount의 (provider_type, provider_uid) 유니크
     # 제약 덕분에 실제 데이터 손상은 없지만(하나는 409로 막힘), 락으로 아예 직렬화해서
     # 그 경합 자체를 없앤다 (2026-09-11 리뷰 지적).
+    #
+    # 락 값은 "1" 같은 고정값이 아니라 이 요청만의 고유 토큰이다 — 처리 시간이 TTL을
+    # 넘겨 락이 자연 만료되고 다른 요청이 새로 락을 잡은 뒤, 뒤늦게 원래 요청이
+    # finally에 도달해 무조건 DEL하면 "남의" 락을 지워버릴 수 있다. 해제 시
+    # release_lock_if_owner로 내가 저장한 토큰이 아직 그대로인지 확인 후에만 지운다
+    # (2026-09-11 후속 리뷰 지적 — fencing token 없는 해제).
     lock_key = f"{_SIGNUP_LOCK_PREFIX}{signup_token}"
+    lock_token = secrets.token_urlsafe(16)
     try:
-        acquired = await redis.set(lock_key, "1", nx=True, ex=_SIGNUP_LOCK_TTL_SECONDS)
+        acquired = await redis.set(lock_key, lock_token, nx=True, ex=_SIGNUP_LOCK_TTL_SECONDS)
     except RedisError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -644,7 +652,7 @@ async def complete_signup(
         return access_token, refresh_token
     finally:
         try:
-            await redis.delete(lock_key)
+            await release_lock_if_owner(lock_key, lock_token, redis)
         except RedisError:
             pass  # 락 삭제 실패해도 TTL(_SIGNUP_LOCK_TTL_SECONDS)로 자동 해제됨
 

@@ -125,10 +125,10 @@ const MyPage = () => {
   useFocusTrap(reviewModalRef, isReviewOpen);
 
   const fetchMyReviews = async (targetPage = 1, { append = false } = {}) => {
-    if (append) {
-      if (loadingMoreReviewsRef.current) return;
-      loadingMoreReviewsRef.current = true;
-    }
+    // append 시의 중복 실행 가드는 호출부(handleLoadMoreReviews)에서 클릭 시점에
+    // 동기적으로 처리한다 - 여기서도 loadingMoreReviewsRef를 확인하면, 호출부가 이미
+    // true로 세팅해둔 상태라 항상 걸려서 매번 조용히 아무 일도 안 하고 끝나버린다
+    // (RecordHistory.jsx의 fetchRecords와 동일하게 이 함수 자체엔 가드를 두지 않는다)
     const requestId = ++reviewsRequestIdRef.current;
     const isStale = () => reviewsUnmountedRef.current || reviewsRequestIdRef.current !== requestId;
 
@@ -196,11 +196,20 @@ const MyPage = () => {
   }, [isReviewOpen]);
 
   const handleLoadMoreReviews = () => {
+    // loadingMoreReviews(state)만으로는 리렌더 전까지 반영이 안 돼서, 연달아 두 번
+    // 클릭하면 둘 다 큐에 들어간다 - fetchMyReviews 내부의 loadingMoreReviewsRef 체크는
+    // 큐 실행 시점에만 유효한데, 첫 번째 호출의 finally가 이미 ref를 풀어준 뒤에 두
+    // 번째가 실행되면 가드가 무력화되어 한 번 클릭에 페이지 두 개가 로드된다(리뷰 지적).
+    // RecordHistory.jsx의 handleLoadMore와 동일하게 클릭 시점에 동기적으로 막는다.
+    if (loadingMoreReviewsRef.current) return;
     // 목록에 "새로고침 필요"(재조회 실패로 서버와 어긋난) 리뷰가 남아있으면 더보기를
     // 막는다 - RecordHistory.jsx와 동일한 이유(더보기는 기존 목록을 재검증하지 않고
     // 다음 페이지만 이어붙이므로, 어긋난 상태 위에서 진행하면 리뷰가 하나 조용히
     // 누락될 수 있다)
     if (staleReviewIds.size > 0) return;
+    loadingMoreReviewsRef.current = true;
+    setLoadingMoreReviews(true);
+    setLoadMoreReviewsError('');
     runListOpExclusive(() => fetchMyReviews(reviewsPageRef.current + 1, { append: true }));
   };
 

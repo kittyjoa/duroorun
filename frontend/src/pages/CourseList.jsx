@@ -6,17 +6,8 @@ import Header from '../components/layout/Header';
 import { useUser } from '../contexts/UserContext';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { usePaginatedCourses } from '../hooks/usePaginatedCourses';
-
-// 해파랑길 강원 구간(29~50코스)이 지나는 시/군, 삼척→고성 순 (남→북)
-// DB에 저장된 sigun 값과 정확히 일치해야 필터가 걸림 (백엔드가 == 비교)
-const GANGWON_SIGUN_OPTIONS = [
-  '강원 삼척시',
-  '강원 동해시',
-  '강원 강릉시',
-  '강원 양양군',
-  '강원 속초시',
-  '강원 고성군',
-];
+import { useSigunOptions } from '../hooks/useSigunOptions';
+import { formatCustomSigunBadge } from '../utils/format';
 
 const DRNB_INITIAL_FILTERS = {
   sigun: '',
@@ -26,6 +17,7 @@ const DRNB_INITIAL_FILTERS = {
 };
 
 const CUSTOM_INITIAL_FILTERS = {
+  sigun: '',
   difficulty: '',
   distanceMin: '',
   distanceMax: '',
@@ -52,13 +44,20 @@ const buildDrnbQuery = (filters, page, size) => {
   return params.toString();
 };
 
-const buildCustomQuery = (filters, page, size) => buildCommonParams(page, size, filters).toString();
+const buildCustomQuery = (filters, page, size) => {
+  const params = buildCommonParams(page, size, filters);
+  if (filters.sigun) params.set('sigun', filters.sigun);
+  return params.toString();
+};
 
 const CourseList = () => {
   const { user } = useUser();
   const [courseType, setCourseType] = useState('drnb');
   const [drnbFilters, setDrnbFilters] = useState(DRNB_INITIAL_FILTERS);
   const [customFilters, setCustomFilters] = useState(CUSTOM_INITIAL_FILTERS);
+  // 둘 다 실제로 코스가 존재하는 시군만 서버에서 동적으로 받아옴
+  const drnbSigunOptions = useSigunOptions('/v1/courses/drnb/sigun-options');
+  const customSigunOptions = useSigunOptions('/v1/courses/custom/sigun-options');
 
   // 입력창에는 즉시 반영하되, 실제 API 호출은 타이핑이 멈춘 뒤에만 나가도록 지연
   const debouncedDrnbFilters = useDebouncedValue(drnbFilters);
@@ -123,7 +122,7 @@ const CourseList = () => {
               onChange={(e) => setDrnbFilters({ ...drnbFilters, sigun: e.target.value })}
             >
               <option value="">지역 전체</option>
-              {GANGWON_SIGUN_OPTIONS.map((sigun) => (
+              {drnbSigunOptions.map((sigun) => (
                 <option key={sigun} value={sigun}>
                   {sigun}
                 </option>
@@ -162,6 +161,18 @@ const CourseList = () => {
           </div>
         ) : (
           <div className="course-filter-bar">
+            <select
+              aria-label="지역 선택"
+              value={customFilters.sigun}
+              onChange={(e) => setCustomFilters({ ...customFilters, sigun: e.target.value })}
+            >
+              <option value="">지역 전체</option>
+              {customSigunOptions.map((sigun) => (
+                <option key={sigun} value={sigun}>
+                  {sigun}
+                </option>
+              ))}
+            </select>
             <select
               aria-label="난이도 선택"
               value={customFilters.difficulty}
@@ -209,7 +220,9 @@ const CourseList = () => {
                 key={course.course_id}
                 course={course}
                 to={`/courses/${courseType}/${course.course_id}`}
-                badgeText={courseType === 'drnb' ? (course.sigun ?? course.brd_div) : '커스텀 코스'}
+                badgeText={
+                  courseType === 'drnb' ? (course.sigun ?? course.brd_div) : formatCustomSigunBadge(course)
+                }
                 showMineBadge={courseType === 'custom' && user && course.created_by === user.user_id}
                 showCreator={courseType === 'custom'}
               />
@@ -224,6 +237,16 @@ const CourseList = () => {
               {loadingMore ? '불러오는 중...' : loadMoreError ? '다시 시도' : '더보기'}
             </button>
           </div>
+        )}
+
+        {courseType === 'drnb' && (
+          <p className="course-list-footer-note">
+            일부 예약/통제구역 코스는 제공하지 않아요. 자세한 내용은{' '}
+            <a href="https://durunubi.kr" target="_blank" rel="noreferrer">
+              두루누비 공식 홈페이지
+            </a>
+            를 참고해주세요.
+          </p>
         )}
       </main>
     </>

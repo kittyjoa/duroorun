@@ -1,6 +1,6 @@
 """두루누비 코스 시드 스크립트 (GPX 파싱하여 시작/종료 좌표 저장)."""
-# mvp 단계: 강원도 중심 해파랑길 코스만 필터 걸어서 가져옴
-# 추후 v2 고도화된다면: 두루누비 전체 코스 가져와서 활용하는 서비스
+# 강원도에 있는 두루누비 코스 전체를 가져옴 (트레일 종류 무관, sigun 기준)
+# 단, 예약/통제구역/도보금지 코스는 _EXCLUDED_COURSE_IDS로 제외 (2026-09 팀 결정)
 
 import asyncio
 import logging
@@ -33,9 +33,28 @@ _GPX_TIMEOUT = 10.0
 # pg_advisory_lock 키 — 워커/컨테이너가 여러 개여도 seed_courses()가 동시에
 # 두 번 실행되지 않도록 DB 세션 레벨 락으로 직렬화 (임의의 정수, 앱 내에서 고유하면 됨)
 _SEED_LOCK_KEY = 727501
-_TRAIL_NAME = "해파랑길"  # 두루누비 전체 코스 중 우리 서비스가 다루는 노선만 서버단에서 필터링
 # 두루누비 API에 지역 파라미터가 없어 sigun 필터 사용
 _TARGET_REGION = "강원"
+
+# 강원 코스 중 예약 필요/민간인통제구역이거나 도보 불가능 코스는
+# "러닝 시작" 과 기록을 제공하는 우리 서비스와 맞지 않아 제외.
+# ㅡ 제외 코스 중 대체 우회로가 있는 경우(16-1, 19-1, 26-1)는
+# manual_courses.py 또는 API 응답으로 대체 코스를 서비스에 포함.
+_EXCLUDED_COURSE_IDS = {
+    "T_CRS_MNG0000005640",  # DMZ 평화의 길 16코스 (예약노선)
+    "T_CRS_MNG0000005643",  # DMZ 평화의 길 19코스 (낙석위험)
+    "T_CRS_MNG0000005650",  # DMZ 평화의 길 26코스 (예약노선)
+    # 이하 29~34번대(우회로 포함): 군사접경지역이라 안전불확실/예약필수
+    "T_CRS_MNG0000005653",  # DMZ 평화의 길 29코스
+    "T_CRS_MNG0000005654",  # DMZ 평화의 길 30코스 (예약노선)
+    "T_CRS_MNG0000005655",  # DMZ 평화의 길 31코스
+    "T_CRS_MNG0000005702",  # DMZ 평화의 길 31-1코스
+    "T_CRS_MNG0000005656",  # DMZ 평화의 길 32코스 (부분예약)
+    "T_CRS_MNG0000005676",  # DMZ 평화의 길 32-1코스
+    "T_CRS_MNG0000005657",  # DMZ 평화의 길 33코스
+    "T_CRS_MNG0000005677",  # DMZ 평화의 길 33-1코스
+    "T_CRS_MNG0000005658",  # DMZ 평화의 길 34코스 (도보/자전거 금지)
+}
 
 _LEVEL_TO_DIFFICULTY = {"1": Difficulty.EASY, "2": Difficulty.NORMAL, "3": Difficulty.HARD}
 
@@ -105,7 +124,7 @@ async def _deactivate_missing_courses(session: AsyncSession, seen_dmb_ids: set[s
     """이번 실행에서 API 응답에 없었던 기존 DRNB 코스를 비활성화.
 
     ㅡ 두루누비 목록에서 실제로 빠진 코스(폐쇄/통합 등)가 계속 활성 상태로 남는 것 방지.
-    ㅡ 이 시드가 관리하는 범위(해파랑길 + 강원)로 대상을 제한
+    ㅡ 이 시드가 관리하는 범위(강원 전체)로 대상을 제한
     ㅡ seen_dmb_ids가 비어있으면(이번 실행에서 아무것도 못 받음) 스킵
        → 일시적 API 이상으로 전체 코스가 비활성화되는 것 방지.
     """
@@ -114,7 +133,6 @@ async def _deactivate_missing_courses(session: AsyncSession, seen_dmb_ids: set[s
     result = await session.execute(
         select(Course).where(
             Course.course_type == CourseType.DRNB,
-            Course.course_name.contains(_TRAIL_NAME),
             Course.sigun.startswith(_TARGET_REGION),
             Course.is_active.is_(True),
             Course.dmb_id.is_not(None),
@@ -146,9 +164,10 @@ async def _record_sync_log(
 
 
 async def _fetch_all_courses() -> tuple[list[dict], dict[str, str], bool]:
-    """두루누비파일 fetch_course_list를 페이지 끝까지 반복 호출
+    """두루누비 fetch_course_list를 페이지 끝까지 반복 호출 (트레일명 필터 없이 전체 조회)
     ㅡ 강원도 코스만 걸러서 전체 코스와 dmb_id -> gpxpath 매핑을 반환.
-    ㅡ total_count는 crs_kor_nm 필터 기준(전체 해파랑길) 전체 개수라,
+    ㅡ 예약/통제구역/도보금지 코스(_EXCLUDED_COURSE_IDS)는 여기서 걸러냄.
+    ㅡ total_count는 두루누비 전체(트레일 종류 무관) 코스 개수라,
        강원 필터링 후 개수와는 별도로 추적.
     ㅡ 반환값 세 번째 요소(complete): total_count까지 다 받았다고 확인됐을때만 True,
        페이지 중간에 빈 응답을 받거나 페이지 상한에 걸리면 False"""
@@ -158,9 +177,7 @@ async def _fetch_all_courses() -> tuple[list[dict], dict[str, str], bool]:
     fetched_count = 0
     complete = False
     while page_no <= _MAX_PAGES:
-        items, total_count = await fetch_course_list(
-            page_no, num_of_rows=_PAGE_SIZE, crs_kor_nm=_TRAIL_NAME
-        )
+        items, total_count = await fetch_course_list(page_no, num_of_rows=_PAGE_SIZE)
         if not items:
             logger.warning(
                 "페이지 %d에서 빈 응답을 받아 수집을 중단합니다 (누적 %d/%d건).",
@@ -168,7 +185,11 @@ async def _fetch_all_courses() -> tuple[list[dict], dict[str, str], bool]:
             )
             break
         fetched_count += len(items)
-        items = [item for item in items if _is_target_region(item)]
+        items = [
+            item
+            for item in items
+            if _is_target_region(item) and item["crsIdx"] not in _EXCLUDED_COURSE_IDS
+        ]
         all_items.extend(items)
         gpx_urls.update(
             {item["crsIdx"]: item["gpxpath"] for item in items if item.get("gpxpath")}
@@ -185,7 +206,8 @@ async def _fetch_all_courses() -> tuple[list[dict], dict[str, str], bool]:
     return all_items, gpx_urls, complete
 
 
-# 두루누비 강원도 해파랑길 코스들 중 6개가 계속 누락되어 생긴 병합 함수
+# 두루누비 강원도 코스들 중 일부(해파랑길 6개, DMZ 평화의 길 5개)가
+# API에서 계속 누락되어 생긴 병합 함수
 def _merge_manual_courses(
     all_items: list[dict], gpx_sources: dict[str, str | Path]
 ) -> tuple[list[dict], dict[str, str | Path]]:

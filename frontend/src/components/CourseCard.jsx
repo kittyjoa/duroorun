@@ -5,9 +5,21 @@ import { DIFFICULTY_COLOR, DIFFICULTY_LABEL } from '../utils/difficulty';
 // 코스 목록(전체 코스/나만의 코스)에서 공통으로 쓰는 카드.
 // 두 페이지가 다른 부분(링크 대상, 뱃지 문구, 제작자 표시, 수정/삭제 버튼)만
 // props로 받아 처리 — 마크업/클래스명은 완전히 동일하게 유지(CSS 영향 없음)
-const CourseCard = ({ course, to, badgeText, showMineBadge = false, showCreator = false, actions = null }) => (
+const CourseCard = ({
+  course,
+  to,
+  state,
+  badgeText,
+  showMineBadge = false,
+  showCreator = false,
+  actions = null,
+}) => (
   <div className="course-card-wrapper">
-    <Link to={to} className={`course-card ${DIFFICULTY_COLOR[course.difficulty] ?? 'green'}`}>
+    <Link
+      to={to}
+      state={state}
+      className={`course-card ${DIFFICULTY_COLOR[course.difficulty] ?? 'green'}`}
+    >
       <div className="course-art">
         <div className="mini-route" />
         {showMineBadge && <span className="course-card-mine">내 코스</span>}

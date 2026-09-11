@@ -1,18 +1,27 @@
-import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 
 import { apiFetch } from '../api';
 import CourseCard from '../components/CourseCard';
 import Header from '../components/layout/Header';
 import { useUser } from '../contexts/UserContext';
 import { usePaginatedCourses } from '../hooks/usePaginatedCourses';
+import { formatCustomSigunBadge } from '../utils/format';
 
 const PAGE_SIZE = 20;
 
 const MyCourses = () => {
+  const navigate = useNavigate();
   const { user, isLoading: userLoading } = useUser();
 
-  // user 아직 없으면 path를 null로 둬서 훅이 조회를 미룸 ("불러오는 중..." 유지)
+  useEffect(() => {
+    if (!userLoading && !user) {
+      navigate('/login', { replace: true });
+    }
+  }, [userLoading, user, navigate]);
+
+  // user 아직 없으면 path를 null로 둬서 훅이 조회를 미룸 ("불러오는 중..." 유지,
+  // 로그인 안 된 경우엔 위 effect가 곧 /login으로 리디렉션)
   const path = user ? '/v1/courses/custom' : null;
   const buildQuery = (targetPage, size = PAGE_SIZE) =>
     `created_by=${user.user_id}&page=${targetPage}&size=${size}`;
@@ -49,17 +58,6 @@ const MyCourses = () => {
     }
   };
 
-  if (!userLoading && !user) {
-    return (
-      <>
-        <Header />
-        <main className="course-list-page">
-          <p className="course-list-status error">로그인 후 이용할 수 있어요.</p>
-        </main>
-      </>
-    );
-  }
-
   return (
     <>
       <Header />
@@ -90,7 +88,8 @@ const MyCourses = () => {
                 key={course.course_id}
                 course={course}
                 to={`/courses/custom/${course.course_id}`}
-                badgeText="커스텀 코스"
+                state={{ from: '/courses/custom/mine' }}
+                badgeText={formatCustomSigunBadge(course)}
                 actions={
                   <>
                     <Link

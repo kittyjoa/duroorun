@@ -1,15 +1,41 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useLocation, useParams } from 'react-router-dom';
 
 import { apiFetch } from '../api';
 import KakaoMap from '../components/map/KakaoMap';
 import Header from '../components/layout/Header';
 import { useUser } from '../contexts/UserContext';
+import useFocusTrap from '../hooks/useFocusTrap';
 import { DIFFICULTY_COLOR, DIFFICULTY_LABEL } from '../utils/difficulty';
 
 // 백엔드 검증 규칙과 동일 (app/config.py REVIEW_CONTENT_MAX_LENGTH)
 const REVIEW_CONTENT_MAX_LENGTH = 2000;
 const REVIEW_PAGE_SIZE = 20;
+
+// 날씨 브리핑 응답의 condition("지금" 예보 슬롯 하늘상태/강수형태)
+// "하루 종일 바뀌는 날씨"를 표현하지 않고, 지금 이 순간 조건 하나에만 맞춘다.
+const WEATHER_ICON = {
+  맑음: { emoji: '☀️', animClass: 'weather-icon-sunny' },
+  구름많음: { emoji: '⛅', animClass: 'weather-icon-cloudy' },
+  흐림: { emoji: '☁️', animClass: 'weather-icon-cloudy' },
+  비: { emoji: '🌧️', animClass: 'weather-icon-rain' },
+  소나기: { emoji: '🌦️', animClass: 'weather-icon-rain' },
+  '비/눈': { emoji: '🌨️', animClass: 'weather-icon-snow' },
+  눈: { emoji: '❄️', animClass: 'weather-icon-snow' },
+};
+
+// 로딩 중 번갈아 보여줄 이모지 - 실제 날씨와 무관한 순수 로딩 연출용
+const LOADING_ICONS = ['🌞', '🏃', '☔', '🏃‍♀️‍➡️'];
+const LOADING_ICON_INTERVAL_MS = 700;
+
+// 날씨 브리핑은 내부에서 Gemini 호출해 평소보다 오래 걸릴 수 있음.
+// 백엔드 GEMINI_TIMEOUT_SECONDS(30초)가 사실상의 상한이라,
+// 무한정 기다리게 하지 않고 더 빨리 통제권(재시도) 돌려주기.
+const WEATHER_BRIEFING_TIMEOUT_MS = 20000;
+
+// 특보 원문은 백엔드에서 5분(WEATHER_WARNING_RAW_CACHE_TTL_SECONDS) 캐싱
+// ㅡ 모달 다시 열 때 이보다 오래됐으면 재조회, 그사이 새로 발표된 특보 반영.
+const WEATHER_REFETCH_STALE_MS = 5 * 60 * 1000;
 
 const DifficultyPicker = ({ value, onChange }) => (
   <div className="review-difficulty-picker" role="group" aria-label="체감 난이도">
@@ -28,6 +54,11 @@ const DifficultyPicker = ({ value, onChange }) => (
 
 const CourseDetail = () => {
   const { courseType, courseId } = useParams();
+  const location = useLocation();
+  // 목록 개념이 여러 곳(전체 코스 목록/나만의 코스 목록)에서 들어올 수 있음 -
+  // 링크를 건 쪽이 state.from으로 넘겨준 경로로 돌아가고,
+  // 없으면(직접 URL 접속/새로고침 등) 전체 코스 목록 기본값.
+  const backToListPath = location.state?.from ?? '/courses';
   const { user } = useUser();
   // courseId가 바뀔 때마다 늘어나는 "코스 세대" 번호. courseId 값 자체를 대조하는 대신
   // 이 번호를 스냅샷 비교하면, "A → B → 다시 A"처럼 결국 같은 값으로 돌아와도 그 사이
@@ -48,6 +79,39 @@ const CourseDetail = () => {
   const [course, setCourse] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+
+  // 코스 날씨·안전 브리핑 - 버튼(모달) 처음 열 때 조회(lazy). 이후 재오픈 시엔
+  // WEATHER_REFETCH_STALE_MS 안이면 재요청 생략, 지났으면 재조회.
+  const weatherModalRef = useRef(null);
+  const weatherFetchedAtRef = useRef(null);
+  // fetchReviews와 동일한 staleness(오래됨) 체크용
+  // ㅡ 새 코스 화면에 이전 코스 날씨 덮어쓰는거 방지
+  const weatherRequestSeqRef = useRef(0);
+  const [isWeatherModalOpen, setIsWeatherModalOpen] = useState(false);
+  const [weatherBriefing, setWeatherBriefing] = useState(null);
+  const [weatherLoading, setWeatherLoading] = useState(false);
+  const [weatherError, setWeatherError] = useState('');
+  const [loadingIconIndex, setLoadingIconIndex] = useState(0);
+  useFocusTrap(weatherModalRef, isWeatherModalOpen);
+
+  // 로딩 중에만 이모지를 번갈아 보여줌
+  // weatherLoading이 꺼지면(응답 도착) 바로 멈춤
+  useEffect(() => {
+    if (!weatherLoading) return undefined;
+    setLoadingIconIndex(0);
+    const interval = setInterval(() => {
+      setLoadingIconIndex((i) => (i + 1) % LOADING_ICONS.length);
+    }, LOADING_ICON_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [weatherLoading]);
+
+  // 코스 주변 관광지 추천 - 결과 없거나 실패해도 조용히 섹션 숨김
+  const [attractions, setAttractions] = useState([]);
+  const attractionScrollRef = useRef(null);
+  // 카드(200px) + gap(14px) 하나만큼 이동 - 바 드래그하지 않아도 버튼으로 넘길 수 있게
+  const scrollAttractions = (direction) => {
+    attractionScrollRef.current?.scrollBy({ left: direction * 214, behavior: 'smooth' });
+  };
 
   const [reviews, setReviews] = useState([]);
   const [reviewsLoading, setReviewsLoading] = useState(true);
@@ -139,6 +203,81 @@ const CourseDetail = () => {
       ignore = true;
     };
   }, [courseType, courseId]);
+
+  // 코스가 바뀌면 이전 코스의 날씨 브리핑 상태를 초기화
+  useEffect(() => {
+    setIsWeatherModalOpen(false);
+    setWeatherBriefing(null);
+    setWeatherError('');
+    weatherFetchedAtRef.current = null;
+  }, [courseId]);
+
+  // 관광지 카드는 페이지 진입 시 바로 조회.
+  // 실패해도 조용히 무시(부가기능이라) - 섹션 자체를 숨기면 됨.
+  useEffect(() => {
+    let ignore = false;
+    const fetchAttractions = async () => {
+      try {
+        const res = await apiFetch(`/v1/courses/${courseId}/nearby-attractions`);
+        if (ignore || !res.ok) return;
+        const data = await res.json();
+        if (ignore) return;
+        setAttractions(data.items);
+      } catch {
+        // 조용히 무시
+      }
+    };
+    setAttractions([]);
+    fetchAttractions();
+    return () => {
+      ignore = true;
+    };
+  }, [courseId]);
+
+  const fetchWeatherBriefing = async () => {
+    const isStale = createStaleChecker(weatherRequestSeqRef);
+    weatherFetchedAtRef.current = Date.now();
+    setWeatherLoading(true);
+    setWeatherError('');
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), WEATHER_BRIEFING_TIMEOUT_MS);
+    try {
+      const res = await apiFetch(`/v1/courses/${courseId}/weather-briefing`, {
+        signal: controller.signal,
+      });
+      if (isStale()) return; // 응답 오는 사이 다른 코스로 이동 - 이전 코스 데이터 버림
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        setWeatherError(data?.detail ?? '날씨 정보를 불러오지 못했어요.');
+        weatherFetchedAtRef.current = null; // 실패했으니 다음에 다시 열면 재시도 허용
+        return;
+      }
+      const data = await res.json();
+      if (isStale()) return;
+      setWeatherBriefing(data);
+    } catch (err) {
+      if (!isStale()) {
+        setWeatherError(
+          err.name === 'AbortError'
+            ? '응답이 너무 오래 걸리고 있어요. 잠시 후 다시 시도해주세요.'
+            : '서버에 연결할 수 없어요.',
+        );
+        weatherFetchedAtRef.current = null; // 실패했으니 다음에 다시 열면 재시도 허용
+      }
+    } finally {
+      clearTimeout(timeoutId);
+      if (!isStale()) setWeatherLoading(false);
+    }
+  };
+
+  const handleOpenWeatherModal = () => {
+    setIsWeatherModalOpen(true);
+    const fetchedAt = weatherFetchedAtRef.current;
+    if (fetchedAt === null || Date.now() - fetchedAt >= WEATHER_REFETCH_STALE_MS) {
+      fetchWeatherBriefing();
+    }
+  };
 
   // "더보기"는 offset(이미 불러온 개수)만큼 건너뛰고 그 다음 항목만 받아서 이어붙인다.
   // 리뷰 수정/삭제/이미지 변경 등 로컬 옵티미스틱 업데이트가 리뷰 목록 순서(생성일 내림차순)
@@ -411,7 +550,7 @@ const CourseDetail = () => {
     <>
       <Header />
       <main className="course-detail-page">
-        <Link to="/courses" className="text-button">
+        <Link to={backToListPath} className="text-button">
           ← 목록으로
         </Link>
 
@@ -419,17 +558,36 @@ const CourseDetail = () => {
           <span className="section-kicker">
             {courseType === 'drnb' ? (course.sigun ?? course.brd_div) : '커스텀 코스'}
           </span>
-          <h1>{course.course_name}</h1>
-          {courseType === 'custom' && (
-            <p className="course-detail-creator">
-              제작자:{' '}
-              {course.created_by != null ? (
-                <Link to={`/users/${course.created_by}`}>{course.creator_nickname ?? '알 수 없음'}</Link>
-              ) : (
-                course.creator_nickname ?? '알 수 없음'
+          <div className="course-detail-title-row">
+            <h1>
+              {course.course_name}
+              {courseType === 'custom' && (
+                <span className="course-detail-creator-inline">
+                  ( 제작자 :{' '}
+                  {course.created_by != null ? (
+                    <Link to={`/users/${course.created_by}`}>{course.creator_nickname ?? '알 수 없음'}</Link>
+                  ) : (
+                    course.creator_nickname ?? '알 수 없음'
+                  )} )
+                </span>
               )}
-            </p>
-          )}
+            </h1>
+            <div className="weather-briefing-trigger">
+              <img
+                src="/assets/durumi.png"
+                alt=""
+                className="weather-briefing-crane"
+                aria-hidden="true"
+              />
+              <button
+                type="button"
+                className="weather-briefing-button"
+                onClick={handleOpenWeatherModal}
+              >
+                코스 날씨·안전 브리핑
+              </button>
+            </div>
+          </div>
           {/* 러닝 시작 버튼 */}
           <Link
             to={`/records/start/${courseType}/${courseId}`}
@@ -475,6 +633,15 @@ const CourseDetail = () => {
             ? '※ 난이도, 거리, 소요시간은 두루누비 공식 API 기준입니다.'
             : '※ 난이도, 거리, 소요시간은 코스 제작자 기준입니다.'}
         </p>
+
+        {/* KNOWN LIMITATION: course_name 문자열에 "DMZ" 포함 여부로만 판별.
+            구분 필드명이 있으면 사용하려 했으나 확인해보니 없음.
+            지금은 시간 관계상 보류. */}
+        {courseType === 'drnb' && course.course_name?.includes('DMZ') && (
+          <p className="course-detail-warning">
+            ⚠ DMZ 코스는 민간인 통제구역과 인접할 수 있습니다. 신분증을 소지해주시고, 야간 통행 시 주의해주세요.
+          </p>
+        )}
 
         {course.course_description && (
           <p className="course-detail-desc">
@@ -678,7 +845,147 @@ const CourseDetail = () => {
             </button>
           )}
         </div>
+
+        {attractions.length > 0 && (
+          <div className="attraction-section">
+            <div className="attraction-section-header">
+              <h2>주변 관광지</h2>
+              <div className="attraction-scroll-arrows">
+                <button
+                  type="button"
+                  className="attraction-scroll-arrow"
+                  onClick={() => scrollAttractions(-1)}
+                  aria-label="이전 관광지"
+                >
+                  ‹
+                </button>
+                <button
+                  type="button"
+                  className="attraction-scroll-arrow"
+                  onClick={() => scrollAttractions(1)}
+                  aria-label="다음 관광지"
+                >
+                  ›
+                </button>
+              </div>
+            </div>
+            <p className="kakao-map-hint-static">
+              관광, 문화, 식당, 숙박시설 등을 포함하여 거리가 가까운 순으로 추천해드립니다.
+            </p>
+            <div className="attraction-scroll-row" ref={attractionScrollRef}>
+              {attractions.map((attraction) => (
+                <div
+                  key={attraction.content_id ?? attraction.title + attraction.latitude}
+                  className="attraction-card"
+                >
+                  {attraction.image_url ? (
+                    <img
+                      className="attraction-card-image"
+                      src={attraction.image_url}
+                      alt={attraction.title}
+                    />
+                  ) : (
+                    <div
+                      className="attraction-card-image attraction-card-image-empty"
+                      aria-hidden="true"
+                    >
+                      <svg viewBox="0 0 24 24" width="30" height="30" fill="none">
+                        <path
+                          d="M12 21s7-7.58 7-12a7 7 0 1 0-14 0c0 4.42 7 12 7 12z"
+                          stroke="currentColor"
+                          strokeWidth="1.6"
+                        />
+                        <circle cx="12" cy="9" r="2.6" stroke="currentColor" strokeWidth="1.6" />
+                      </svg>
+                    </div>
+                  )}
+                  <div className="attraction-card-body">
+                    <h3>{attraction.title}</h3>
+                    {attraction.address && <p>{attraction.address}</p>}
+                    {attraction.distance_m != null && (
+                      <span className="attraction-card-dist">
+                        {attraction.distance_m < 1000
+                          ? `${Math.round(attraction.distance_m)}m`
+                          : `${(attraction.distance_m / 1000).toFixed(1)}km`}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </main>
+
+      {isWeatherModalOpen && (
+        <div
+          ref={weatherModalRef}
+          className="modal-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label="코스 날씨·안전 브리핑"
+          onClick={() => setIsWeatherModalOpen(false)}
+        >
+          <div className="weather-modal-card" onClick={(event) => event.stopPropagation()}>
+            <div className="weather-modal-header">
+              <h2>코스 날씨·안전 브리핑</h2>
+              <button
+                type="button"
+                className="modal-close weather-modal-close"
+                onClick={() => setIsWeatherModalOpen(false)}
+                aria-label="닫기"
+              >
+                ×
+              </button>
+            </div>
+            {weatherLoading && (
+              <div className="weather-loading">
+                <span className="weather-loading-icon" aria-hidden="true">
+                  {LOADING_ICONS[loadingIconIndex]}
+                </span>
+                <p>날씨·안전 정보를 확인하고 있어요. 잠시만 기다려주세요.</p>
+              </div>
+            )}
+            {weatherError && <p className="course-list-status error">{weatherError}</p>}
+            {weatherBriefing && (
+              <>
+                {WEATHER_ICON[weatherBriefing.condition] && (
+                  <div
+                    className={`weather-icon ${WEATHER_ICON[weatherBriefing.condition].animClass}`}
+                    aria-hidden="true"
+                  >
+                    {WEATHER_ICON[weatherBriefing.condition].emoji}
+                  </div>
+                )}
+                <p className="weather-briefing-text">{weatherBriefing.briefing}</p>
+                {weatherBriefing.warning_raw_text ? (
+                  <>
+                    <p className="weather-warning-quote">{weatherBriefing.warning_raw_text}</p>
+                    <p className="weather-warning-comment">{weatherBriefing.warning_comment}</p>
+                  </>
+                ) : (
+                  // 특보 없음/확인 실패 문구도 원문처럼 눈에 띄는 박스
+                  // ㅡ 중립색 박스(weather-no-warning)를 따로 둔다.
+                  <p className="weather-no-warning">{weatherBriefing.warning_comment}</p>
+                )}
+                {/* 특보현황조회(getPwnStatus) 기반으로 바뀌면서 원문이 강원 관련 줄만
+                    골라낸 짧은 요약이 됨 - 통계칩/팁을 특보 유무와 무관하게 항상 표시. */}
+                {weatherBriefing.min_temp != null && weatherBriefing.max_temp != null && (
+                  <div className="weather-stat-chips">
+                    <span className="weather-stat-chip">
+                      🔵 최저 {Math.round(weatherBriefing.min_temp)}°
+                    </span>
+                    <span className="weather-stat-chip">
+                      🔴 최고 {Math.round(weatherBriefing.max_temp)}°
+                    </span>
+                  </div>
+                )}
+                {weatherBriefing.tip && <p className="weather-tip">{weatherBriefing.tip}</p>}
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </>
   );
 };

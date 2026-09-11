@@ -19,3 +19,14 @@ export const formatPace = (paceSecondsPerKm) => {
   const s = totalSeconds % 60;
   return `${m}'${String(s).padStart(2, '0')}" /km`;
 };
+
+// 커스텀 코스 카드 배지: 시작=종료 시군이면 하나만, 다르면 화살표로 구분
+// ㅡ 둘 중 하나만 없어도(폴리곤 판별 실패 등 예외) "null → 강원 OO"처럼 깨져 보이지
+//   않도록 있는 쪽만 보여줌. 둘 다 없으면 "커스텀 코스"로 대체 표시
+// ㅡ CourseList(전체 코스 목록)와 MyCourses(나만의 코스) 양쪽 카드가 공유
+export const formatCustomSigunBadge = (course) => {
+  if (course.sigun && course.end_sigun && course.sigun !== course.end_sigun) {
+    return `${course.sigun} → ${course.end_sigun}`;
+  }
+  return course.sigun ?? course.end_sigun ?? '커스텀 코스';
+};

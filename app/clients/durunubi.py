@@ -16,12 +16,9 @@ class DurunubiAPIError(Exception):
     """두루누비 API 호출/응답 처리 실패."""
 
 
-async def fetch_course_list(
-    page_no: int, num_of_rows: int = 100, crs_kor_nm: str | None = None
-) -> tuple[list[dict], int]:
+async def fetch_course_list(page_no: int, num_of_rows: int = 100) -> tuple[list[dict], int]:
     """두루누비 코스 목록 한 페이지를 조회합니다.
 
-    crs_kor_nm을 넘기면 코스명 기준으로 서버 단에서 필터링됨(부분일치, 예: "해파랑길").
     반환값: 해당 페이지의 코스 원본 dict 리스트, 전체 코스 개수.
     페이지 끝까지 순회하는 건 호출하는 쪽(seed_courses.py)의 책임.
     """
@@ -33,8 +30,6 @@ async def fetch_course_list(
         "numOfRows": num_of_rows,
         "_type": "json",
     }
-    if crs_kor_nm:
-        params["crsKorNm"] = crs_kor_nm
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             res = await client.get(_COURSE_LIST_URL, params=params)

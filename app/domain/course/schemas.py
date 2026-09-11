@@ -12,19 +12,85 @@ from shapely.geometry.base import BaseGeometry
 from app.domain.course.models import Difficulty
 from app.domain.review.schemas import ReviewSummaryResponse
 
+
+# 아래 두 geojson은 이 모듈이 임포트되는 순간(앱 기동 시점) 즉시 읽어서 shapely
+# 도형으로 변환해둔다. 둘 중 하나라도 없으면 앱 전체 기동 X.
+# TODO(배포 담당자): CI/배포 파이프라인에 아래 두 파일이 git에 tracked 상태인지
+# 확인하는 스텝을 추가할 것 — 예: `git ls-files --error-unmatch <path>` 둘 다 통과해야
+# 빌드 계속 진행.
+#   - app/domain/course/gangwon_boundary/gangwon_boundary.geojson
+#   - app/domain/course/gangwon_boundary/gangwon_sigungu_boundary.geojson
+def _load_boundary_geojson(path: Path) -> dict:
+    try:
+        with path.open(encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError as e:
+        raise RuntimeError(
+            f"필수 경계 데이터 파일이 없습니다: {path} "
+            "(git에 커밋됐는지, 배포 이미지에 포함됐는지 확인 필요)"
+        ) from e
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f"경계 데이터 파일이 올바른 JSON이 아닙니다: {path}") from e
+
+
 # 강원도 실제 경계(폴리곤) - 통계청 SGIS 시도 경계 데이터에서 강원도만 추출
 # (출처/추출: app/scripts/extract_gangwon_boundary.py, 공공누리 제1유형)
 # ㅡ 프론트도 이 파일을 GET /courses/gangwon-boundary로 그대로 받아 같은 폴리곤으로 검증함
 #   (router.py) - 경로 상수를 여기 하나만 둬서 프론트/백엔드가 다른 파일을 보는 일이 없게 함
 GANGWON_BOUNDARY_PATH = Path(__file__).parent / "gangwon_boundary" / "gangwon_boundary.geojson"
-with GANGWON_BOUNDARY_PATH.open(encoding="utf-8") as _f:
-    _GANGWON_BOUNDARY: BaseGeometry = shape(json.load(_f)["geometry"])
+_GANGWON_BOUNDARY: BaseGeometry = shape(_load_boundary_geojson(GANGWON_BOUNDARY_PATH)["geometry"])
 
 
 def _in_gangwon(lat: float, lng: float) -> bool:
     # shapely는 (경도, 위도)=(x, y) 순서 - lat/lng 그대로 넣으면 조용히 틀린 결과 나옴
     # covers(): contains()와 달리 경계선 위의 점도 포함 (도 경계 걸친 좌표 포함 위해)
     return _GANGWON_BOUNDARY.covers(Point(lng, lat))
+
+
+# 강원도 18개 시군구 경계 - 커스텀 코스 좌표(위경도)가 어느 시군에 속하는지
+# 로컬에서 판별하는 데 씀 (카카오 등 지오코딩 API 호출 없이 무료/무제한)
+# (출처/추출: extract_gangwon_sigungu_boundary.py, 공공누리 제1유형)
+GANGWON_SIGUNGU_BOUNDARY_PATH = (
+    Path(__file__).parent / "gangwon_boundary" / "gangwon_sigungu_boundary.geojson"
+)
+_GANGWON_SIGUNGU_FEATURES: list[dict] = _load_boundary_geojson(GANGWON_SIGUNGU_BOUNDARY_PATH)[
+    "features"
+]
+# 폴리곤 로드는 임포트 시 1번만, 매 호출마다 geojson 파싱하지 않도록 shape 변환까지 끝냄
+_GANGWON_SIGUNGU_SHAPES: list[tuple[str, BaseGeometry]] = [
+    (f["properties"]["name"], shape(f["geometry"])) for f in _GANGWON_SIGUNGU_FEATURES
+]
+
+
+# 강원도 전체 경계와 시군구 18개 경계는 서로 다른 스크립트가 독립적으로 단순화,
+# 시군 접경선 부근은 두 경계가 완전히 맞지 않아 '어느 시군도 안 걸리는 좁은 틈' 발생 가능
+# ㅡ 가장 가까운 시군 폴리곤으로 대체
+# _NEAREST_FALLBACK_MAX_DEGREES: 그래도 무한정 허용하면 안 되니,
+# 안전장치로 넉넉하게 상한(대략 5km) 둠
+_NEAREST_FALLBACK_MAX_DEGREES = 0.05  # 위도 1도 ≈ 111km 기준 약 5.5km
+
+
+def find_sigungu(lat: float, lng: float) -> str | None:
+    """좌표가 속한 강원도 시군 이름("강원 삼척시" 등)을 반환.
+    강원도 밖이면 None.
+
+    ㅡ 커스텀 코스 생성/수정 시 시작·종료 좌표에 대해 호출해 sigun/end_sigun에 저장.
+    ㅡ covers(): 시군 경계선 바로 위의 좌표도 어느 한쪽 시군으로 판별되게 함.
+    ㅡ 어느 폴리곤에도 안 걸리면(접경선 부근 경계 불일치, 위 주석 참고) 가장 가까운
+      시군으로 폴백. 그마저도 너무 멀면(_NEAREST_FALLBACK_MAX_DEGREES 초과) None.
+    """
+    point = Point(lng, lat)
+    for name, polygon in _GANGWON_SIGUNGU_SHAPES:
+        if polygon.covers(point):
+            return f"강원 {name}"
+
+    nearest_name, nearest_distance = min(
+        ((name, polygon.distance(point)) for name, polygon in _GANGWON_SIGUNGU_SHAPES),
+        key=lambda pair: pair[1],
+    )
+    if nearest_distance <= _NEAREST_FALLBACK_MAX_DEGREES:
+        return f"강원 {nearest_name}"
+    return None
 
 
 class CourseWaypointCreate(BaseModel):
@@ -166,6 +232,50 @@ class DrnbCourseDetailResponse(BaseModel):
     review_summary: ReviewSummaryResponse | None = None
 
 
+class WeatherBriefingResponse(BaseModel):
+    """코스 날씨·안전 브리핑 응답 - "코스 날씨·안전 브리핑" 버튼 클릭 시 조회"""
+
+    # 기상청 특보 현황 원문 그대로 (발효 중인 특보 없으면 None)
+    # ㅡ AI가 다시 쓰지 않고 그대로 노출
+    warning_raw_text: str | None
+    # AI가 만든 오늘 하루 날씨 요약 (특보 관련 문구는 안 섞임)
+    briefing: str
+    # 특보 관련 한 줄 - 특보 원문 있으면 AI의 코스 지역 관련성 판단 코멘트,
+    # 없으면 "현재 발효 중인 특보는 없습니다" 같은 고정 문구.
+    # (특보 없을 때는 중립색, 있을 때는 원문 박스 아래 텍스트로).
+    warning_comment: str
+    # 현재 시각과 가장 가까운 예보 슬롯의 하늘상태/강수형태 ("맑음"/"구름많음"/"흐림"/"비"/
+    # "비/눈"/"눈"/"소나기") - 프론트가 날씨 아이콘/애니메이션을 고르는 용도.
+    # 예보 데이터를 아예 못 가져온 경우 None
+    condition: str | None
+    # 그날 최고/최저 기온 - 항상 표시: 최고/최저 통계칩 + 기온별 간단팁 노출
+    # tip은 ai 호출 안 하고 서버에서 계산
+    # ㅡ 예보 데이터를 못 가져온 경우 None
+    min_temp: float | None
+    max_temp: float | None
+    tip: str | None
+    generated_at: datetime
+
+
+class NearbyAttractionResponse(BaseModel):
+    """코스 주변 관광지 추천 카드 1개 - 한국관광공사 위치기반 관광정보 기준"""
+
+    # 관광공사 API의 고유 ID(contentid) - 프론트가 React key로 씀
+    content_id: str | None
+    title: str
+    address: str | None
+    image_url: str | None
+    latitude: float
+    longitude: float
+    distance_m: float | None
+
+
+class NearbyAttractionListResponse(BaseModel):
+    """코스 주변 관광지 추천 목록 응답"""
+
+    items: list[NearbyAttractionResponse]
+
+
 class CustomCourseSummary(BaseModel):
     """커스텀 코스 목록 요소"""
 
@@ -180,6 +290,10 @@ class CustomCourseSummary(BaseModel):
     # created_by가 가리키는 유저의 닉네임 - service.py에서 course.creator로 eager load 후 채워 넣음
     # (탈퇴 등으로 created_by가 NULL이면 이 값도 None)
     creator_nickname: str | None = None
+    # 시작/종료 좌표 기준 강원 시군 (find_sigungu로 생성/수정 시 계산)
+    # ㅡ None은 폴리곤 판별 실패 등 예외적인 경우만
+    sigun: str | None
+    end_sigun: str | None
     is_active: bool
     created_at: datetime
 
@@ -191,6 +305,12 @@ class CustomCourseListResponse(BaseModel):
     total: int
     page: int
     size: int
+
+
+class SigunOptionsResponse(BaseModel):
+    """코스 지역 필터 드롭다운 옵션 - 실제로 코스가 존재하는 시군만 (DRNB/CUSTOM 공용)"""
+
+    items: list[str]
 
 
 class CustomCourseDetailResponse(BaseModel):
@@ -214,6 +334,9 @@ class CustomCourseDetailResponse(BaseModel):
     start_lng: float | None
     end_lat: float | None
     end_lng: float | None
+    # 시작/종료 좌표 기준 강원 시군 (find_sigungu로 생성/수정 시 계산)
+    sigun: str | None
+    end_sigun: str | None
     has_verification_coords: bool
     is_active: bool
     created_at: datetime

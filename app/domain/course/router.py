@@ -1,12 +1,13 @@
 """코스 (DRNB + 커스텀) - API 엔드포인트 (APIRouter)."""
 
-from fastapi import APIRouter, Depends, Query, UploadFile, status
+from fastapi import APIRouter, Depends, Query, Request, UploadFile, status
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.rate_limit import rate_limit_per_request
 from app.core.security import get_current_user
 from app.database import get_db
+from app.domain.course import attraction_service, weather_service
 from app.domain.course import service as course_service
 from app.domain.course.models import Difficulty
 from app.domain.course.schemas import (
@@ -17,6 +18,9 @@ from app.domain.course.schemas import (
     CustomCourseListResponse,
     DrnbCourseDetailResponse,
     DrnbCourseListResponse,
+    NearbyAttractionListResponse,
+    SigunOptionsResponse,
+    WeatherBriefingResponse,
 )
 from app.domain.user.models import User
 
@@ -48,6 +52,32 @@ async def get_gangwon_boundary():
     )
 
 
+@router.get("/{course_id}/weather-briefing", response_model=WeatherBriefingResponse)
+async def get_weather_briefing(
+    course_id: int, request: Request, session: AsyncSession = Depends(get_db)
+):
+    """코스 날씨·안전 브리핑 조회 - "코스 날씨·안전 브리핑" 버튼 클릭 시 호출.
+    ㅡ DRNB/CUSTOM 공통. 공개 정보라 인증 불필요.
+    ㅡ 비로그인 공개 API라 캐시 미스(=실제 외부 API 호출) 시에만 IP 단위 rate limit."""
+    client_ip = request.client.host if request.client else "unknown"
+    return await weather_service.get_weather_briefing(
+        session=session, course_id=course_id, client_ip=client_ip
+    )
+
+
+@router.get("/{course_id}/nearby-attractions", response_model=NearbyAttractionListResponse)
+async def get_nearby_attractions(
+    course_id: int, request: Request, session: AsyncSession = Depends(get_db)
+):
+    """코스 시작/종료점 주변 관광지 추천 목록 조회.
+    ㅡ DRNB/CUSTOM 공통, 공개 정보라 인증 불필요.
+    ㅡ 날씨 브리핑과 동일하게 캐시 미스 시에만 IP 단위 rate limit이 걸린다."""
+    client_ip = request.client.host if request.client else "unknown"
+    return await attraction_service.get_nearby_attractions(
+        session=session, course_id=course_id, client_ip=client_ip
+    )
+
+
 @router.get("/drnb", response_model=DrnbCourseListResponse)
 async def get_drnb_courses(
     page: int = Query(1, ge=1),
@@ -71,6 +101,14 @@ async def get_drnb_courses(
         distance_min=distance_min,
         distance_max=distance_max,
     )
+
+
+@router.get("/drnb/sigun-options", response_model=SigunOptionsResponse)
+async def get_drnb_course_sigun_options(session: AsyncSession = Depends(get_db)):
+    """DRNB 코스 지역 필터 드롭다운 옵션 조회 - 실제로 코스가 존재하는 시군만 반환.
+    ㅡ /drnb/{course_id}보다 먼저 선언"""
+    items = await course_service.get_drnb_course_sigun_options(session=session)
+    return SigunOptionsResponse(items=items)
 
 
 @router.get("/drnb/{course_id}", response_model=DrnbCourseDetailResponse)
@@ -107,22 +145,33 @@ async def get_custom_courses(
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
     created_by: int | None = Query(default=None, ge=1),
+    sigun: str | None = Query(default=None),
     difficulty: Difficulty | None = Query(default=None),
     distance_min: float | None = Query(default=None, ge=0),
     distance_max: float | None = Query(default=None, ge=0),
     session: AsyncSession = Depends(get_db),
 ):
-    """커스텀 코스 목록 조회 (전체 공개. created_by/난이도/거리 필터 지원)
+    """커스텀 코스 목록 조회 (전체 공개. created_by/지역/난이도/거리 필터 지원)
+    ㅡ sigun은 시작 또는 종료 지역 중 하나만 일치해도 매칭
     ㅡ 거리 필터는 프론트에서 범위 UI 가능"""
     return await course_service.get_custom_courses(
         session=session,
         page=page,
         size=size,
         created_by=created_by,
+        sigun=sigun,
         difficulty=difficulty,
         distance_min=distance_min,
         distance_max=distance_max,
     )
+
+
+@router.get("/custom/sigun-options", response_model=SigunOptionsResponse)
+async def get_custom_course_sigun_options(session: AsyncSession = Depends(get_db)):
+    """커스텀 코스 지역 필터 드롭다운 옵션 조회 - 실제로 코스가 존재하는 시군만 반환.
+    ㅡ /custom/{course_id}보다 먼저 선언"""
+    items = await course_service.get_custom_course_sigun_options(session=session)
+    return SigunOptionsResponse(items=items)
 
 
 @router.get("/custom/{course_id}", response_model=CustomCourseDetailResponse)

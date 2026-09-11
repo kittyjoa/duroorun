@@ -21,6 +21,7 @@ from app.domain.course.schemas import (
     DrnbCourseDetailResponse,
     DrnbCourseListResponse,
     DrnbCourseSummary,
+    find_sigungu,
 )
 from app.domain.review.service import get_average_difficulty, get_review_summary
 
@@ -126,6 +127,24 @@ async def get_drnb_courses(
     )
 
 
+async def get_drnb_course_sigun_options(session: AsyncSession) -> list[str]:
+    """DRNB 코스 지역 필터 드롭다운에 보여줄 시군 목록.
+
+    ㅡ 실제로 코스가 있는 시군만 반환, DB 값 기준으로 동적으로 뽑음.
+    """
+    result = await session.execute(
+        select(Course.sigun)
+        .where(
+            Course.course_type == CourseType.DRNB,
+            Course.is_active.is_(True),
+            Course.dmb_id.is_not(None),
+            Course.sigun.is_not(None),
+        )
+        .distinct()
+    )
+    return sorted(result.scalars().all())
+
+
 async def get_drnb_course(session: AsyncSession, course_id: int) -> DrnbCourseDetailResponse:
     """DRNB 코스 상세를 조회합니다. 시드 스크립트로 저장된 DB 정보만 사용 (배치 갱신)."""
     result = await session.execute(
@@ -178,7 +197,12 @@ async def _get_custom_course(
 async def create_course(
     session: AsyncSession, user_id: int, body: CourseCreateRequest
 ) -> CustomCourseDetailResponse:
-    """커스텀 코스를 등록합니다. 시작/종료 좌표는 첫/마지막 경유지로 자동 설정."""
+    """커스텀 코스를 등록합니다. 시작/종료 좌표는 첫/마지막 경유지로 자동 설정.
+
+    ㅡ sigun(시작)/end_sigun(종료)도 좌표 기준으로 같이 계산해 저장 (find_sigungu,
+      외부 API 호출 없이 로컬 폴리곤으로 판별). 코스 생성 시 1회만 계산하고,
+      제목/설명만 바뀌는 수정에서는 재계산하지 않음(update_course 참고).
+    """
     course = Course(
         course_type=CourseType.CUSTOM,
         course_name=body.course_name,
@@ -191,6 +215,8 @@ async def create_course(
         start_lng=body.waypoints[0].longitude,
         end_lat=body.waypoints[-1].latitude,
         end_lng=body.waypoints[-1].longitude,
+        sigun=find_sigungu(body.waypoints[0].latitude, body.waypoints[0].longitude),
+        end_sigun=find_sigungu(body.waypoints[-1].latitude, body.waypoints[-1].longitude),
     )
     course.waypoints = _build_waypoints(body.waypoints)
 
@@ -214,12 +240,15 @@ async def get_custom_courses(
     page: int,
     size: int,
     created_by: int | None = None,
+    sigun: str | None = None,
     difficulty: Difficulty | None = None,
     distance_min: float | None = None,
     distance_max: float | None = None,
 ) -> CustomCourseListResponse:
     """커스텀 코스 목록을 조회합니다. 기본은 전체 공개, created_by 지정 시 해당 작성자 코스만.
 
+    ㅡ sigun은 시작(sigun) 또는 종료(end_sigun) 둘 중 하나만 일치해도 매칭
+      (코스가 시군 경계를 걸치는 경우, 어느 쪽으로 검색해도 찾을 수 있도록)
     ㅡ difficulty는 정확히 일치, distance는 min/max 범위로 필터링
     """
     _validate_range(distance_min, distance_max, "distance")
@@ -229,6 +258,8 @@ async def get_custom_courses(
     )
     if created_by is not None:
         base_query = base_query.where(Course.created_by == created_by)
+    if sigun is not None:
+        base_query = base_query.where((Course.sigun == sigun) | (Course.end_sigun == sigun))
     if difficulty is not None:
         base_query = base_query.where(Course.difficulty == difficulty)
     if distance_min is not None:
@@ -257,6 +288,26 @@ async def get_custom_courses(
         page=page,
         size=size,
     )
+
+
+async def get_custom_course_sigun_options(session: AsyncSession) -> list[str]:
+    """커스텀 코스 지역 필터 드롭다운에 보여줄 시군 목록.
+
+    ㅡ 실제로 코스가 있는(sigun 또는 end_sigun에 값이 존재하는) 시군만 반환
+    ㅡ DB 값 기준으로 동적으로 뽑음.
+    ㅡ UNION으로 DB가 중복 제거된 시군 목록만 반환하게
+    (코스가 많아져도 결과 크기는 시군 종류 수만큼만 유지됨).
+    """
+    filters = (Course.course_type == CourseType.CUSTOM, Course.is_active.is_(True))
+    query = (
+        select(Course.sigun.label("sigun"))
+        .where(*filters, Course.sigun.is_not(None))
+        .union(
+            select(Course.end_sigun.label("sigun")).where(*filters, Course.end_sigun.is_not(None))
+        )
+    )
+    result = await session.execute(query)
+    return sorted(row.sigun for row in result.all())
 
 
 async def update_course(
@@ -301,6 +352,9 @@ async def update_course(
         course.start_lng = body.waypoints[0].longitude
         course.end_lat = body.waypoints[-1].latitude
         course.end_lng = body.waypoints[-1].longitude
+        # 좌표가 바뀐 수정에서만 재계산 (waypoints 요청에 없으면 이 블록 자체가 안 돔)
+        course.sigun = find_sigungu(body.waypoints[0].latitude, body.waypoints[0].longitude)
+        course.end_sigun = find_sigungu(body.waypoints[-1].latitude, body.waypoints[-1].longitude)
 
     await session.commit()
     course = await _get_custom_course(session, course_id)

@@ -6,7 +6,6 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from app.api.v1.router import router as api_router
 from app.config import settings
@@ -39,10 +38,3 @@ app.add_middleware(
 )
 
 app.include_router(api_router)
-
-# 배포 환경은 nginx(리버스 프록시) 뒤에서 돌고있음.
-# ProxyHeadersMiddleware: 실제 클라이언트 IP로 바꿔줌
-# (이거 없으면 ip당 rate limit이 서비스 전체 공유한도가 됨)
-# TODO(배포): docker-compose 수정내용 반영할때
-# 위의 ProxyHeadersMiddleware import + 하단내용 삭제 필요.
-app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")

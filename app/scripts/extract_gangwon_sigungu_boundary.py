@@ -76,4 +76,5 @@ def extract_gangwon_sigungu_boundary() -> dict:
 if __name__ == "__main__":
     collection = extract_gangwon_sigungu_boundary()
     _OUTPUT_PATH.write_text(json.dumps(collection, ensure_ascii=False), encoding="utf-8")
-    print(f"saved: {_OUTPUT_PATH} ({_OUTPUT_PATH.stat().st_size} bytes, {len(collection['features'])}개 시군구)")
+    feature_count = len(collection["features"])
+    print(f"saved: {_OUTPUT_PATH} ({_OUTPUT_PATH.stat().st_size} bytes, {feature_count}개 시군구)")

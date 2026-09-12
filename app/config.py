@@ -59,7 +59,7 @@ class Settings(BaseSettings):
     # 기상특보 원문 캐시 TTL(초) - 전역(강원 전체) 1개만 캐싱.
     # ㅡ 특보는 언제 새로 발표/해제될지 예측 불가한 긴급 정보라 짧게
     WEATHER_WARNING_RAW_CACHE_TTL_SECONDS: int = 300
-    # 특보-코스 지역 관련성 판단 코멘트(Gemini 생성) 캐시 TTL(초) 
+    # 특보-코스 지역 관련성 판단 코멘트(Gemini 생성) 캐시 TTL(초)
     # ㅡ 캐시 키에 특보 원문 해시 있어서 특보 내용 바뀌면 자동으로 갈아치워짐
     # ㅡ 오래된 특보 캐시가 redis에 무한정 남지 않게 하는 안전장치 TTL
     WEATHER_WARNING_COMMENT_CACHE_TTL_SECONDS: int = 3600
